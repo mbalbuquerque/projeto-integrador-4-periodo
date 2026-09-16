@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "author": "ColdTrack Edge",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-c3-devkitm-1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht1",
+      "top": -9.3,
+      "left": 253.8,
+      "attrs": { "temperature": "12", "humidity": "80" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledGreen",
+      "top": 180,
+      "left": 240,
+      "attrs": { "color": "green", "label": "NORMAL" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledYellow",
+      "top": 230,
+      "left": 240,
+      "attrs": { "color": "yellow", "label": "ATENCAO" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledRed",
+      "top": 280,
+      "left": 240,
+      "attrs": { "color": "red", "label": "CRITICO" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rGreen",
+      "top": 180,
+      "left": 150,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rYellow",
+      "top": 230,
+      "left": 150,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rRed",
+      "top": 280,
+      "left": 150,
+      "attrs": { "value": "220" }
+    }
+  ],
+  "connections": [
+    [ "esp:3V3", "dht1:VCC", "red", [] ],
+    [ "esp:GND.1", "dht1:GND", "black", [] ],
+    [ "esp:4", "dht1:SDA", "green", [] ],
+    [ "esp:5", "rGreen:1", "green", [] ],
+    [ "rGreen:2", "ledGreen:A", "green", [] ],
+    [ "ledGreen:C", "esp:GND.1", "black", [] ],
+    [ "esp:6", "rYellow:1", "yellow", [] ],
+    [ "rYellow:2", "ledYellow:A", "yellow", [] ],
+    [ "ledYellow:C", "esp:GND.1", "black", [] ],
+    [ "esp:7", "rRed:1", "red", [] ],
+    [ "rRed:2", "ledRed:A", "red", [] ],
+    [ "ledRed:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}
