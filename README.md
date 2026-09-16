@@ -1,3 +1,8 @@
+
+# EQUIPE: ANTONIO HENZO, EVERSON, EMERSON LUIZ, GABRIEL EDUARDO, JOSÉ ALANBERG, MARCELO BARBOSA
+
+
+
 # 🚚 ColdTrack Edge
 
 Projeto desenvolvido para o **Projeto Integrador – 4º Período**, com foco no monitoramento de **temperatura e umidade durante o transporte refrigerado de mercadorias**.
