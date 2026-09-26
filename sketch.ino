@@ -1,7 +1,10 @@
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <ThingSpeak.h>
 #include <DHT.h>
 #include "secrets.h"
+#include "azure_ca.h"
 
 /*
  ==========================================================
@@ -13,8 +16,17 @@
  Field 1 -> Temperatura
  Field 2 -> Umidade Relativa
  Field 3 -> RSSI Wi-Fi
+
+ Azure: POST JSON via HTTPS (TLS validado) na Azure Function
+ {"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58}
  ==========================================================
 */
+
+// Identificador deste no sensor (particao no banco).
+#define DEVICE_ID "coldtrack-01"
+
+// Tempo maximo de espera da requisicao HTTPS, em ms.
+#define HTTP_TIMEOUT_MS 5000
 
 // ================= PINAGEM =================
 
@@ -131,6 +143,57 @@ void conectarWiFi() {
     Serial.println();
     Serial.println("Falha na conexão Wi-Fi.");
   }
+}
+
+
+// ==========================================================
+// ENVIO PARA AZURE (JSON via HTTPS)
+// ==========================================================
+
+void enviarAzure(float temperatura, float umidade, long rssi) {
+
+  char payload[128];
+
+  snprintf(payload, sizeof(payload),
+    "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%ld}",
+    DEVICE_ID, temperatura, umidade, rssi);
+
+  Serial.print("Payload JSON: ");
+  Serial.println(payload);
+
+  WiFiClientSecure clienteSeguro;
+  clienteSeguro.setCACert(AZURE_ROOT_CA);
+
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+
+  if (!http.begin(clienteSeguro, AZURE_FUNCTION_URL)) {
+
+    Serial.println("Azure: falha ao iniciar conexao HTTPS.");
+    return;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-functions-key", AZURE_FUNCTION_KEY);
+
+  int status = http.POST(payload);
+
+  if (status == 201) {
+
+    Serial.print("Azure: gravado. Resposta: ");
+    Serial.println(http.getString());
+
+  }
+
+  else {
+
+    Serial.print("Azure: erro HTTP ");
+    Serial.print(status);
+    Serial.print(" ");
+    Serial.println(status > 0 ? http.getString() : http.errorToString(status));
+  }
+
+  http.end();
 }
 
 
@@ -306,6 +369,12 @@ void loop() {
         Serial.print("ThingSpeak: erro HTTP ");
         Serial.println(resultado);
       }
+
+
+      Serial.println();
+      Serial.println("Enviando telemetria ao Azure...");
+
+      enviarAzure(temperatura, umidade, rssi);
 
     }
 
