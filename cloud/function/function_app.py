@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import azure.functions as func
 from azure.cosmos import CosmosClient
 
-from contrato import classificar, validar
+from contrato import classificar, filtros_de_leitura, validar
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -87,17 +87,34 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
     except ValueError:
         return resposta({"erros": ["limite deve ser inteiro"]}, 400)
 
+    erros, filtros = filtros_de_leitura(req.params)
+    if erros:
+        return resposta({"erros": erros}, 400)
+
+    condicoes = ["c.deviceId = @device"]
+    parametros = [
+        {"name": "@limite", "value": limite},
+        {"name": "@device", "value": device},
+    ]
+    if filtros["desde"] is not None:
+        condicoes.append("c.medidoEm >= @desde")
+        parametros.append({
+            "name": "@desde",
+            "value": datetime.fromtimestamp(filtros["desde"], timezone.utc).isoformat(),
+        })
+    if filtros["status"] is not None:
+        condicoes.append("ARRAY_CONTAINS(@status, c.status)")
+        parametros.append({"name": "@status", "value": filtros["status"]})
+
     itens = list(
         container().query_items(
             query=(
                 "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
-                "c.status, c.medidoEm, c.recebidoEm FROM c WHERE c.deviceId = @device "
-                "ORDER BY c.medidoEm DESC"
+                "c.status, c.medidoEm, c.recebidoEm FROM c WHERE "
+                + " AND ".join(condicoes)
+                + " ORDER BY c.medidoEm DESC"
             ),
-            parameters=[
-                {"name": "@limite", "value": limite},
-                {"name": "@device", "value": device},
-            ],
+            parameters=parametros,
             partition_key=device,
         )
     )

@@ -2,7 +2,7 @@
 
 import unittest
 
-from contrato import classificar, validar
+from contrato import classificar, filtros_de_leitura, validar
 
 VALIDO = {"deviceId": "coldtrack-01", "temperatura": 12.4, "umidade": 81.0, "rssi": -58}
 
@@ -79,6 +79,34 @@ class TestMedidoEm(unittest.TestCase):
 
     def test_texto_rejeitado(self):
         self.assertTrue(self.validar("2026-09-26"))
+
+
+class TestFiltros(unittest.TestCase):
+    AGORA = 1_790_000_000
+
+    def filtros(self, **params):
+        return filtros_de_leitura(params, agora=self.AGORA)
+
+    def test_sem_filtros(self):
+        self.assertEqual(self.filtros(), ([], {"desde": None, "status": None}))
+
+    def test_horas(self):
+        erros, f = self.filtros(horas="24")
+        self.assertEqual(erros, [])
+        self.assertEqual(f["desde"], self.AGORA - 24 * 3600)
+
+    def test_horas_invalidas(self):
+        for valor in ("0", "169", "abc", "-5"):
+            self.assertTrue(self.filtros(horas=valor)[0], valor)
+
+    def test_status(self):
+        erros, f = self.filtros(status="atencao, CRITICO")
+        self.assertEqual(erros, [])
+        self.assertEqual(f["status"], ["ATENCAO", "CRITICO"])
+
+    def test_status_invalido(self):
+        self.assertTrue(self.filtros(status="QUENTE")[0])
+        self.assertTrue(self.filtros(status=",")[0])
 
 
 class TestClassificar(unittest.TestCase):

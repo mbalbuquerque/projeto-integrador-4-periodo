@@ -88,6 +88,45 @@ def validar(dados, agora=None):
     return erros
 
 
+STATUS_VALIDOS = ("NORMAL", "ATENCAO", "CRITICO")
+HORAS_MAX = 7 * 24
+
+
+def filtros_de_leitura(params, agora=None):
+    """Interpreta os filtros opcionais de GET /leituras.
+
+    horas:  1 a 168 — só leituras medidas nas últimas N horas.
+    status: lista separada por vírgula (ex.: ATENCAO,CRITICO).
+
+    Retorna (erros, filtros), com filtros = {"desde": epoch | None, "status": [..] | None}.
+    """
+    erros = []
+    filtros = {"desde": None, "status": None}
+
+    horas = params.get("horas")
+    if horas is not None:
+        try:
+            horas = int(horas)
+        except ValueError:
+            horas = 0
+        if not 1 <= horas <= HORAS_MAX:
+            erros.append(f"horas: inteiro de 1 a {HORAS_MAX}")
+        else:
+            referencia = time.time() if agora is None else agora
+            filtros["desde"] = referencia - horas * 3600
+
+    status = params.get("status")
+    if status is not None:
+        lista = [s.strip().upper() for s in status.split(",") if s.strip()]
+        invalidos = [s for s in lista if s not in STATUS_VALIDOS]
+        if not lista or invalidos:
+            erros.append("status: use " + ", ".join(STATUS_VALIDOS) + " separados por vírgula")
+        else:
+            filtros["status"] = lista
+
+    return erros, filtros
+
+
 def classificar(temperatura):
     normal_max, atencao_max = _limites()
     if temperatura <= normal_max:
