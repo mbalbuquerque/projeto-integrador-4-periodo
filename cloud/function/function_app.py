@@ -57,7 +57,7 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         "deviceId": dados["deviceId"],
         "temperatura": float(dados["temperatura"]),
         "umidade": float(dados["umidade"]),
-        "rssi": int(dados["rssi"]),
+        "rssi": None if dados["rssi"] is None else int(dados["rssi"]),
         "status": classificar(dados["temperatura"]),
         "recebidoEm": datetime.now(timezone.utc).isoformat(),
     }
