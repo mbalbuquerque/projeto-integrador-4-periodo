@@ -52,6 +52,14 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         logging.warning("telemetria rejeitada: %s", erros)
         return resposta({"erros": erros}, 400)
 
+    recebido = datetime.now(timezone.utc)
+    # Sem medidoEm (firmware antigo), o horário da medição é o do recebimento.
+    medido = (
+        datetime.fromtimestamp(dados["medidoEm"], timezone.utc)
+        if "medidoEm" in dados
+        else recebido
+    )
+
     leitura = {
         "id": str(uuid.uuid4()),
         "deviceId": dados["deviceId"],
@@ -59,7 +67,8 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         "umidade": float(dados["umidade"]),
         "rssi": None if dados["rssi"] is None else int(dados["rssi"]),
         "status": classificar(dados["temperatura"]),
-        "recebidoEm": datetime.now(timezone.utc).isoformat(),
+        "medidoEm": medido.isoformat(),
+        "recebidoEm": recebido.isoformat(),
     }
     container().create_item(leitura)
     return resposta({"id": leitura["id"], "status": leitura["status"]}, 201)
@@ -82,8 +91,8 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
         container().query_items(
             query=(
                 "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
-                "c.status, c.recebidoEm FROM c WHERE c.deviceId = @device "
-                "ORDER BY c.recebidoEm DESC"
+                "c.status, c.medidoEm, c.recebidoEm FROM c WHERE c.deviceId = @device "
+                "ORDER BY c.medidoEm DESC"
             ),
             parameters=[
                 {"name": "@limite", "value": limite},

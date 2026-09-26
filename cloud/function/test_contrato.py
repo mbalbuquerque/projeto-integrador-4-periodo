@@ -55,6 +55,32 @@ class TestValidar(unittest.TestCase):
         self.assertTrue(validar({**VALIDO, "senha": "x"}))
 
 
+class TestMedidoEm(unittest.TestCase):
+    AGORA = 1_790_000_000
+
+    def validar(self, medido):
+        return validar({**VALIDO, "medidoEm": medido}, agora=self.AGORA)
+
+    def test_ausente_continua_valido(self):
+        self.assertEqual(validar(VALIDO, agora=self.AGORA), [])
+
+    def test_leitura_guardada_de_horas_atras(self):
+        self.assertEqual(self.validar(self.AGORA - 3 * 3600), [])
+
+    def test_futuro_rejeitado(self):
+        self.assertTrue(self.validar(self.AGORA + 3600))
+
+    def test_mais_de_7_dias_rejeitado(self):
+        self.assertTrue(self.validar(self.AGORA - 8 * 24 * 3600))
+
+    def test_relogio_nao_sincronizado_rejeitado(self):
+        # ESP32 sem NTP começa em 1970: epoch pequeno não pode entrar.
+        self.assertTrue(self.validar(120))
+
+    def test_texto_rejeitado(self):
+        self.assertTrue(self.validar("2026-09-26"))
+
+
 class TestClassificar(unittest.TestCase):
     def test_faixas(self):
         self.assertEqual(classificar(15.0), "NORMAL")
