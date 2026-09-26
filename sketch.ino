@@ -152,11 +152,21 @@ void conectarWiFi() {
 
 void enviarAzure(float temperatura, float umidade, long rssi) {
 
+  // RSSI de Wi-Fi e sempre negativo. Valor >= 0 (ex.: simulador) vai como null,
+  // em vez de mandar um numero falso para o banco.
+  char rssiJson[12];
+
+  if (rssi < 0) {
+    snprintf(rssiJson, sizeof(rssiJson), "%ld", rssi);
+  } else {
+    snprintf(rssiJson, sizeof(rssiJson), "null");
+  }
+
   char payload[128];
 
   snprintf(payload, sizeof(payload),
-    "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%ld}",
-    DEVICE_ID, temperatura, umidade, rssi);
+    "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s}",
+    DEVICE_ID, temperatura, umidade, rssiJson);
 
   Serial.print("Payload JSON: ");
   Serial.println(payload);
