@@ -1,6 +1,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <LittleFS.h>
+#include <time.h>
 #include <ThingSpeak.h>
 #include <DHT.h>
 #include "secrets.h"
@@ -27,6 +29,25 @@
 
 // Tempo maximo de espera da requisicao HTTPS, em ms.
 #define HTTP_TIMEOUT_MS 5000
+
+// ================= STORE-AND-FORWARD =================
+//
+// Sem conexao (estrada sem sinal), a leitura fica guardada na flash
+// e e reenviada quando a conexao volta, com o horario da medicao.
+
+#define FILA_ARQUIVO      "/fila.jsonl"
+#define FILA_MAX          500   // ~2h45 de leituras a cada 20 s
+#define REENVIO_POR_CICLO 10    // limita o tempo gasto reenviando por ciclo
+
+// Teste: finge conexao caida nos primeiros N segundos (0 = desligado).
+#ifndef SIMULAR_QUEDA_S
+#define SIMULAR_QUEDA_S 0
+#endif
+
+// Epoch minimo aceito como relogio sincronizado (nov/2023).
+#define EPOCH_VALIDO 1700000000
+
+int filaTamanho = 0;
 
 // ================= PINAGEM =================
 
@@ -150,7 +171,8 @@ void conectarWiFi() {
 // ENVIO PARA AZURE (JSON via HTTPS)
 // ==========================================================
 
-void enviarAzure(float temperatura, float umidade, long rssi) {
+void montarPayload(char *destino, size_t tamanho,
+                   float temperatura, float umidade, long rssi, time_t medidoEm) {
 
   // RSSI de Wi-Fi e sempre negativo. Valor >= 0 (ex.: simulador) vai como null,
   // em vez de mandar um numero falso para o banco.
@@ -162,14 +184,22 @@ void enviarAzure(float temperatura, float umidade, long rssi) {
     snprintf(rssiJson, sizeof(rssiJson), "null");
   }
 
-  char payload[128];
+  // Sem relogio sincronizado (medidoEm = 0) o campo e omitido
+  // e a nuvem usa o horario de recebimento.
+  char medidoJson[24] = "";
 
-  snprintf(payload, sizeof(payload),
-    "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s}",
-    DEVICE_ID, temperatura, umidade, rssiJson);
+  if (medidoEm > 0) {
+    snprintf(medidoJson, sizeof(medidoJson), ",\"medidoEm\":%lld", (long long)medidoEm);
+  }
 
-  Serial.print("Payload JSON: ");
-  Serial.println(payload);
+  snprintf(destino, tamanho,
+    "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s%s}",
+    DEVICE_ID, temperatura, umidade, rssiJson, medidoJson);
+}
+
+
+// Retorna o status HTTP (201 = gravado) ou um codigo negativo de falha de rede.
+int postarAzure(const char *payload) {
 
   WiFiClientSecure clienteSeguro;
   clienteSeguro.setCACert(AZURE_ROOT_CA);
@@ -180,7 +210,7 @@ void enviarAzure(float temperatura, float umidade, long rssi) {
   if (!http.begin(clienteSeguro, AZURE_FUNCTION_URL)) {
 
     Serial.println("Azure: falha ao iniciar conexao HTTPS.");
-    return;
+    return -1;
   }
 
   http.addHeader("Content-Type", "application/json");
@@ -204,6 +234,195 @@ void enviarAzure(float temperatura, float umidade, long rssi) {
   }
 
   http.end();
+
+  return status;
+}
+
+
+// Falha que vale tentar de novo depois: rede ou servidor fora do ar.
+// 4xx (dado rejeitado pelo contrato) nao melhora reenviando.
+bool falhaTemporaria(int status) {
+
+  return status <= 0 || status >= 500;
+}
+
+
+// ==========================================================
+// RELOGIO (NTP)
+// ==========================================================
+
+void sincronizarRelogio() {
+
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+}
+
+
+bool relogioOk() {
+
+  return time(nullptr) >= EPOCH_VALIDO;
+}
+
+
+// ==========================================================
+// CONEXAO
+// ==========================================================
+
+bool conexaoDisponivel() {
+
+  if (SIMULAR_QUEDA_S > 0 && millis() < SIMULAR_QUEDA_S * 1000UL) {
+    return false;
+  }
+
+  return WiFi.status() == WL_CONNECTED;
+}
+
+
+// ==========================================================
+// FILA EM FLASH (STORE-AND-FORWARD)
+// ==========================================================
+
+int contarFila() {
+
+  File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
+
+  if (!arquivo) {
+    return 0;
+  }
+
+  int linhas = 0;
+
+  while (arquivo.available()) {
+
+    String linha = arquivo.readStringUntil('\n');
+    linha.trim();
+
+    if (linha.length() > 0) {
+      linhas++;
+    }
+  }
+
+  arquivo.close();
+
+  return linhas;
+}
+
+
+// Reescreve a fila pulando as `pular` primeiras linhas.
+void descartarInicioDaFila(int pular) {
+
+  File origem = LittleFS.open(FILA_ARQUIVO, "r");
+  File destino = LittleFS.open("/fila.tmp", "w");
+
+  int indice = 0;
+  int restantes = 0;
+
+  while (origem && origem.available()) {
+
+    String linha = origem.readStringUntil('\n');
+    linha.trim();
+
+    if (linha.length() == 0) {
+      continue;
+    }
+
+    if (indice++ >= pular) {
+      destino.println(linha);
+      restantes++;
+    }
+  }
+
+  if (origem) {
+    origem.close();
+  }
+
+  destino.close();
+
+  LittleFS.remove(FILA_ARQUIVO);
+  LittleFS.rename("/fila.tmp", FILA_ARQUIVO);
+
+  filaTamanho = restantes;
+}
+
+
+void enfileirar(const char *payload) {
+
+  File arquivo = LittleFS.open(FILA_ARQUIVO, "a");
+
+  if (!arquivo) {
+
+    Serial.println("FILA: erro ao abrir a flash. Leitura perdida.");
+    return;
+  }
+
+  arquivo.println(payload);
+  arquivo.close();
+
+  filaTamanho++;
+
+  if (filaTamanho > FILA_MAX) {
+
+    Serial.println("FILA: cheia, descartando a leitura mais antiga.");
+    descartarInicioDaFila(filaTamanho - FILA_MAX);
+  }
+
+  Serial.print("FILA: leitura guardada offline (");
+  Serial.print(filaTamanho);
+  Serial.println(" na fila).");
+}
+
+
+// Envia as leituras guardadas, da mais antiga para a mais nova.
+// Para na primeira falha temporaria para manter a ordem.
+void reenviarFila() {
+
+  if (filaTamanho == 0) {
+    return;
+  }
+
+  Serial.print("FILA: reenviando (");
+  Serial.print(filaTamanho);
+  Serial.println(" pendentes)...");
+
+  File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
+
+  if (!arquivo) {
+
+    filaTamanho = 0;
+    return;
+  }
+
+  int processadas = 0;
+
+  while (arquivo.available() && processadas < REENVIO_POR_CICLO) {
+
+    String linha = arquivo.readStringUntil('\n');
+    linha.trim();
+
+    if (linha.length() == 0) {
+      continue;
+    }
+
+    int status = postarAzure(linha.c_str());
+
+    if (falhaTemporaria(status)) {
+      break;
+    }
+
+    processadas++;
+  }
+
+  arquivo.close();
+
+  if (processadas > 0) {
+
+    descartarInicioDaFila(processadas);
+
+    Serial.print("FILA: ");
+    Serial.print(processadas);
+    Serial.print(" reenviadas, ");
+    Serial.print(filaTamanho);
+    Serial.println(" restantes.");
+  }
 }
 
 
@@ -231,7 +450,20 @@ void setup() {
   Serial.println(" Monitoramento Transporte Refrigerado");
   Serial.println("========================================");
 
+  // true = formata a flash se ainda nao tiver sistema de arquivos.
+  if (!LittleFS.begin(true)) {
+    Serial.println("FILA: flash indisponivel. Leituras offline serao perdidas.");
+  }
+
+  filaTamanho = contarFila();
+
+  Serial.print("FILA: ");
+  Serial.print(filaTamanho);
+  Serial.println(" leituras pendentes na flash.");
+
   conectarWiFi();
+
+  sincronizarRelogio();
 
   ThingSpeak.begin(client);
 
@@ -346,10 +578,25 @@ void loop() {
 
 
     // ======================================================
-    // ENVIO PARA THINGSPEAK
+    // PAYLOAD COM O HORARIO DA MEDICAO
     // ======================================================
 
-    if (WiFi.status() == WL_CONNECTED) {
+    time_t medidoEm = relogioOk() ? time(nullptr) : 0;
+
+    char payload[160];
+
+    montarPayload(payload, sizeof(payload),
+                  temperatura, umidade, rssi, medidoEm);
+
+    Serial.print("Payload JSON: ");
+    Serial.println(payload);
+
+
+    // ======================================================
+    // ENVIO (ThingSpeak ao vivo + Azure com store-and-forward)
+    // ======================================================
+
+    if (conexaoDisponivel()) {
 
       ThingSpeak.setField(1, temperatura);
 
@@ -382,15 +629,34 @@ void loop() {
 
 
       Serial.println();
+
+      // Primeiro o que ficou guardado, para manter a ordem no banco.
+      reenviarFila();
+
       Serial.println("Enviando telemetria ao Azure...");
 
-      enviarAzure(temperatura, umidade, rssi);
+      int status = postarAzure(payload);
+
+      if (falhaTemporaria(status)) {
+
+        if (medidoEm > 0) {
+          enfileirar(payload);
+        } else {
+          Serial.println("FILA: sem relogio sincronizado, leitura nao guardada.");
+        }
+      }
 
     }
 
     else {
 
-      Serial.println("Sem Wi-Fi. Telemetria não enviada.");
+      Serial.println("Sem conexao. Telemetria nao enviada agora.");
+
+      if (medidoEm > 0) {
+        enfileirar(payload);
+      } else {
+        Serial.println("FILA: sem relogio sincronizado, leitura nao guardada.");
+      }
     }
 
 
