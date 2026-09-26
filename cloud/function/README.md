@@ -13,7 +13,9 @@ Recebe a telemetria do ESP32, valida o contrato JSON, classifica a leitura e gra
 ## Endpoints
 
 Base: `https://func-coldtrack-7319.azurewebsites.net/api`
-Todas as rotas exigem a chave da função no header `x-functions-key` (sem chave: HTTP 401).
+A gravação (`POST /telemetria`) exige a chave da função no header `x-functions-key` (sem chave: HTTP 401).
+A leitura (`GET /leituras`) é pública e só consulta; os navegadores só a acessam a partir das origens liberadas no CORS do Function App.
+Login com perfis (RBAC: operador logístico / gestor) está planejado para a publicação do dashboard no Azure Static Web Apps.
 
 ### `POST /telemetria`
 

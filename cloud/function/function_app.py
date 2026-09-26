@@ -3,7 +3,7 @@
 POST /api/telemetria  -> recebe a leitura do ESP32, valida, classifica e grava no Cosmos DB.
 GET  /api/leituras    -> devolve as últimas leituras de um dispositivo (consumo do front).
 
-As duas rotas exigem a chave da função (header `x-functions-key`).
+A gravação exige a chave da função (header `x-functions-key`); a leitura é pública.
 """
 
 import json
@@ -65,7 +65,10 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
     return resposta({"id": leitura["id"], "status": leitura["status"]}, 201)
 
 
-@app.route(route="leituras", methods=["GET"])
+# Leitura pública (só consulta), como o feed do ThingSpeak que o dashboard já usava.
+# A origem permitida é controlada pelo CORS do Function App; login com perfis (RBAC)
+# está planejado para a publicação no Azure Static Web Apps.
+@app.route(route="leituras", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def leituras(req: func.HttpRequest) -> func.HttpResponse:
     device = req.params.get("deviceId")
     if not device:
