@@ -30,6 +30,20 @@ class TestValidar(unittest.TestCase):
     def test_texto_no_lugar_de_numero(self):
         self.assertTrue(validar({**VALIDO, "temperatura": "12"}))
 
+    def test_rssi_nulo_aceito(self):
+        self.assertEqual(validar({**VALIDO, "rssi": None}), [])
+
+    def test_rssi_ausente_rejeitado(self):
+        dados = dict(VALIDO)
+        del dados["rssi"]
+        self.assertTrue(validar(dados))
+
+    def test_rssi_positivo_rejeitado(self):
+        self.assertTrue(validar({**VALIDO, "rssi": 35}))
+
+    def test_temperatura_nula_rejeitada(self):
+        self.assertTrue(validar({**VALIDO, "temperatura": None}))
+
     def test_booleano_nao_e_numero(self):
         self.assertTrue(validar({**VALIDO, "rssi": True}))
 

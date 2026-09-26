@@ -52,6 +52,11 @@ def validar(dados):
         ("rssi", RSSI_MIN, RSSI_MAX),
     ):
         valor = dados.get(campo)
+        # RSSI é diagnóstico de rede: o firmware manda null quando o rádio
+        # devolve valor impossível (ex.: positivo no simulador). Temperatura e
+        # umidade continuam obrigatórias.
+        if campo == "rssi" and campo in dados and valor is None:
+            continue
         if not _numero(valor):
             erros.append(f"{campo}: obrigatório e numérico")
         elif valor != valor or not minimo <= valor <= maximo:  # valor != valor pega NaN

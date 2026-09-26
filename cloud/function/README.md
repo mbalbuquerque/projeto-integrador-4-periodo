@@ -21,6 +21,8 @@ Todas as rotas exigem a chave da função no header `x-functions-key` (sem chave
 {"deviceId": "coldtrack-01", "temperatura": 12.4, "umidade": 81.0, "rssi": -58}
 ```
 
+`rssi` pode ser `null` quando o rádio devolve valor impossível (o simulador Wokwi reporta RSSI positivo); `temperatura` e `umidade` nunca.
+
 | resposta | quando |
 |---|---|
 | `201 {"id": "...", "status": "NORMAL"}` | leitura válida gravada |
