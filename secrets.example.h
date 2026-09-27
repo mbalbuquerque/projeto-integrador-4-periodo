@@ -7,6 +7,9 @@
 #define WIFI_SSID     "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
 
+// Sensor: descomente na placa física com DHT11 (o padrão é DHT22, usado no Wokwi)
+// #define DHT_TYPE DHT11
+
 // Azure Function (endpoint de telemetria)
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
 #define AZURE_FUNCTION_KEY "SUA_CHAVE_DA_FUNCTION"

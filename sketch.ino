@@ -47,7 +47,11 @@ int filaTamanho = 0;
 // ================= PINAGEM =================
 
 #define DHT_PIN 4
-#define DHT_TYPE DHT22   // Simulação Wokwi
+// DHT22 na simulacao Wokwi. Na placa fisica com DHT11, defina
+// DHT_TYPE DHT11 no secrets.h (ele e incluido antes deste ponto).
+#ifndef DHT_TYPE
+#define DHT_TYPE DHT22
+#endif
 
 #define LED_VERDE    5
 #define LED_AMARELO  6
