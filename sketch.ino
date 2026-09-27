@@ -219,6 +219,11 @@ float numeroDoJson(const String &json, const char *chave) {
 
   inicio += alvo.length();
 
+  // A nuvem responde com espaco depois dos dois-pontos ("min": null).
+  while (inicio < (int)json.length() && json[inicio] == ' ') {
+    inicio++;
+  }
+
   if (json.startsWith("null", inicio)) {
     return NAN;
   }
