@@ -1,4 +1,4 @@
-"""Validação dos cadastros do painel: usuários, veículos e viagens.
+"""Validação dos cadastros do painel: empresas, usuários, dispositivos, veículos e viagens.
 
 Cada função recebe o JSON enviado pela tela e devolve (erros, documento):
 erros vazio = válido, e o documento já normalizado para gravar no Cosmos DB.
@@ -8,12 +8,12 @@ Não depende do Azure: testado com `python -m unittest`.
 import re
 from datetime import datetime
 
+from contrato import PERFIS_CARGA
 from seguranca import PERFIS
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 CODIGO = re.compile(r"^[A-Z0-9-]{3,20}$")
 DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{3,40}$")
-PERFIS_CARGA = ("demonstrativo", "manga", "uva")
 SENHA_MIN = 8
 
 
@@ -46,6 +46,17 @@ def _data(dados, campo, erros, obrigatorio=True):
     return data
 
 
+def _senha(dados, campo, erros):
+    senha = dados.get(campo)
+    if not isinstance(senha, str) or len(senha) < SENHA_MIN:
+        erros.append(f"{campo}: no mínimo {SENHA_MIN} caracteres")
+        return None
+    if len(senha) > 128:
+        erros.append(f"{campo}: no máximo 128 caracteres")
+        return None
+    return senha
+
+
 def validar_usuario(dados):
     if not isinstance(dados, dict):
         return ["corpo deve ser um objeto JSON"], None
@@ -57,12 +68,51 @@ def validar_usuario(dados):
     perfil = dados.get("perfil")
     if perfil not in PERFIS:
         erros.append("perfil: use " + " ou ".join(PERFIS))
-    senha = dados.get("senha")
-    if not isinstance(senha, str) or len(senha) < SENHA_MIN:
-        erros.append(f"senha: no mínimo {SENHA_MIN} caracteres")
+    senha = _senha(dados, "senha", erros)
     if erros:
         return erros, None
     return [], {"id": email.lower(), "nome": nome, "perfil": perfil, "senha": senha}
+
+
+def validar_empresa(dados):
+    """Cadastro aberto: a empresa e o primeiro gestor dela."""
+    if not isinstance(dados, dict):
+        return ["corpo deve ser um objeto JSON"], None
+    erros = []
+    empresa = _texto(dados, "empresa", 80, erros)
+    erros_usuario, usuario = validar_usuario({**dados, "perfil": "gestor"})
+    erros += erros_usuario
+    if erros:
+        return erros, None
+    return [], {"empresa": empresa, "usuario": usuario}
+
+
+def validar_troca_senha(dados):
+    if not isinstance(dados, dict):
+        return ["corpo deve ser um objeto JSON"], None
+    erros = []
+    atual = dados.get("atual")
+    if not isinstance(atual, str) or not atual:
+        erros.append("atual: informe a senha atual")
+    nova = _senha(dados, "nova", erros)
+    if not erros and nova == atual:
+        erros.append("nova: deve ser diferente da atual")
+    if erros:
+        return erros, None
+    return [], {"atual": atual, "nova": nova}
+
+
+def validar_dispositivo(dados):
+    if not isinstance(dados, dict):
+        return ["corpo deve ser um objeto JSON"], None
+    erros = []
+    device = _texto(dados, "id", 40, erros)
+    if device and not DEVICE_ID.match(device):
+        erros.append("id: letras, números, _ ou - (3 a 40)")
+    descricao = _texto(dados, "descricao", 60, erros, obrigatorio=False)
+    if erros:
+        return erros, None
+    return [], {"id": device.lower(), "descricao": descricao or ""}
 
 
 def validar_veiculo(dados):
@@ -78,6 +128,8 @@ def validar_veiculo(dados):
     device = _texto(dados, "deviceId", 40, erros)
     if device and not DEVICE_ID.match(device):
         erros.append("deviceId: letras, números, _ ou - (3 a 40)")
+    elif device:
+        device = device.lower()
     dispositivo = _texto(dados, "dispositivo", 60, erros, obrigatorio=False)
     perfil = dados.get("perfil", "demonstrativo")
     if perfil not in PERFIS_CARGA:

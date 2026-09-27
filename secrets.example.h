@@ -10,6 +10,10 @@
 // Sensor: descomente na placa física com DHT11 (o padrão é DHT22, usado no Wokwi)
 // #define DHT_TYPE DHT11
 
+// Identidade do sensor: registre em painel > Sensores > Registrar sensor.
+// A chave aparece uma vez só, na hora do registro.
+#define DEVICE_ID  "coldtrack-01"
+#define DEVICE_KEY "CHAVE_DO_SENSOR"
+
 // Azure Function (endpoint de telemetria)
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
-#define AZURE_FUNCTION_KEY "SUA_CHAVE_DA_FUNCTION"

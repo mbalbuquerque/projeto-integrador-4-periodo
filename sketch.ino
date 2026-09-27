@@ -4,6 +4,7 @@
 #include <LittleFS.h>
 #include <time.h>
 #include <DHT.h>
+#include <Preferences.h>
 #include "secrets.h"
 #include "azure_ca.h"
 
@@ -19,8 +20,11 @@
  ==========================================================
 */
 
-// Identificador deste no sensor (particao no banco).
-#define DEVICE_ID "coldtrack-01"
+// DEVICE_ID e DEVICE_KEY vem do secrets.h: cada sensor tem o proprio ID
+// e a propria chave, gerados ao registrar o sensor no painel.
+#if !defined(DEVICE_ID) || !defined(DEVICE_KEY)
+#error "Defina DEVICE_ID e DEVICE_KEY no secrets.h (painel > Sensores > Registrar sensor)"
+#endif
 
 // Tempo maximo de espera da requisicao HTTPS, em ms.
 #define HTTP_TIMEOUT_MS 5000
@@ -60,14 +64,18 @@ int filaTamanho = 0;
 DHT dht(DHT_PIN, DHT_TYPE);
 
 
-// ================= LIMITES =================
+// ================= FAIXA DA CARGA =================
 //
-// Limites demonstrativos do protótipo.
-// Posteriormente serão adequados ao tipo de carga.
-//
+// Faixa normal [min, max]; ate `margem` graus fora dela e ATENCAO, alem disso
+// CRITICO. Comeca no perfil demonstrativo (normal ate 15, atencao ate 20) e
+// passa a ser a do perfil de carga do veiculo, que volta em cada resposta da
+// nuvem. Fica guardada na flash: sem sinal, o LED segue a ultima faixa recebida.
 
-const float TEMP_NORMAL_MAX = 15.0;
-const float TEMP_ATENCAO_MAX = 20.0;
+Preferences preferencias;
+
+float faixaMin = NAN;      // NAN = sem limite inferior
+float faixaMax = 15.0;
+float faixaMargem = 5.0;
 
 
 // ================= TEMPORIZAÇÃO =================
@@ -195,6 +203,88 @@ void montarPayload(char *destino, size_t tamanho,
 }
 
 
+// ==========================================================
+// FAIXA DA CARGA (vem da nuvem, fica na flash)
+// ==========================================================
+
+// Le o numero depois de "chave": no JSON. null ou ausente = NAN.
+float numeroDoJson(const String &json, const char *chave) {
+
+  String alvo = String("\"") + chave + "\":";
+  int inicio = json.indexOf(alvo);
+
+  if (inicio < 0) {
+    return NAN;
+  }
+
+  inicio += alvo.length();
+
+  if (json.startsWith("null", inicio)) {
+    return NAN;
+  }
+
+  return json.substring(inicio).toFloat();
+}
+
+
+void carregarFaixa() {
+
+  preferencias.begin("coldtrack", true);
+  faixaMin = preferencias.getFloat("min", NAN);
+  faixaMax = preferencias.getFloat("max", 15.0);
+  faixaMargem = preferencias.getFloat("margem", 5.0);
+  preferencias.end();
+}
+
+
+// Resposta da nuvem: {"id":...,"status":...,"perfil":"manga","faixa":{"min":10.0,"max":13.0,"margem":3.0}}
+void atualizarFaixa(const String &resposta) {
+
+  int pos = resposta.indexOf("\"faixa\":");
+
+  if (pos < 0) {
+    return;
+  }
+
+  String trecho = resposta.substring(pos);
+
+  float novoMin = numeroDoJson(trecho, "min");
+  float novoMax = numeroDoJson(trecho, "max");
+  float novaMargem = numeroDoJson(trecho, "margem");
+
+  if (isnan(novoMax) || isnan(novaMargem)) {
+    return;
+  }
+
+  bool mudou = novoMax != faixaMax || novaMargem != faixaMargem ||
+               isnan(novoMin) != isnan(faixaMin) ||
+               (!isnan(novoMin) && novoMin != faixaMin);
+
+  if (!mudou) {
+    return;
+  }
+
+  faixaMin = novoMin;
+  faixaMax = novoMax;
+  faixaMargem = novaMargem;
+
+  // Grava so quando muda: poupa a flash.
+  preferencias.begin("coldtrack", false);
+  preferencias.putFloat("min", faixaMin);
+  preferencias.putFloat("max", faixaMax);
+  preferencias.putFloat("margem", faixaMargem);
+  preferencias.end();
+
+  Serial.print("FAIXA: nova faixa da carga ");
+  Serial.print(isnan(faixaMin) ? String("-") : String(faixaMin, 1));
+  Serial.print(" a ");
+  Serial.print(faixaMax, 1);
+  Serial.print(" C (margem ");
+  Serial.print(faixaMargem, 1);
+  Serial.println(" C)");
+}
+
+
 // Retorna o status HTTP (201 = gravado) ou um codigo negativo de falha de rede.
 int postarAzure(const char *payload) {
 
@@ -211,14 +301,18 @@ int postarAzure(const char *payload) {
   }
 
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("x-functions-key", AZURE_FUNCTION_KEY);
+  http.addHeader("x-device-key", DEVICE_KEY);
 
   int status = http.POST(payload);
 
   if (status == 201) {
 
+    String resposta = http.getString();
+
     Serial.print("Azure: gravado. Resposta: ");
-    Serial.println(http.getString());
+    Serial.println(resposta);
+
+    atualizarFaixa(resposta);
 
   }
 
@@ -454,6 +548,8 @@ void setup() {
 
   filaTamanho = contarFila();
 
+  carregarFaixa();
+
   Serial.print("FILA: ");
   Serial.print(filaTamanho);
   Serial.println(" leituras pendentes na flash.");
@@ -543,13 +639,16 @@ void loop() {
     // CLASSIFICAÇÃO EDGE
     // ======================================================
 
-    if (temperatura <= TEMP_NORMAL_MAX) {
+    // Mesma regra da nuvem (contrato.py): sem limite inferior quando faixaMin e NAN.
+    float minimo = isnan(faixaMin) ? -1000.0 : faixaMin;
+
+    if (temperatura >= minimo && temperatura <= faixaMax) {
 
       statusNormal();
 
     }
 
-    else if (temperatura <= TEMP_ATENCAO_MAX) {
+    else if (temperatura >= minimo - faixaMargem && temperatura <= faixaMax + faixaMargem) {
 
       statusAtencao();
 

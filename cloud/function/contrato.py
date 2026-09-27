@@ -13,7 +13,6 @@ Payload esperado (POST /api/telemetria):
 }
 """
 
-import os
 import re
 import time
 
@@ -27,14 +26,6 @@ RSSI_MIN, RSSI_MAX = -120, 0
 # Janela aceita para o horário da medição.
 MEDIDO_FUTURO_MAX_S = 5 * 60
 MEDIDO_PASSADO_MAX_S = 7 * 24 * 3600
-
-
-def _limites():
-    # Mesmos limites demonstrativos do firmware; configuráveis por app setting.
-    return (
-        float(os.getenv("TEMP_NORMAL_MAX", "15")),
-        float(os.getenv("TEMP_ATENCAO_MAX", "20")),
-    )
 
 
 def _numero(valor):
@@ -127,10 +118,28 @@ def filtros_de_leitura(params, agora=None):
     return erros, filtros
 
 
-def classificar(temperatura):
-    normal_max, atencao_max = _limites()
-    if temperatura <= normal_max:
+# Perfis de carga. Faixa normal [min, max]; até `margem` °C fora dela é ATENCAO,
+# além disso é CRITICO. min None = sem limite inferior.
+# Manga e uva: faixas de referência de pós-colheita, a validar com o produtor.
+# O DHT11 não mede abaixo de 0 °C: a uva pede DHT22 ou sonda DS18B20.
+PERFIS_CARGA = {
+    "demonstrativo": {"nome": "Demonstrativo (protótipo)", "min": None, "max": 15.0, "margem": 5.0},
+    "manga": {"nome": "Manga", "min": 10.0, "max": 13.0, "margem": 3.0},
+    "uva": {"nome": "Uva de mesa", "min": -1.0, "max": 0.0, "margem": 2.0},
+}
+PERFIL_PADRAO = "demonstrativo"
+
+
+def faixa(perfil):
+    p = PERFIS_CARGA.get(perfil, PERFIS_CARGA[PERFIL_PADRAO])
+    return {"min": p["min"], "max": p["max"], "margem": p["margem"]}
+
+
+def classificar(temperatura, perfil=PERFIL_PADRAO):
+    f = faixa(perfil)
+    minimo = f["min"] if f["min"] is not None else float("-inf")
+    if minimo <= temperatura <= f["max"]:
         return "NORMAL"
-    if temperatura <= atencao_max:
+    if minimo - f["margem"] <= temperatura <= f["max"] + f["margem"]:
         return "ATENCAO"
     return "CRITICO"

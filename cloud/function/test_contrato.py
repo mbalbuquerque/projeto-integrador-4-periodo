@@ -2,7 +2,7 @@
 
 import unittest
 
-from contrato import classificar, filtros_de_leitura, validar
+from contrato import classificar, faixa, filtros_de_leitura, validar
 
 VALIDO = {"deviceId": "coldtrack-01", "temperatura": 12.4, "umidade": 81.0, "rssi": -58}
 
@@ -115,6 +115,22 @@ class TestClassificar(unittest.TestCase):
         self.assertEqual(classificar(15.1), "ATENCAO")
         self.assertEqual(classificar(20.0), "ATENCAO")
         self.assertEqual(classificar(20.1), "CRITICO")
+        self.assertEqual(classificar(-30.0), "NORMAL")  # demonstrativo não tem mínimo
+
+    def test_perfil_manga(self):
+        self.assertEqual(classificar(11.0, "manga"), "NORMAL")
+        self.assertEqual(classificar(8.0, "manga"), "ATENCAO")   # frio demais: dano por frio
+        self.assertEqual(classificar(15.5, "manga"), "ATENCAO")
+        self.assertEqual(classificar(6.9, "manga"), "CRITICO")
+        self.assertEqual(classificar(16.1, "manga"), "CRITICO")
+
+    def test_perfil_uva(self):
+        self.assertEqual(classificar(0.0, "uva"), "NORMAL")
+        self.assertEqual(classificar(2.0, "uva"), "ATENCAO")
+        self.assertEqual(classificar(2.5, "uva"), "CRITICO")
+
+    def test_perfil_desconhecido_usa_padrao(self):
+        self.assertEqual(faixa("banana"), faixa("demonstrativo"))
 
 
 if __name__ == "__main__":
