@@ -2,6 +2,7 @@
 
 Documento de referência da arquitetura do ColdTrack: o que cada parte faz, em que tecnologia
 foi feita, onde roda, como os dados circulam e como o sistema é publicado. Situação em 26/09/2026.
+Para colocar um cliente novo em operação, ver [`implantacao.md`](implantacao.md).
 
 ## 1. Visão geral
 
