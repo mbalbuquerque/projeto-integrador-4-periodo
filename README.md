@@ -70,6 +70,9 @@ Projeto em desenvolvimento.
 - [x] Envio em JSON via HTTPS para o Azure
 - [x] Armazenamento das leituras sem conexão e reenvio
 - [x] Dashboard web publicado no Azure
+- [x] Login com perfis (operador logístico e gestor)
+- [x] Análise climática da rota (INMET) e modelo preliminar de risco térmico — ver [`analise/`](analise/)
+- [x] Testes automáticos e compilação do firmware no GitHub Actions
 - [ ] Montagem física
 - [ ] Gabinete reciclado
 - [ ] Testes de campo
