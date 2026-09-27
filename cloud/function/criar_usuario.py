@@ -1,10 +1,11 @@
-"""Cria um usuário do painel direto no Cosmos DB (uso local, para o primeiro gestor).
+"""Cria um usuário do painel direto no Cosmos DB (uso local, para suporte).
 
-Os demais usuários são criados pelo gestor na tela de Configurações.
+O caminho normal é o painel: a empresa se cadastra em cadastro.html e o gestor
+cria os demais usuários em Configurações.
 
 Uso:
   set COSMOS_CONNECTION=<string de conexão do Cosmos>
-  python criar_usuario.py <email> "<nome>" <operador|gestor>
+  python criar_usuario.py <email> "<nome>" <operador|gestor> <id da empresa>
   (a senha é pedida no terminal, sem aparecer na tela)
 """
 
@@ -19,15 +20,15 @@ from seguranca import gerar_hash
 
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) != 5:
         sys.exit(__doc__)
-    email, nome, perfil = sys.argv[1:]
+    email, nome, perfil, empresa = sys.argv[1:]
     senha = os.environ.get("COLDTRACK_SENHA") or getpass.getpass("Senha (mín. 8): ")
 
     erros, doc = validar_usuario({"email": email, "nome": nome, "perfil": perfil, "senha": senha})
     if erros:
         sys.exit("\n".join(erros))
-    doc["senhaHash"] = gerar_hash(doc.pop("senha"))
+    doc.update({"empresaId": empresa, "sessao": 0, "senhaHash": gerar_hash(doc.pop("senha"))})
 
     banco = CosmosClient.from_connection_string(os.environ["COSMOS_CONNECTION"]) \
         .get_database_client(os.getenv("COSMOS_DATABASE", "coldtrack"))

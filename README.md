@@ -36,11 +36,11 @@ O protótipo utiliza três LEDs para indicar o estado das condições monitorada
 - 🟡 **Amarelo:** atenção
 - 🔴 **Vermelho:** condição crítica ou falha
 
-Os limites utilizados durante a fase inicial são demonstrativos e poderão ser configurados conforme o tipo de mercadoria transportada.
+A faixa de temperatura segue o perfil da carga do veículo (demonstrativo, manga ou uva): o sensor recebe a faixa da nuvem a cada envio e a guarda na memória.
 
 ## ☁️ Telemetria
 
-O ESP32-C3 envia cada leitura em JSON, por HTTPS, para uma Azure Function que valida os dados e grava no Azure Cosmos DB:
+O ESP32-C3 envia cada leitura em JSON, por HTTPS e com a chave própria do sensor, para uma Azure Function que valida os dados e grava no Azure Cosmos DB:
 
 ```json
 {"deviceId": "coldtrack-01", "temperatura": 12.4, "umidade": 81.0, "rssi": -58, "medidoEm": 1790000000}
@@ -52,7 +52,7 @@ Dashboard publicado: https://stcoldtrackweb7319.z15.web.core.windows.net
 
 ## 🔐 Segurança
 
-Credenciais Wi-Fi e chaves de API não serão armazenadas diretamente no código-fonte público.
+Credenciais Wi-Fi e a chave do sensor não ficam no código-fonte. Cada sensor tem chave própria, gerada no painel (Sensores); cada empresa só enxerga os próprios dados.
 
 As credenciais ficam em `secrets.h`, ignorado pelo Git. Use `secrets.example.h` como modelo.
 
@@ -76,6 +76,10 @@ Projeto em desenvolvimento.
 - [x] Login com perfis (operador logístico e gestor)
 - [x] Análise climática da rota (INMET) e modelo preliminar de risco térmico — ver [`analise/`](analise/)
 - [x] Testes automáticos e compilação do firmware no GitHub Actions
+- [x] Várias empresas com dados separados, cadastro de empresa e chave por sensor
+- [x] Faixa por perfil de carga (manga, uva) enviada ao sensor
+- [x] Troca de senha, bloqueio de login e etiqueta QR por veículo
+- [x] Previsão de calor na rota (Open-Meteo + histórico INMET) no dashboard
 - [ ] Montagem física
 - [ ] Gabinete reciclado
 - [ ] Testes de campo
