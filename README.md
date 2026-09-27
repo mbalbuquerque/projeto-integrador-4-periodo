@@ -11,6 +11,8 @@
 
 Projeto desenvolvido para o **Projeto Integrador – 4º Período**, com foco no monitoramento de **temperatura e umidade durante o transporte refrigerado de mercadorias**.
 
+📘 Documentação técnica completa (arquitetura, tecnologias, dados, API, segurança e publicação): [`docs/stack-tecnica.md`](docs/stack-tecnica.md)
+
 ## 🎯 Objetivo
 
 Desenvolver um nó sensor IoT capaz de monitorar as condições ambientais no interior de um compartimento refrigerado, realizando processamento local e envio de telemetria para a nuvem.
