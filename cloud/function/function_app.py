@@ -34,6 +34,9 @@ from seguranca import (conferir_senha, gerar_hash, gerar_token, ler_token,
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 ANONIMO = func.AuthLevel.ANONYMOUS
 
+# Hash de uma senha aleatória, usado quando o e-mail não existe (mesmo tempo de resposta).
+HASH_FALSO = gerar_hash(uuid.uuid4().hex)
+
 TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
 
@@ -138,8 +141,10 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
     except exceptions.CosmosResourceNotFoundError:
         usuario = None
 
-    # Mesma mensagem para e-mail inexistente e senha errada: não revela quem tem conta.
-    if usuario is None or not conferir_senha(senha, usuario.get("senhaHash")):
+    # Mesma mensagem e mesmo custo para e-mail inexistente e senha errada:
+    # sem o hash de mentira, a resposta mais rápida revelaria quem tem conta.
+    senha_ok = conferir_senha(senha, usuario["senhaHash"] if usuario else HASH_FALSO)
+    if usuario is None or not senha_ok:
         logging.warning("login recusado para %s", email or "(vazio)")
         return resposta({"erros": ["e-mail ou senha incorretos"]}, 401)
 
