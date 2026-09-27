@@ -3,7 +3,6 @@
 #include <HTTPClient.h>
 #include <LittleFS.h>
 #include <time.h>
-#include <ThingSpeak.h>
 #include <DHT.h>
 #include "secrets.h"
 #include "azure_ca.h"
@@ -13,14 +12,10 @@
  COLDTRACK EDGE
  Monitoramento IoT de Transporte Refrigerado
 
- ESP32-C3 + DHT + LEDs + Wi-Fi + ThingSpeak
+ ESP32-C3 + DHT + LEDs + Wi-Fi + Azure
 
- Field 1 -> Temperatura
- Field 2 -> Umidade Relativa
- Field 3 -> RSSI Wi-Fi
-
- Azure: POST JSON via HTTPS (TLS validado) na Azure Function
- {"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58}
+ Envio: POST JSON via HTTPS (TLS validado) na Azure Function
+ {"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58,"medidoEm":1790000000}
  ==========================================================
 */
 
@@ -60,8 +55,6 @@ int filaTamanho = 0;
 
 DHT dht(DHT_PIN, DHT_TYPE);
 
-WiFiClient client;
-
 
 // ================= LIMITES =================
 //
@@ -75,8 +68,8 @@ const float TEMP_ATENCAO_MAX = 20.0;
 
 // ================= TEMPORIZAÇÃO =================
 
-// ThingSpeak exige intervalo mínimo entre atualizações.
-// Utilizamos 20 segundos por segurança.
+// Uma leitura a cada 20 segundos: detecta desvio rapido sem
+// gastar dado a toa quando a conexao for celular.
 
 const unsigned long INTERVALO_ENVIO = 20000;
 
@@ -465,8 +458,6 @@ void setup() {
 
   sincronizarRelogio();
 
-  ThingSpeak.begin(client);
-
   Serial.println();
   Serial.println("Sistema iniciado.");
 }
@@ -593,40 +584,10 @@ void loop() {
 
 
     // ======================================================
-    // ENVIO (ThingSpeak ao vivo + Azure com store-and-forward)
+    // ENVIO (Azure com store-and-forward)
     // ======================================================
 
     if (conexaoDisponivel()) {
-
-      ThingSpeak.setField(1, temperatura);
-
-      ThingSpeak.setField(2, umidade);
-
-      ThingSpeak.setField(3, (int)rssi);
-
-
-      Serial.println();
-      Serial.println("Enviando telemetria ao ThingSpeak...");
-
-
-      int resultado = ThingSpeak.writeFields(
-        THINGSPEAK_CHANNEL_ID,
-        THINGSPEAK_WRITE_API_KEY
-      );
-
-
-      if (resultado == 200) {
-
-        Serial.println("ThingSpeak: envio realizado com sucesso!");
-
-      }
-
-      else {
-
-        Serial.print("ThingSpeak: erro HTTP ");
-        Serial.println(resultado);
-      }
-
 
       Serial.println();
 

@@ -7,10 +7,6 @@
 #define WIFI_SSID     "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
 
-// ThingSpeak
-#define THINGSPEAK_CHANNEL_ID    0
-#define THINGSPEAK_WRITE_API_KEY "SUA_WRITE_API_KEY"
-
 // Azure Function (endpoint de telemetria)
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
 #define AZURE_FUNCTION_KEY "SUA_CHAVE_DA_FUNCTION"

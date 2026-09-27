@@ -74,7 +74,7 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
     return resposta({"id": leitura["id"], "status": leitura["status"]}, 201)
 
 
-# Leitura pública (só consulta), como o feed do ThingSpeak que o dashboard já usava.
+# Leitura pública (só consulta) para o dashboard.
 # A origem permitida é controlada pelo CORS do Function App; login com perfis (RBAC)
 # está planejado para a publicação no Azure Static Web Apps.
 @app.route(route="leituras", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
