@@ -202,13 +202,16 @@ computador e celular.
 
 ## 9. Publicação e testes
 
-| Parte | Como é publicada |
-|---|---|
-| API | `bash publicar.sh` em `cloud/function/`: roda os testes, empacota e envia ao Azure |
-| Painel | `bash publicar.sh` no repositório do painel: envia a versão commitada ao site estático |
-| Firmware | Compilado e gravado no ESP32 pelo cabo USB |
+| Parte | Publicação automática | Publicação manual |
+|---|---|---|
+| API | GitHub Actions `publicar-api.yml`: a cada envio à branch `everson` que altere a API, roda os testes e publica | `bash publicar.sh` em `cloud/function/` |
+| Painel | GitHub Actions `publicar-site.yml`: a cada envio à branch `everson`, confere os scripts e publica | `bash publicar.sh` no repositório do painel |
+| Firmware | — | Compilado e gravado no ESP32 pelo cabo USB |
 
-A publicação usa o **Azure CLI** (comando `az`), autenticado na assinatura do projeto.
+**Credencial da publicação automática.** O GitHub entra no Azure por OIDC: não existe senha
+guardada no repositório. A identidade `coldtrack-github-deploy` tem permissão apenas no grupo
+de recursos `rg-coldtrack` e só é aceita para a branch `everson` destes dois repositórios.
+A publicação manual usa o **Azure CLI** (comando `az`) autenticado na assinatura do projeto.
 
 Testes:
 
@@ -234,7 +237,6 @@ chip de dados e fonte veicular.
 | Mesma chave para todos os dispositivos | Chave própria por dispositivo, registrada por QR code |
 | Wi-Fi configurado no código | Configuração pelo celular (rede de configuração do próprio ESP32) |
 | Faixas de temperatura fixas no firmware | Perfil de carga escolhido no painel e enviado ao sensor |
-| Publicação por comando | Publicação automática a cada atualização do repositório |
 | Testes no ambiente publicado | Ambiente de testes separado |
 
 ## 12. Glossário
