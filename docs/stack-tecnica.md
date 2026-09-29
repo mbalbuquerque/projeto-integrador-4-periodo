@@ -47,9 +47,10 @@ Repositórios:
 | Sensor | DHT11 na placa física; DHT22 no simulador (escolhido por `DHT_TYPE` no `secrets.h`) |
 | Sinalização | LEDs verde (normal), amarelo (atenção) e vermelho (crítico) nos GPIOs 5, 6 e 7 |
 | Faixa da carga | Recebida da nuvem a cada envio e guardada na flash (vale mesmo sem sinal) |
-| Identidade | ID e chave próprios do sensor, gerados no painel ao registrar o sensor |
+| Identidade | ID tirado do chip (`coldtrack-` + final do MAC) e chave própria, gerada pela API e gravada na placa pelo cabo |
+| Configuração | Pelo cabo USB, direto do painel (Web Serial, Chrome/Edge): Wi-Fi, ID e chave ficam na flash (`Preferences`); a placa testa a rede antes de gravar. Sem nada salvo, usa o `secrets.h` (simulador) |
 | Intervalo | Uma leitura a cada 20 s, com temporização não bloqueante (`millis`) |
-| Conexão | Wi-Fi no protótipo; módulo 4G (A7670SA) com chip na versão final |
+| Conexão | Wi-Fi 2.4 GHz (roteador do local ou hotspot do celular) |
 | Segurança | HTTPS com verificação do certificado do servidor (raiz DigiCert Global Root G2) |
 | Relógio | Sincronizado pela internet (NTP); cada leitura leva o horário da medição |
 
@@ -279,15 +280,14 @@ Testes:
 ## 10. Custos
 
 Todos os serviços operam na camada gratuita ou de consumo, cobertos pelo crédito da assinatura
-acadêmica. O custo previsto fora do Azure é o hardware da versão final: módulo 4G com GPS,
-chip de dados e fonte veicular.
+acadêmica. Fora do Azure, o custo é só o hardware: ESP32-C3, sensor DHT, LEDs e fonte USB.
 
 ## 11. Limitações atuais e evolução
 
 | Hoje | Evolução prevista |
 |---|---|
-| Conexão por Wi-Fi | Módulo 4G com chip e GPS; envio por MQTT via Azure IoT Hub (junto com o 4G: com HTTPS funcionando, trocar o transporte antes do hardware não traz ganho) |
-| Wi-Fi configurado no código | Configuração pelo celular (rede de configuração do próprio ESP32), a fazer no teste da placa física |
+| Configuração pelo cabo USB, no computador | Configuração pelo celular, por Bluetooth (Web Bluetooth no Android) |
+| Uma rede Wi-Fi salva por placa | Várias redes salvas (base e estrada) |
 | Faixas de manga e uva de referência | Faixas validadas com o produtor |
 | Cadastro de empresa aberto, sem confirmação de e-mail | Confirmação de e-mail e limite de cadastros por origem |
 | Testes no ambiente publicado | Ambiente de testes separado |

@@ -20,11 +20,26 @@
  ==========================================================
 */
 
-// DEVICE_ID e DEVICE_KEY vem do secrets.h: cada sensor tem o proprio ID
-// e a propria chave, gerados ao registrar o sensor no painel.
-#if !defined(DEVICE_ID) || !defined(DEVICE_KEY)
-#error "Defina DEVICE_ID e DEVICE_KEY no secrets.h (painel > Sensores > Registrar sensor)"
+// ================= CONFIGURACAO DO SENSOR =================
+//
+// Wi-Fi, ID e chave chegam pelo cabo USB: painel > Sensores > "Conectar
+// sensor pelo cabo" (Web Serial) e ficam guardados na flash.
+// Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
+// Sem nenhum dos dois, o sensor so mede e espera o cabo.
+
+#define FW_VERSAO "2026.09.28"
+
+#ifndef AZURE_FUNCTION_URL
+#define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
 #endif
+
+// Tempo para testar uma rede nova recebida pelo cabo, em ms.
+#define TESTE_WIFI_MS 15000
+
+String cfgSsid;
+String cfgSenha;
+String cfgId;
+String cfgChave;
 
 // Tempo maximo de espera da requisicao HTTPS, em ms.
 #define HTTP_TIMEOUT_MS 5000
@@ -131,15 +146,72 @@ void statusCritico() {
 
 
 // ==========================================================
+// CONFIGURACAO (flash ou secrets.h)
+// ==========================================================
+
+void carregarConfig() {
+
+  preferencias.begin("config", true);
+  cfgSsid = preferencias.getString("ssid", "");
+  cfgSenha = preferencias.getString("senha", "");
+  cfgId = preferencias.getString("id", "");
+  cfgChave = preferencias.getString("chave", "");
+  preferencias.end();
+
+  if (cfgSsid.length() == 0) {
+#ifdef WIFI_SSID
+    cfgSsid = WIFI_SSID;
+#endif
+#ifdef WIFI_PASSWORD
+    cfgSenha = WIFI_PASSWORD;
+#endif
+  }
+
+  if (cfgId.length() == 0 || cfgChave.length() == 0) {
+#if defined(DEVICE_ID) && defined(DEVICE_KEY)
+    cfgId = DEVICE_ID;
+    cfgChave = DEVICE_KEY;
+#endif
+  }
+}
+
+
+bool temIdentidade() {
+
+  return cfgId.length() > 0 && cfgChave.length() > 0;
+}
+
+
+// ID sugerido para placa nova: coldtrack- + final do MAC (unico por chip).
+String idDoChip() {
+
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  mac.toLowerCase();
+
+  return "coldtrack-" + mac.substring(6);
+}
+
+
+// ==========================================================
 // CONEXÃO WI-FI
 // ==========================================================
 
+bool lerSerial();
+
 void conectarWiFi() {
 
-  Serial.println();
-  Serial.print("Conectando ao Wi-Fi");
+  if (cfgSsid.length() == 0) {
 
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.println("Wi-Fi nao configurado. Ligue o sensor no cabo e configure pelo painel.");
+    return;
+  }
+
+  Serial.println();
+  Serial.print("Conectando ao Wi-Fi ");
+  Serial.print(cfgSsid);
+
+  WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
 
   int tentativas = 0;
 
@@ -150,6 +222,11 @@ void conectarWiFi() {
     Serial.print(".");
 
     tentativas++;
+
+    // Chegou configuracao pelo cabo: para de esperar e deixa o loop tratar.
+    if (lerSerial()) {
+      break;
+    }
   }
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -199,7 +276,7 @@ void montarPayload(char *destino, size_t tamanho,
 
   snprintf(destino, tamanho,
     "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s%s}",
-    DEVICE_ID, temperatura, umidade, rssiJson, medidoJson);
+    cfgId.c_str(), temperatura, umidade, rssiJson, medidoJson);
 }
 
 
@@ -306,7 +383,7 @@ int postarAzure(const char *payload) {
   }
 
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("x-device-key", DEVICE_KEY);
+  http.addHeader("x-device-key", cfgChave);
 
   int status = http.POST(payload);
 
@@ -523,11 +600,336 @@ void reenviarFila() {
 
 
 // ==========================================================
+// CONFIGURACAO PELO CABO (protocolo com o painel)
+// ==========================================================
+//
+// Uma linha JSON por mensagem. Painel -> placa comeca com "CT<",
+// placa -> painel com "CT>"; o resto da serial e log comum.
+//
+//   CT<{"cmd":"info"}
+//   CT<{"cmd":"wifi","ssid":"..","senha":".."}                      troca so a rede
+//   CT<{"cmd":"config","ssid":"..","senha":"..","id":"..","chave":".."}
+//
+// A placa testa a rede antes de gravar e responde
+//   CT>{"ok":true,"wifi":"conectado","rssi":-55}
+//   CT>{"ok":false,"erro":"senha|rede_nao_encontrada|tempo|..."}
+// Senha e chave nunca voltam pela serial nem aparecem no log.
+
+String bufferSerial;
+String comandoPendente;
+
+
+// Junta os bytes da serial; true quando chega um comando completo.
+bool lerSerial() {
+
+  while (Serial.available()) {
+
+    char c = Serial.read();
+
+    if (c == '\r') {
+      continue;
+    }
+
+    if (c != '\n') {
+
+      if (bufferSerial.length() < 512) {
+        bufferSerial += c;
+      }
+      continue;
+    }
+
+    String linha = bufferSerial;
+    bufferSerial = "";
+    linha.trim();
+
+    if (linha.startsWith("CT<")) {
+      comandoPendente = linha.substring(3);
+      return true;
+    }
+  }
+
+  return comandoPendente.length() > 0;
+}
+
+
+// Le o texto de "chave":"valor" no JSON, desfazendo os escapes basicos.
+String textoDoJson(const String &json, const char *chave) {
+
+  String alvo = String("\"") + chave + "\"";
+  int pos = json.indexOf(alvo);
+
+  if (pos < 0) {
+    return "";
+  }
+
+  pos = json.indexOf(':', pos + alvo.length());
+  if (pos < 0) {
+    return "";
+  }
+
+  pos = json.indexOf('"', pos);
+  if (pos < 0) {
+    return "";
+  }
+
+  String valor;
+
+  for (int i = pos + 1; i < (int)json.length(); i++) {
+
+    char c = json[i];
+
+    if (c == '"') {
+      return valor;
+    }
+
+    if (c == '\\' && i + 1 < (int)json.length()) {
+
+      char proximo = json[++i];
+
+      if (proximo == 'n') {
+        valor += '\n';
+      } else if (proximo == 't') {
+        valor += '\t';
+      } else {
+        valor += proximo;   // \" \\ \/
+      }
+      continue;
+    }
+
+    valor += c;
+  }
+
+  return "";   // sem aspas de fechamento: JSON cortado
+}
+
+
+// Escreve um texto como string JSON (com aspas e escapes).
+String emJson(const String &texto) {
+
+  String saida = "\"";
+
+  for (int i = 0; i < (int)texto.length(); i++) {
+
+    char c = texto[i];
+
+    if (c == '"' || c == '\\') {
+      saida += '\\';
+    }
+
+    if ((unsigned char)c >= 0x20) {
+      saida += c;
+    }
+  }
+
+  return saida + "\"";
+}
+
+
+void responder(const String &json) {
+
+  Serial.print("CT>");
+  Serial.println(json);
+}
+
+
+// Motivo da ultima queda do Wi-Fi (vem do evento do driver; 0 = nenhum).
+volatile uint8_t motivoQueda = 0;
+
+void aoCairWiFi(WiFiEvent_t evento, WiFiEventInfo_t info) {
+
+  motivoQueda = info.wifi_sta_disconnected.reason;
+}
+
+
+String traduzirMotivo(uint8_t motivo) {
+
+  switch (motivo) {
+
+    case WIFI_REASON_NO_AP_FOUND:
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+      return "rede_nao_encontrada";
+
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_AUTH_EXPIRE:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_MIC_FAILURE:
+      return "senha";
+  }
+
+  return "";
+}
+
+
+// Tenta a rede; devolve "" se conectou ou o motivo da falha.
+String testarWiFi(const String &ssid, const String &senha) {
+
+  WiFi.disconnect();
+  delay(200);
+
+  motivoQueda = 0;
+  WiFi.begin(ssid.c_str(), senha.c_str());
+
+  unsigned long inicio = millis();
+  wl_status_t status = WiFi.status();
+
+  while (millis() - inicio < TESTE_WIFI_MS) {
+
+    status = WiFi.status();
+
+    if (status == WL_CONNECTED || status == WL_CONNECT_FAILED ||
+        status == WL_NO_SSID_AVAIL) {
+      break;
+    }
+
+    // O driver ja disse por que caiu: nao precisa esperar o tempo todo.
+    if (traduzirMotivo(motivoQueda).length() > 0 && millis() - inicio > 3000) {
+      break;
+    }
+
+    delay(250);
+  }
+
+  if (status == WL_CONNECTED) {
+    return "";
+  }
+
+  if (status == WL_NO_SSID_AVAIL) {
+    return "rede_nao_encontrada";
+  }
+
+  if (status == WL_CONNECT_FAILED) {
+    return "senha";
+  }
+
+  String motivo = traduzirMotivo(motivoQueda);
+
+  return motivo.length() > 0 ? motivo : "tempo";
+}
+
+
+void apagarFila() {
+
+  LittleFS.remove(FILA_ARQUIVO);
+  filaTamanho = 0;
+}
+
+
+void tratarComando() {
+
+  String cmd = comandoPendente;
+  comandoPendente = "";
+
+  String tipo = textoDoJson(cmd, "cmd");
+
+  if (tipo == "info") {
+
+    responder(String("{\"id\":") + emJson(cfgId.length() ? cfgId : idDoChip()) +
+              ",\"chip\":" + emJson(idDoChip()) +
+              ",\"configurado\":" + (temIdentidade() ? "true" : "false") +
+              ",\"ssid\":" + emJson(cfgSsid) +
+              ",\"wifi\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
+              ",\"fw\":" + emJson(FW_VERSAO) + "}");
+    return;
+  }
+
+  if (tipo != "wifi" && tipo != "config") {
+
+    responder("{\"ok\":false,\"erro\":\"comando_desconhecido\"}");
+    return;
+  }
+
+  String ssid = textoDoJson(cmd, "ssid");
+  String senha = textoDoJson(cmd, "senha");
+  String id = textoDoJson(cmd, "id");
+  String chave = textoDoJson(cmd, "chave");
+
+  if (ssid.length() == 0 || ssid.length() > 32 || senha.length() > 63) {
+
+    responder("{\"ok\":false,\"erro\":\"rede_invalida\"}");
+    return;
+  }
+
+  if (tipo == "wifi" && !temIdentidade()) {
+
+    responder("{\"ok\":false,\"erro\":\"sem_identidade\"}");
+    return;
+  }
+
+  if (tipo == "config" && (id.length() < 3 || id.length() > 40 || chave.length() < 16)) {
+
+    responder("{\"ok\":false,\"erro\":\"identidade_invalida\"}");
+    return;
+  }
+
+  Serial.print("CONFIG: testando a rede ");
+  Serial.println(ssid);
+
+  String erro = testarWiFi(ssid, senha);
+
+  if (erro.length() > 0) {
+
+    Serial.print("CONFIG: falhou (");
+    Serial.print(erro);
+    Serial.println("). Nada foi gravado; voltando para a rede anterior.");
+
+    responder("{\"ok\":false,\"erro\":\"" + erro + "\"}");
+
+    WiFi.disconnect();
+    if (cfgSsid.length() > 0) {
+      WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
+    }
+    return;
+  }
+
+  // Conectou: so agora grava na flash.
+  preferencias.begin("config", false);
+  preferencias.putString("ssid", ssid);
+  preferencias.putString("senha", senha);
+
+  if (tipo == "config") {
+
+    // Leituras guardadas eram da identidade anterior: a nuvem recusaria.
+    if (id != cfgId) {
+      apagarFila();
+    }
+
+    preferencias.putString("id", id);
+    preferencias.putString("chave", chave);
+    cfgId = id;
+    cfgChave = chave;
+  }
+
+  preferencias.end();
+
+  cfgSsid = ssid;
+  cfgSenha = senha;
+
+  Serial.print("CONFIG: gravado. Sensor ");
+  Serial.print(cfgId);
+  Serial.print(" na rede ");
+  Serial.println(cfgSsid);
+
+  responder(String("{\"ok\":true,\"wifi\":\"conectado\",\"rssi\":") + WiFi.RSSI() +
+            ",\"id\":" + emJson(cfgId) + "}");
+
+  sincronizarRelogio();
+
+  // Proxima leitura sai ja, para o painel mostrar "online" logo.
+  ultimoEnvio = 0;
+}
+
+
+// ==========================================================
 // SETUP
 // ==========================================================
 
 void setup() {
 
+  // Comando de configuracao passa de 200 bytes; o buffer padrao e pequeno.
+  Serial.setRxBufferSize(1024);
   Serial.begin(115200);
 
   delay(1000);
@@ -555,6 +957,17 @@ void setup() {
 
   carregarFaixa();
 
+  carregarConfig();
+
+  // Modo estacao antes de tudo: o MAC (ID sugerido) so aparece com o radio ligado.
+  WiFi.mode(WIFI_STA);
+  WiFi.onEvent(aoCairWiFi, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+
+  Serial.print("SENSOR: ");
+  Serial.print(temIdentidade() ? cfgId : String("sem identidade (chip ") + idDoChip() + ")");
+  Serial.print(" | firmware ");
+  Serial.println(FW_VERSAO);
+
   Serial.print("FILA: ");
   Serial.print(filaTamanho);
   Serial.println(" leituras pendentes na flash.");
@@ -573,6 +986,36 @@ void setup() {
 // ==========================================================
 
 void loop() {
+
+  // --------------------------------------------------------
+  // Configuracao chegando pelo cabo
+  // --------------------------------------------------------
+
+  if (lerSerial()) {
+    tratarComando();
+  }
+
+
+  // --------------------------------------------------------
+  // Sem Wi-Fi ou sem ID/chave: pisca o amarelo e espera o cabo
+  // --------------------------------------------------------
+
+  if (cfgSsid.length() == 0 || !temIdentidade()) {
+
+    static unsigned long ultimoAviso = 0;
+
+    digitalWrite(LED_AMARELO, (millis() / 500) % 2);
+
+    if (millis() - ultimoAviso >= 10000 || ultimoAviso == 0) {
+
+      ultimoAviso = millis();
+      Serial.println("Aguardando configuracao pelo cabo (painel > Sensores > Conectar sensor pelo cabo).");
+    }
+
+    delay(20);
+    return;
+  }
+
 
   // --------------------------------------------------------
   // Verifica conexão Wi-Fi

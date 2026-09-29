@@ -54,7 +54,7 @@ Dashboard publicado: https://stcoldtrackweb7319.z15.web.core.windows.net
 
 Credenciais Wi-Fi e a chave do sensor não ficam no código-fonte. Cada sensor tem chave própria, gerada no painel (Sensores); cada empresa só enxerga os próprios dados.
 
-As credenciais ficam em `secrets.h`, ignorado pelo Git. Use `secrets.example.h` como modelo.
+Na placa física, Wi-Fi, ID e chave são gravados pelo cabo USB a partir do painel (Sensores → Conectar sensor pelo cabo) e ficam na memória da placa; a senha do Wi-Fi não passa pela API. No simulador, as credenciais ficam em `secrets.h`, ignorado pelo Git (modelo: `secrets.example.h`).
 
 ## ♻️ Design Circular
 
