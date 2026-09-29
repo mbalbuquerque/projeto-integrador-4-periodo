@@ -1,0 +1,165 @@
+"""Contrato de telemetria do ColdTrack Edge.
+
+Valida o JSON enviado pelo ESP32 e classifica a leitura. Não depende de Azure,
+então pode ser testado localmente com `python -m unittest`.
+
+Payload esperado (POST /api/telemetria):
+{
+  "deviceId": "coldtrack-01",
+  "temperatura": 12.4,
+  "umidade": 81.0,
+  "rssi": -58,
+  "medidoEm": 1790000000      (opcional: epoch UTC em segundos da medição)
+}
+"""
+
+import re
+import time
+
+DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{3,40}$")
+
+# Faixas físicas do sensor (DHT22). Fora disso é leitura inconsistente.
+TEMP_MIN, TEMP_MAX = -40.0, 80.0
+UMID_MIN, UMID_MAX = 0.0, 100.0
+RSSI_MIN, RSSI_MAX = -120, 0
+
+# Janela aceita para o horário da medição.
+MEDIDO_FUTURO_MAX_S = 5 * 60
+MEDIDO_PASSADO_MAX_S = 7 * 24 * 3600
+
+
+def _numero(valor):
+    # bool é subclasse de int em Python; não aceitar true/false como número.
+    return isinstance(valor, (int, float)) and not isinstance(valor, bool)
+
+
+def id_leitura(device_id, medido_em):
+    """Id da leitura no banco. Com o horário da medição, o id é determinístico
+    (o mesmo sensor não mede duas vezes no mesmo segundo): um reenvio do sensor
+    depois de uma resposta perdida bate no mesmo id em vez de duplicar.
+    Sem horário (firmware antigo), None: o chamador usa um uuid."""
+    if medido_em is None:
+        return None
+    return f"{device_id}~{int(medido_em)}"
+
+
+def mesma_leitura(gravada, nova):
+    """True quando `nova` repete os valores de `gravada` (reenvio legítimo).
+    False = mesmo sensor e segundo com valores diferentes: não sobrescreve."""
+    return (
+        round(float(gravada["temperatura"]), 1) == round(float(nova["temperatura"]), 1)
+        and round(float(gravada["umidade"]), 1) == round(float(nova["umidade"]), 1)
+        and gravada.get("rssi") == nova.get("rssi")
+    )
+
+
+def validar(dados, agora=None):
+    """Retorna a lista de erros do payload. Lista vazia = payload válido."""
+    if not isinstance(dados, dict):
+        return ["corpo deve ser um objeto JSON"]
+
+    erros = []
+    device = dados.get("deviceId")
+    if not isinstance(device, str) or not DEVICE_ID.match(device):
+        erros.append("deviceId: texto de 3 a 40 caracteres (letras, números, _ ou -)")
+
+    for campo, minimo, maximo in (
+        ("temperatura", TEMP_MIN, TEMP_MAX),
+        ("umidade", UMID_MIN, UMID_MAX),
+        ("rssi", RSSI_MIN, RSSI_MAX),
+    ):
+        valor = dados.get(campo)
+        # RSSI é diagnóstico de rede: o firmware manda null quando o rádio
+        # devolve valor impossível (ex.: positivo no simulador). Temperatura e
+        # umidade continuam obrigatórias.
+        if campo == "rssi" and campo in dados and valor is None:
+            continue
+        if not _numero(valor):
+            erros.append(f"{campo}: obrigatório e numérico")
+        elif valor != valor or not minimo <= valor <= maximo:  # valor != valor pega NaN
+            erros.append(f"{campo}: fora da faixa [{minimo}, {maximo}]")
+
+    # medidoEm: horário da medição (epoch UTC em segundos), opcional.
+    # Leituras guardadas offline no ESP32 chegam depois, então o horário de
+    # recebimento não serve para a linha do tempo da carga.
+    if "medidoEm" in dados:
+        medido = dados["medidoEm"]
+        referencia = time.time() if agora is None else agora
+        if not _numero(medido) or medido != medido:
+            erros.append("medidoEm: epoch em segundos (número)")
+        elif medido > referencia + MEDIDO_FUTURO_MAX_S:
+            erros.append("medidoEm: no futuro (relógio do dispositivo errado?)")
+        elif medido < referencia - MEDIDO_PASSADO_MAX_S:
+            erros.append("medidoEm: mais antigo que 7 dias")
+
+    extras = set(dados) - {"deviceId", "temperatura", "umidade", "rssi", "medidoEm"}
+    if extras:
+        erros.append("campos não previstos: " + ", ".join(sorted(extras)))
+
+    return erros
+
+
+STATUS_VALIDOS = ("NORMAL", "ATENCAO", "CRITICO")
+HORAS_MAX = 7 * 24
+
+
+def filtros_de_leitura(params, agora=None):
+    """Interpreta os filtros opcionais de GET /leituras.
+
+    horas:  1 a 168 — só leituras medidas nas últimas N horas.
+    status: lista separada por vírgula (ex.: ATENCAO,CRITICO).
+
+    Retorna (erros, filtros), com filtros = {"desde": epoch | None, "status": [..] | None}.
+    """
+    erros = []
+    filtros = {"desde": None, "status": None}
+
+    horas = params.get("horas")
+    if horas is not None:
+        try:
+            horas = int(horas)
+        except ValueError:
+            horas = 0
+        if not 1 <= horas <= HORAS_MAX:
+            erros.append(f"horas: inteiro de 1 a {HORAS_MAX}")
+        else:
+            referencia = time.time() if agora is None else agora
+            filtros["desde"] = referencia - horas * 3600
+
+    status = params.get("status")
+    if status is not None:
+        lista = [s.strip().upper() for s in status.split(",") if s.strip()]
+        invalidos = [s for s in lista if s not in STATUS_VALIDOS]
+        if not lista or invalidos:
+            erros.append("status: use " + ", ".join(STATUS_VALIDOS) + " separados por vírgula")
+        else:
+            filtros["status"] = lista
+
+    return erros, filtros
+
+
+# Perfis de carga. Faixa normal [min, max]; até `margem` °C fora dela é ATENCAO,
+# além disso é CRITICO. min None = sem limite inferior.
+# Manga e uva: faixas de referência de pós-colheita, a validar com o produtor.
+# O DHT11 não mede abaixo de 0 °C: a uva pede DHT22 ou sonda DS18B20.
+PERFIS_CARGA = {
+    "demonstrativo": {"nome": "Demonstrativo (protótipo)", "min": None, "max": 15.0, "margem": 5.0},
+    "manga": {"nome": "Manga", "min": 10.0, "max": 13.0, "margem": 3.0},
+    "uva": {"nome": "Uva de mesa", "min": -1.0, "max": 0.0, "margem": 2.0},
+}
+PERFIL_PADRAO = "demonstrativo"
+
+
+def faixa(perfil):
+    p = PERFIS_CARGA.get(perfil, PERFIS_CARGA[PERFIL_PADRAO])
+    return {"min": p["min"], "max": p["max"], "margem": p["margem"]}
+
+
+def classificar(temperatura, perfil=PERFIL_PADRAO):
+    f = faixa(perfil)
+    minimo = f["min"] if f["min"] is not None else float("-inf")
+    if minimo <= temperatura <= f["max"]:
+        return "NORMAL"
+    if minimo - f["margem"] <= temperatura <= f["max"] + f["margem"]:
+        return "ATENCAO"
+    return "CRITICO"

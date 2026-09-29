@@ -1,0 +1,63 @@
+name: Testes
+
+# Roda a cada push e pull request: testes da API e compilação do firmware.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API (testes de contrato e segurança)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud/function
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: cloud/function/requirements.txt
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Rodar testes
+        run: python -m unittest -v
+
+  firmware:
+    name: Firmware (compila para ESP32-C3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Instalar placa ESP32 e bibliotecas
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli lib install "DHT sensor library" "Adafruit Unified Sensor"
+
+      # secrets.h real nunca está no repositório; o modelo basta para compilar.
+      - name: Preparar sketch
+        run: |
+          mkdir -p build/sketch
+          cp sketch.ino azure_ca.h build/sketch/
+          cp secrets.example.h build/sketch/secrets.h
+
+      - name: Compilar (DHT22, simulação)
+        run: arduino-cli compile --fqbn esp32:esp32:esp32c3 build/sketch
+
+      - name: Compilar (DHT11, placa física)
+        run: |
+          echo '#define DHT_TYPE DHT11' >> build/sketch/secrets.h
+          arduino-cli compile --fqbn esp32:esp32:esp32c3 build/sketch

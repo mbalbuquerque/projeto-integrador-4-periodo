@@ -3,13 +3,16 @@
 ## PROJETO INTEGRADOR
 ## PROFESSOR ORIENTADOR ARNOT CAIADO
 
-## EQUIPE: ANTONIO HENZO, EVERSON, EMMANUEL LUÍS, GABRIEL EDUARDO, JOSÉ ALANBERG, MARCELO BARBOSA
+## EQUIPE: ENZO ANTÔNIO, EVERSON, EMMANUEL LUÍS, GABRIEL EDUARDO, JOSÉ ALLAMBERG, MARCELO BARBOSA
 
 
 
 # 🚚 ColdTrack Edge
 
 Projeto desenvolvido para o **Projeto Integrador – 4º Período**, com foco no monitoramento de **temperatura e umidade durante o transporte refrigerado de mercadorias**.
+
+📘 Documentação técnica completa (arquitetura, tecnologias, dados, API, segurança e publicação): [`docs/stack-tecnica.md`](docs/stack-tecnica.md)
+🛠️ Guia de implantação de um cliente novo (acesso, gravação do ESP32, validação, instalação): [`docs/implantacao.md`](docs/implantacao.md)
 
 ## 🎯 Objetivo
 
@@ -21,7 +24,7 @@ Desenvolver um nó sensor IoT capaz de monitorar as condições ambientais no in
 - Sensor DHT11
 - LEDs de sinalização
 - Wi-Fi
-- ThingSpeak
+- Microsoft Azure (Functions, Cosmos DB, Storage)
 - Wokwi
 - Arduino Framework (C/C++)
 
@@ -33,21 +36,25 @@ O protótipo utiliza três LEDs para indicar o estado das condições monitorada
 - 🟡 **Amarelo:** atenção
 - 🔴 **Vermelho:** condição crítica ou falha
 
-Os limites utilizados durante a fase inicial são demonstrativos e poderão ser configurados conforme o tipo de mercadoria transportada.
+A faixa de temperatura segue o perfil da carga do veículo (demonstrativo, manga ou uva): o sensor recebe a faixa da nuvem a cada envio e a guarda na memória.
 
 ## ☁️ Telemetria
 
-Os dados serão enviados pelo ESP32-C3 via Wi-Fi para a plataforma ThingSpeak:
+O ESP32-C3 envia cada leitura em JSON, por HTTPS e com a chave própria do sensor, para uma Azure Function que valida os dados e grava no Azure Cosmos DB:
 
-- **Field 1:** Temperatura (°C)
-- **Field 2:** Umidade Relativa (%)
-- **Field 3:** RSSI Wi-Fi (dBm)
+```json
+{"deviceId": "coldtrack-01", "temperatura": 12.4, "umidade": 81.0, "rssi": -58, "medidoEm": 1790000000}
+```
+
+Sem conexão, as leituras ficam guardadas na memória flash do ESP32 e são reenviadas quando a conexão volta. Detalhes da API em [`cloud/function/README.md`](cloud/function/README.md).
+
+Dashboard publicado: https://stcoldtrackweb7319.z15.web.core.windows.net
 
 ## 🔐 Segurança
 
-Credenciais Wi-Fi e chaves de API não serão armazenadas diretamente no código-fonte público.
+Credenciais Wi-Fi e a chave do sensor não ficam no código-fonte. Cada sensor tem chave própria, gerada no painel (Sensores); cada empresa só enxerga os próprios dados.
 
-O projeto utilizará arquivo separado para configuração das credenciais, ignorado pelo Git.
+Na placa física, Wi-Fi, ID e chave são gravados pelo cabo USB a partir do painel (Sensores → Conectar sensor pelo cabo) e ficam na memória da placa; a senha do Wi-Fi não passa pela API. No simulador, as credenciais ficam em `secrets.h`, ignorado pelo Git (modelo: `secrets.example.h`).
 
 ## ♻️ Design Circular
 
@@ -63,8 +70,16 @@ Projeto em desenvolvimento.
 - [x] Simulação ESP32-C3 no Wokwi
 - [x] Leitura de temperatura e umidade
 - [x] Sistema de alerta com LEDs
-- [x] Criação do canal ThingSpeak
-- [ ] Integração Wokwi → ThingSpeak
+- [x] Envio em JSON via HTTPS para o Azure
+- [x] Armazenamento das leituras sem conexão e reenvio
+- [x] Dashboard web publicado no Azure
+- [x] Login com perfis (operador logístico e gestor)
+- [x] Análise climática da rota (INMET) e modelo preliminar de risco térmico — ver [`analise/`](analise/)
+- [x] Testes automáticos e compilação do firmware no GitHub Actions
+- [x] Várias empresas com dados separados, cadastro de empresa e chave por sensor
+- [x] Faixa por perfil de carga (manga, uva) enviada ao sensor
+- [x] Troca de senha, bloqueio de login e etiqueta QR por veículo
+- [x] Previsão de calor na rota (Open-Meteo + histórico INMET) no dashboard
 - [ ] Montagem física
 - [ ] Gabinete reciclado
 - [ ] Testes de campo
