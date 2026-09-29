@@ -3,10 +3,72 @@
 #include <HTTPClient.h>
 #include <LittleFS.h>
 #include <time.h>
-#include <DHT.h>
+#include "driver/gpio.h"
 #include <Preferences.h>
 #include "secrets.h"
 #include "azure_ca.h"
+
+// MQTT (ThingSpeak) so entra com as credenciais no secrets.h; sem elas
+// (Wokwi) o firmware segue so com o HTTPS.
+#if defined(MQTT_CANAL) && defined(MQTT_CLIENT_ID) && defined(MQTT_USUARIO) && defined(MQTT_SENHA)
+#define COM_MQTT
+#include <PubSubClient.h>
+#endif
+
+
+// ================= MEDICAO HTTPS x MQTT =================
+//
+// Cliente TLS que conta os bytes de aplicacao que passam por ele (antes da
+// criptografia): o que o HTTP ou o MQTT escreveu e leu. Cada envio vira uma
+// linha na serial, lida pelo .specs/ferramentas/medir.py:
+//   MEDIDA;<https|mqtt|mqtt-conexao>;<ms>;<bytes enviados>;<bytes recebidos>;<ok 1/0>
+
+class ClienteContado : public WiFiClientSecure {
+
+public:
+
+  size_t enviados = 0;
+  size_t recebidos = 0;
+
+  void zerar() {
+    enviados = 0;
+    recebidos = 0;
+  }
+
+  size_t write(uint8_t dado) override {
+    size_t n = WiFiClientSecure::write(dado);
+    enviados += n;
+    return n;
+  }
+
+  size_t write(const uint8_t *dados, size_t tamanho) override {
+    size_t n = WiFiClientSecure::write(dados, tamanho);
+    enviados += n;
+    return n;
+  }
+
+  int read() override {
+    int c = WiFiClientSecure::read();
+    if (c >= 0) {
+      recebidos++;
+    }
+    return c;
+  }
+
+  int read(uint8_t *dados, size_t tamanho) override {
+    int n = WiFiClientSecure::read(dados, tamanho);
+    if (n > 0) {
+      recebidos += n;
+    }
+    return n;
+  }
+};
+
+
+void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t recebidos, bool ok) {
+
+  Serial.printf("MEDIDA;%s;%lu;%u;%u;%d\n", tipo, ms, (unsigned)enviados, (unsigned)recebidos, ok ? 1 : 0);
+}
 
 /*
  ==========================================================
@@ -58,6 +120,11 @@ String cfgChave;
 #define SIMULAR_QUEDA_S 0
 #endif
 
+// Teste: finge relogio sem sincronizar nos primeiros N segundos (0 = desligado).
+#ifndef SIMULAR_SEM_RELOGIO_S
+#define SIMULAR_SEM_RELOGIO_S 0
+#endif
+
 // Epoch minimo aceito como relogio sincronizado (nov/2023).
 #define EPOCH_VALIDO 1700000000
 
@@ -68,6 +135,8 @@ int filaTamanho = 0;
 #define DHT_PIN 4
 // DHT22 na simulacao Wokwi. Na placa fisica com DHT11, defina
 // DHT_TYPE DHT11 no secrets.h (ele e incluido antes deste ponto).
+#define DHT11 11
+#define DHT22 22
 #ifndef DHT_TYPE
 #define DHT_TYPE DHT22
 #endif
@@ -87,7 +156,161 @@ U8G2_SSD1306_72X40_ER_F_HW_I2C tela(U8G2_R0, U8X8_PIN_NONE, TELA_SCL, TELA_SDA);
 #define LED_VERMELHO 7
 #endif
 
-DHT dht(DHT_PIN, DHT_TYPE);
+
+
+// ==========================================================
+// LEITURA DO DHT (leitor proprio)
+// ==========================================================
+//
+// A biblioteca DHT desliga as interrupcoes durante a leitura; com o sensor
+// mudo (mau contato) o watchdog reinicia a placa em loop. Este leitor mede
+// o sinal sem desligar nada, com limite de tempo em cada pulso, e so aceita
+// o dado com o checksum certo. O pino fica em dreno aberto: so puxa para
+// baixo, nunca empurra 3,3 V na linha (o resistor do modulo faz o alto).
+
+// Converte os 5 bytes do sensor. false = checksum errado.
+bool decodificarDht(const uint8_t d[5], int tipo, float *temperatura, float *umidade) {
+
+  if (((d[0] + d[1] + d[2] + d[3]) & 0xFF) != d[4]) {
+    return false;
+  }
+
+  if (tipo == DHT11) {
+    *umidade = d[0] + d[1] * 0.1;
+    *temperatura = d[2] + (d[3] & 0x7F) * 0.1;
+    if (d[3] & 0x80) {
+      *temperatura = -*temperatura;
+    }
+  } else {
+    *umidade = ((d[0] << 8) | d[1]) * 0.1;
+    *temperatura = (((d[2] & 0x7F) << 8) | d[3]) * 0.1;
+    if (d[2] & 0x80) {
+      *temperatura = -*temperatura;
+    }
+  }
+
+  return true;
+}
+
+
+// Espera o pino sair do nivel dado; devolve a duracao em us ou -1 no limite.
+int esperarNivel(int nivel, int limiteUs) {
+
+  uint32_t inicio = micros();
+
+  while (gpio_get_level((gpio_num_t)DHT_PIN) == nivel) {
+    if (micros() - inicio > (uint32_t)limiteUs) {
+      return -1;
+    }
+  }
+
+  return micros() - inicio;
+}
+
+
+bool lerDhtUmaVez(float *temperatura, float *umidade) {
+
+  static bool preparado = false;
+
+  if (!preparado) {
+    gpio_reset_pin((gpio_num_t)DHT_PIN);
+    gpio_set_direction((gpio_num_t)DHT_PIN, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_pull_mode((gpio_num_t)DHT_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_level((gpio_num_t)DHT_PIN, 1);
+    preparado = true;
+    delay(1000);  // o sensor precisa de ~1 s depois de ligado
+  }
+
+  // Pedido de leitura: linha em baixo (DHT11 pede 18 ms; DHT22, ~1 ms).
+  gpio_set_level((gpio_num_t)DHT_PIN, 0);
+  if (DHT_TYPE == DHT11) {
+    delay(20);
+  } else {
+    delayMicroseconds(1100);
+  }
+  gpio_set_level((gpio_num_t)DHT_PIN, 1);
+
+  // Resposta: sobe, cai ~80 us, sobe ~80 us.
+  if (esperarNivel(1, 200) < 0 || esperarNivel(0, 200) < 0 || esperarNivel(1, 200) < 0) {
+    return false;
+  }
+
+  // 40 bits: ~50 us em baixo + alto de ~27 us (0) ou ~70 us (1).
+  uint8_t d[5] = {0, 0, 0, 0, 0};
+
+  for (int i = 0; i < 40; i++) {
+
+    if (esperarNivel(0, 120) < 0) {
+      return false;
+    }
+
+    int alto = esperarNivel(1, 120);
+
+    if (alto < 0) {
+      return false;
+    }
+
+    d[i / 8] = (d[i / 8] << 1) | (alto > 45 ? 1 : 0);
+  }
+
+  return decodificarDht(d, DHT_TYPE, temperatura, umidade);
+}
+
+
+// Duas tentativas (um pulso esticado por interrupcao do Wi-Fi erra o checksum).
+// Sem leitura valida, devolve false e NAN nos dois valores.
+bool lerSensor(float *temperatura, float *umidade) {
+
+  for (int tentativa = 0; tentativa < 2; tentativa++) {
+
+    if (tentativa > 0) {
+      delay(DHT_TYPE == DHT11 ? 1100 : 2100);
+    }
+
+    if (lerDhtUmaVez(temperatura, umidade)) {
+      return true;
+    }
+  }
+
+  *temperatura = NAN;
+  *umidade = NAN;
+  return false;
+}
+
+
+#ifdef TESTE_DHT
+// Autoteste da conversao (compilar com -DTESTE_DHT): casos com resposta conhecida.
+void autotesteDht() {
+
+  struct Caso { const char *nome; uint8_t d[5]; int tipo; bool valido; float t; float u; };
+
+  const Caso casos[] = {
+    { "DHT11 31.8C 61%",      { 61, 0, 31, 8, 100 },          DHT11, true,  31.8,  61.0 },
+    { "DHT11 checksum errado", { 61, 0, 31, 8, 101 },          DHT11, false, 0, 0 },
+    { "DHT22 24.6C 55.3%",    { 0x02, 0x29, 0x00, 0xF6, 0x21 }, DHT22, true,  24.6,  55.3 },
+    { "DHT22 -10.1C 40.0%",   { 0x01, 0x90, 0x80, 0x65, 0x76 }, DHT22, true,  -10.1, 40.0 },
+    { "DHT22 checksum errado", { 0x02, 0x29, 0x00, 0xF6, 0x20 }, DHT22, false, 0, 0 },
+  };
+
+  int falhas = 0;
+
+  for (const Caso &c : casos) {
+
+    float t = 0, u = 0;
+    bool ok = decodificarDht(c.d, c.tipo, &t, &u);
+    bool bate = (ok == c.valido) && (!ok || (fabs(t - c.t) < 0.05 && fabs(u - c.u) < 0.05));
+
+    Serial.printf("TESTE_DHT %-24s %s (valido=%d t=%.1f u=%.1f)\n",
+                  c.nome, bate ? "OK" : "FALHOU", ok, t, u);
+
+    if (!bate) {
+      falhas++;
+    }
+  }
+
+  Serial.printf("TESTE_DHT: %d falha(s)\n", falhas);
+}
+#endif
 
 
 // ================= FAIXA DA CARGA =================
@@ -429,15 +652,19 @@ void atualizarFaixa(const String &resposta) {
 // Retorna o status HTTP (201 = gravado) ou um codigo negativo de falha de rede.
 int postarAzure(const char *payload) {
 
-  WiFiClientSecure clienteSeguro;
+  ClienteContado clienteSeguro;
   clienteSeguro.setCACert(AZURE_ROOT_CA);
 
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
 
+  // Tempo e bytes do envio inteiro: conexao TCP + TLS + requisicao + resposta.
+  unsigned long inicio = millis();
+
   if (!http.begin(clienteSeguro, AZURE_FUNCTION_URL)) {
 
     Serial.println("Azure: falha ao iniciar conexao HTTPS.");
+    registrarMedida("https", millis() - inicio, 0, 0, false);
     return -1;
   }
 
@@ -457,6 +684,13 @@ int postarAzure(const char *payload) {
 
   }
 
+  else if (status == 200) {
+
+    // Reenvio de leitura que ja tinha chegado (a resposta anterior se perdeu).
+    Serial.print("Azure: leitura ja estava gravada. Resposta: ");
+    Serial.println(http.getString());
+  }
+
   else {
 
     Serial.print("Azure: erro HTTP ");
@@ -467,8 +701,145 @@ int postarAzure(const char *payload) {
 
   http.end();
 
+  registrarMedida("https", millis() - inicio, clienteSeguro.enviados, clienteSeguro.recebidos,
+                  status == 201 || status == 200);
+
   return status;
 }
+
+
+// ==========================================================
+// MQTT (ThingSpeak)
+// ==========================================================
+//
+// Conexao persistente em mqtt3.thingspeak.com:8883 (TLS; a raiz e a mesma
+// DigiCert Global Root G2 do Azure). Publica temperatura/umidade/RSSI no
+// canal a cada ciclo, com QoS 0 (o ThingSpeak nao aceita 1 ou 2): o broker
+// nao confirma a entrega. Leitura feita sem rede nao vai para o MQTT; a
+// fila offline e so do HTTPS (o plano gratis aceita 1 mensagem a cada 15 s).
+
+#ifdef COM_MQTT
+
+#define MQTT_HOST       "mqtt3.thingspeak.com"
+#define MQTT_PORTA      8883
+#define MQTT_KEEPALIVE  120   // s; maior que o pior ciclo (Azure + 10 reenvios)
+#define MQTT_TIMEOUT    5     // s
+
+ClienteContado clienteMqtt;
+PubSubClient mqtt(clienteMqtt);
+
+unsigned long mqttProximaTentativa = 0;
+unsigned long mqttEspera = 5000;       // backoff: 5 s, dobra ate 60 s
+bool mqttAvisouRelogio = false;
+
+
+// Texto do estado do PubSubClient, para a serial dizer por que caiu.
+const char *estadoMqtt(int estado) {
+
+  switch (estado) {
+    case -4: return "sem resposta do broker (keep-alive)";
+    case -3: return "conexao perdida";
+    case -2: return "falha de rede/TLS";
+    case -1: return "desconectado";
+    case 0:  return "conectado";
+    case 1:  return "protocolo recusado";
+    case 2:  return "client id recusado";
+    case 3:  return "broker indisponivel";
+    case 4:  return "usuario/senha errados";
+    case 5:  return "sem autorizacao (canal nao liberado para o dispositivo?)";
+    default: return "desconhecido";
+  }
+}
+
+
+bool garantirMqtt() {
+
+  if (mqtt.connected()) {
+    return true;
+  }
+
+  if (!conexaoDisponivel()) {
+    return false;
+  }
+
+  // Sem relogio o certificado nao se valida: nem tenta.
+  if (!relogioOk()) {
+    if (!mqttAvisouRelogio) {
+      Serial.println("MQTT: aguardando relogio para validar o certificado.");
+      mqttAvisouRelogio = true;
+    }
+    return false;
+  }
+
+  if (millis() < mqttProximaTentativa) {
+    return false;
+  }
+
+  clienteMqtt.setCACert(AZURE_ROOT_CA);
+  clienteMqtt.zerar();
+
+  mqtt.setServer(MQTT_HOST, MQTT_PORTA);
+  mqtt.setKeepAlive(MQTT_KEEPALIVE);
+  mqtt.setSocketTimeout(MQTT_TIMEOUT);
+
+  Serial.println("MQTT: conectando ao ThingSpeak...");
+
+  unsigned long inicio = millis();
+  bool ok = mqtt.connect(MQTT_CLIENT_ID, MQTT_USUARIO, MQTT_SENHA);
+
+  registrarMedida("mqtt-conexao", millis() - inicio, clienteMqtt.enviados, clienteMqtt.recebidos, ok);
+
+  if (ok) {
+
+    Serial.println("MQTT: conectado.");
+    mqttEspera = 5000;
+    return true;
+  }
+
+  char erroTls[80] = "";
+  clienteMqtt.lastError(erroTls, sizeof(erroTls));
+
+  Serial.printf("MQTT: falhou (%d: %s; TLS: %s). Nova tentativa em %lu s.\n",
+                mqtt.state(), estadoMqtt(mqtt.state()), erroTls[0] ? erroTls : "ok", mqttEspera / 1000);
+
+  mqttProximaTentativa = millis() + mqttEspera;
+  mqttEspera = min(mqttEspera * 2, 60000UL);
+
+  return false;
+}
+
+
+void publicarMqtt(float temperatura, float umidade, long rssi) {
+
+  if (!garantirMqtt()) {
+    registrarMedida("mqtt", 0, 0, 0, false);
+    return;
+  }
+
+  char topico[48];
+  char mensagem[64];
+
+  snprintf(topico, sizeof(topico), "channels/%s/publish", MQTT_CANAL);
+
+  // RSSI >= 0 (simulador) nao vai, como no HTTPS.
+  if (rssi < 0) {
+    snprintf(mensagem, sizeof(mensagem), "field1=%.1f&field2=%.1f&field3=%ld", temperatura, umidade, rssi);
+  } else {
+    snprintf(mensagem, sizeof(mensagem), "field1=%.1f&field2=%.1f", temperatura, umidade);
+  }
+
+  clienteMqtt.zerar();
+
+  unsigned long inicio = millis();
+  bool ok = mqtt.publish(topico, mensagem);
+
+  registrarMedida("mqtt", millis() - inicio, clienteMqtt.enviados, clienteMqtt.recebidos, ok);
+
+  Serial.print(ok ? "MQTT: publicado " : "MQTT: falha ao publicar ");
+  Serial.println(mensagem);
+}
+
+#endif
 
 
 // Falha que vale tentar de novo depois: rede ou servidor fora do ar.
@@ -490,6 +861,10 @@ void sincronizarRelogio() {
 
 
 bool relogioOk() {
+
+  if (SIMULAR_SEM_RELOGIO_S > 0 && millis() < SIMULAR_SEM_RELOGIO_S * 1000UL) {
+    return false;
+  }
 
   return time(nullptr) >= EPOCH_VALIDO;
 }
@@ -576,6 +951,108 @@ void descartarInicioDaFila(int pular) {
 }
 
 
+// Linhas guardadas sem relogio levam "ms" (millis da medicao) no lugar do medidoEm.
+bool filaTemMs = false;
+
+
+bool linhaTemMs(const String &linha) {
+
+  return linha.indexOf("\"ms\":") >= 0;
+}
+
+
+// Reescreve a fila tratando as linhas com "ms":
+//   converter = true: troca "ms" pelo medidoEm (agora - tempo desde a medicao);
+//   converter = false: descarta (vieram de antes de um reinicio, o millis zerou).
+void reescreverFilaMs(bool converter) {
+
+  File origem = LittleFS.open(FILA_ARQUIVO, "r");
+
+  if (!origem) {
+    filaTemMs = false;
+    return;
+  }
+
+  File destino = LittleFS.open("/fila.tmp", "w");
+
+  int mantidas = 0, convertidas = 0, descartadas = 0;
+  time_t agora = time(nullptr);
+  unsigned long agoraMs = millis();
+
+  while (origem.available()) {
+
+    String linha = origem.readStringUntil('\n');
+    linha.trim();
+
+    if (linha.length() == 0) {
+      continue;
+    }
+
+    if (linhaTemMs(linha)) {
+
+      int pos = linha.indexOf(",\"ms\":");
+      unsigned long ms = strtoul(linha.c_str() + pos + 6, nullptr, 10);
+
+      if (!converter || pos < 0 || ms > agoraMs) {
+        descartadas++;
+        continue;
+      }
+
+      long long medido = (long long)agora - (long long)((agoraMs - ms) / 1000);
+      int fim = linha.indexOf('}', pos);
+
+      linha = linha.substring(0, pos) + ",\"medidoEm\":" + String(medido) + linha.substring(fim);
+      convertidas++;
+    }
+
+    destino.println(linha);
+    mantidas++;
+  }
+
+  origem.close();
+  destino.close();
+
+  LittleFS.remove(FILA_ARQUIVO);
+  LittleFS.rename("/fila.tmp", FILA_ARQUIVO);
+
+  filaTamanho = mantidas;
+  filaTemMs = false;
+
+  if (convertidas > 0) {
+    Serial.print("FILA: relogio sincronizado, ");
+    Serial.print(convertidas);
+    Serial.println(" leituras sem horario ganharam o horario da medicao.");
+  }
+
+  if (descartadas > 0) {
+    Serial.print("FILA: ");
+    Serial.print(descartadas);
+    Serial.println(" leituras sem horario descartadas (a placa reiniciou antes de acertar o relogio).");
+  }
+}
+
+
+// Procura linhas com "ms" (so no boot; depois o flag acompanha).
+bool filaTemLinhaMs() {
+
+  File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
+
+  if (!arquivo) {
+    return false;
+  }
+
+  bool achou = false;
+
+  while (arquivo.available() && !achou) {
+    achou = linhaTemMs(arquivo.readStringUntil('\n'));
+  }
+
+  arquivo.close();
+
+  return achou;
+}
+
+
 void enfileirar(const char *payload) {
 
   File arquivo = LittleFS.open(FILA_ARQUIVO, "a");
@@ -603,9 +1080,36 @@ void enfileirar(const char *payload) {
 }
 
 
+// Guarda a leitura para reenvio. Sem relogio, guarda o millis da medicao.
+void guardarOffline(const char *payload, time_t medidoEm, unsigned long msMedicao) {
+
+  if (medidoEm > 0) {
+    enfileirar(payload);
+    return;
+  }
+
+  String linha = payload;
+  int fim = linha.lastIndexOf('}');
+
+  linha = linha.substring(0, fim) + ",\"ms\":" + String(msMedicao) + "}";
+
+  Serial.println("FILA: sem relogio; guardando com o tempo desde que a placa ligou.");
+  enfileirar(linha.c_str());
+  filaTemMs = true;
+}
+
+
 // Envia as leituras guardadas, da mais antiga para a mais nova.
 // Para na primeira falha temporaria para manter a ordem.
 void reenviarFila() {
+
+  if (filaTamanho == 0) {
+    return;
+  }
+
+  if (filaTemMs && relogioOk()) {
+    reescreverFilaMs(true);
+  }
 
   if (filaTamanho == 0) {
     return;
@@ -632,6 +1136,12 @@ void reenviarFila() {
 
     if (linha.length() == 0) {
       continue;
+    }
+
+    // Leitura sem horario so sai depois do relogio (a API nao aceita "ms").
+    if (linhaTemMs(linha)) {
+      Serial.println("FILA: aguardando o relogio para reenviar leituras sem horario.");
+      break;
     }
 
     int status = postarAzure(linha.c_str());
@@ -1010,7 +1520,9 @@ void setup() {
   desligarLeds();
 #endif
 
-  dht.begin();
+#ifdef TESTE_DHT
+  autotesteDht();
+#endif
 
   Serial.println();
   Serial.println("========================================");
@@ -1024,6 +1536,11 @@ void setup() {
   }
 
   filaTamanho = contarFila();
+
+  // Linha sem horario de antes deste boot nao tem mais referencia (millis zerou).
+  if (filaTemLinhaMs()) {
+    reescreverFilaMs(false);
+  }
 
   carregarFaixa();
 
@@ -1065,6 +1582,11 @@ void loop() {
     tratarComando();
   }
 
+#ifdef COM_MQTT
+  // Mantem a conexao viva (PINGREQ) e processa o que o broker mandar.
+  mqtt.loop();
+#endif
+
 
   // --------------------------------------------------------
   // Sem Wi-Fi ou sem ID/chave: pisca o amarelo e espera o cabo
@@ -1079,7 +1601,9 @@ void loop() {
     static unsigned long ultimaLeitura = 0;
     if (millis() - ultimaLeitura >= 3000 || ultimaLeitura == 0) {
       ultimaLeitura = millis();
-      mostrarNaTela(dht.readTemperature(), dht.readHumidity(), "CONFIGURAR");
+      float t, u;
+      lerSensor(&t, &u);
+      mostrarNaTela(t, u, "CONFIGURAR");
     }
 #else
     digitalWrite(LED_AMARELO, (millis() / 500) % 2);
@@ -1123,8 +1647,9 @@ void loop() {
     // LEITURA DO SENSOR
     // ======================================================
 
-    float temperatura = dht.readTemperature();
-    float umidade = dht.readHumidity();
+    float temperatura, umidade;
+
+    lerSensor(&temperatura, &umidade);
 
 
     Serial.println();
@@ -1218,6 +1743,7 @@ void loop() {
     // ======================================================
 
     time_t medidoEm = relogioOk() ? time(nullptr) : 0;
+    unsigned long msMedicao = millis();
 
     char payload[160];
 
@@ -1243,13 +1769,13 @@ void loop() {
 
       int status = postarAzure(payload);
 
+#ifdef COM_MQTT
+      publicarMqtt(temperatura, umidade, rssi);
+#endif
+
       if (falhaTemporaria(status)) {
 
-        if (medidoEm > 0) {
-          enfileirar(payload);
-        } else {
-          Serial.println("FILA: sem relogio sincronizado, leitura nao guardada.");
-        }
+        guardarOffline(payload, medidoEm, msMedicao);
       }
 
     }
@@ -1258,11 +1784,7 @@ void loop() {
 
       Serial.println("Sem conexao. Telemetria nao enviada agora.");
 
-      if (medidoEm > 0) {
-        enfileirar(payload);
-      } else {
-        Serial.println("FILA: sem relogio sincronizado, leitura nao guardada.");
-      }
+      guardarOffline(payload, medidoEm, msMedicao);
     }
 
 

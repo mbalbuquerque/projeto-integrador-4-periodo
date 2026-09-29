@@ -33,6 +33,26 @@ def _numero(valor):
     return isinstance(valor, (int, float)) and not isinstance(valor, bool)
 
 
+def id_leitura(device_id, medido_em):
+    """Id da leitura no banco. Com o horário da medição, o id é determinístico
+    (o mesmo sensor não mede duas vezes no mesmo segundo): um reenvio do sensor
+    depois de uma resposta perdida bate no mesmo id em vez de duplicar.
+    Sem horário (firmware antigo), None: o chamador usa um uuid."""
+    if medido_em is None:
+        return None
+    return f"{device_id}~{int(medido_em)}"
+
+
+def mesma_leitura(gravada, nova):
+    """True quando `nova` repete os valores de `gravada` (reenvio legítimo).
+    False = mesmo sensor e segundo com valores diferentes: não sobrescreve."""
+    return (
+        round(float(gravada["temperatura"]), 1) == round(float(nova["temperatura"]), 1)
+        and round(float(gravada["umidade"]), 1) == round(float(nova["umidade"]), 1)
+        and gravada.get("rssi") == nova.get("rssi")
+    )
+
+
 def validar(dados, agora=None):
     """Retorna a lista de erros do payload. Lista vazia = payload válido."""
     if not isinstance(dados, dict):

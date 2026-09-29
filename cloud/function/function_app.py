@@ -37,7 +37,7 @@ from azure.cosmos import CosmosClient, exceptions
 
 from cadastros import (validar_dispositivo, validar_empresa, validar_troca_senha,
                        validar_usuario, validar_veiculo, validar_viagem, SENHA_MIN)
-from contrato import (PERFIL_PADRAO, PERFIS_CARGA, classificar, faixa,
+from contrato import (PERFIL_PADRAO, PERFIS_CARGA, classificar, faixa, id_leitura, mesma_leitura,
                       filtros_de_leitura, validar)
 from seguranca import (bloqueado_ate, conferir_chave, conferir_senha,
                        gerar_chave_dispositivo, gerar_hash, gerar_token,
@@ -177,7 +177,7 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
     )
 
     leitura = {
-        "id": str(uuid.uuid4()),
+        "id": id_leitura(dispositivo["id"], dados.get("medidoEm")) or str(uuid.uuid4()),
         "deviceId": dispositivo["id"],
         "empresaId": empresa,
         "temperatura": float(dados["temperatura"]),
@@ -188,7 +188,17 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         "medidoEm": medido.isoformat(),
         "recebidoEm": recebido.isoformat(),
     }
-    container().create_item(leitura)
+    try:
+        # create, nunca upsert: leitura gravada não se altera.
+        container().create_item(leitura)
+    except exceptions.CosmosResourceExistsError:
+        gravada = container().read_item(leitura["id"], partition_key=leitura["deviceId"])
+        if mesma_leitura(gravada, leitura):
+            # Reenvio depois de resposta perdida: já está gravada, o sensor tira da fila.
+            return resposta({"id": gravada["id"], "duplicada": True}, 200)
+        logging.warning("telemetria: %s já gravada com outros valores (relógio repetido ou adulteração)",
+                        leitura["id"])
+        return resposta({"erros": ["já existe leitura deste sensor neste horário, com outros valores"]}, 409)
     # A faixa volta na resposta: o sensor acende o LED certo para a carga do veículo.
     return resposta({"id": leitura["id"], "status": leitura["status"],
                      "perfil": perfil, "faixa": faixa(perfil)}, 201)

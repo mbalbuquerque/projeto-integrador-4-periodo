@@ -2,7 +2,7 @@
 
 import unittest
 
-from contrato import classificar, faixa, filtros_de_leitura, validar
+from contrato import classificar, faixa, filtros_de_leitura, id_leitura, mesma_leitura, validar
 
 VALIDO = {"deviceId": "coldtrack-01", "temperatura": 12.4, "umidade": 81.0, "rssi": -58}
 
@@ -131,6 +131,26 @@ class TestClassificar(unittest.TestCase):
 
     def test_perfil_desconhecido_usa_padrao(self):
         self.assertEqual(faixa("banana"), faixa("demonstrativo"))
+
+
+class TestLeituraDuplicada(unittest.TestCase):
+    def test_id_deterministico_com_horario(self):
+        self.assertEqual(id_leitura("coldtrack-0e0b2c", 1790000000), "coldtrack-0e0b2c~1790000000")
+        self.assertEqual(id_leitura("coldtrack-0e0b2c", 1790000000.0), "coldtrack-0e0b2c~1790000000")
+
+    def test_sem_horario_nao_tem_id(self):
+        self.assertIsNone(id_leitura("coldtrack-0e0b2c", None))
+
+    def test_reenvio_igual(self):
+        gravada = {"temperatura": 30.2, "umidade": 66.0, "rssi": -48}
+        self.assertTrue(mesma_leitura(gravada, {"temperatura": 30.2, "umidade": 66.0, "rssi": -48}))
+        self.assertTrue(mesma_leitura({**gravada, "rssi": None}, {**gravada, "rssi": None}))
+
+    def test_valores_diferentes_nao_sao_reenvio(self):
+        gravada = {"temperatura": 30.2, "umidade": 66.0, "rssi": -48}
+        self.assertFalse(mesma_leitura(gravada, {**gravada, "temperatura": 12.0}))
+        self.assertFalse(mesma_leitura(gravada, {**gravada, "umidade": 70.0}))
+        self.assertFalse(mesma_leitura(gravada, {**gravada, "rssi": -60}))
 
 
 if __name__ == "__main__":
