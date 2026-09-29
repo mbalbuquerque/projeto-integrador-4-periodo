@@ -72,9 +72,20 @@ int filaTamanho = 0;
 #define DHT_TYPE DHT22
 #endif
 
+// Placa fisica (ESP32-C3 com OLED 0.42" embutido): TELA_OLED no secrets.h.
+// Nela os GPIO 5 e 6 sao o I2C da tela, entao os LEDs saem e o status vai
+// para a tela. Sem TELA_OLED (Wokwi) continuam os tres LEDs.
+#ifdef TELA_OLED
+#include <Wire.h>
+#include <U8g2lib.h>
+#define TELA_SDA 5
+#define TELA_SCL 6
+U8G2_SSD1306_72X40_ER_F_HW_I2C tela(U8G2_R0, U8X8_PIN_NONE, TELA_SCL, TELA_SDA);
+#else
 #define LED_VERDE    5
 #define LED_AMARELO  6
 #define LED_VERMELHO 7
+#endif
 
 DHT dht(DHT_PIN, DHT_TYPE);
 
@@ -107,11 +118,43 @@ unsigned long ultimoEnvio = 0;
 // CONTROLE DOS LEDs
 // ==========================================================
 
+#ifdef TELA_OLED
+
+// 72x40 pixels: temperatura grande em cima, umidade e status embaixo.
+void mostrarNaTela(float temperatura, float umidade, const char *status) {
+
+  char linha[16];
+
+  tela.clearBuffer();
+
+  tela.setFont(u8g2_font_7x14B_tf);
+  if (isnan(temperatura)) {
+    tela.drawStr(0, 13, "--.- C");
+  } else {
+    snprintf(linha, sizeof(linha), "%.1f C", temperatura);
+    tela.drawStr(0, 13, linha);
+  }
+
+  tela.setFont(u8g2_font_6x10_tf);
+  if (!isnan(umidade)) {
+    snprintf(linha, sizeof(linha), "U %.0f%%", umidade);
+    tela.drawStr(0, 26, linha);
+  }
+  tela.drawStr(0, 39, status);
+
+  tela.sendBuffer();
+}
+
+#endif
+
+
 void desligarLeds() {
 
+#ifndef TELA_OLED
   digitalWrite(LED_VERDE, LOW);
   digitalWrite(LED_AMARELO, LOW);
   digitalWrite(LED_VERMELHO, LOW);
+#endif
 }
 
 
@@ -119,7 +162,9 @@ void statusNormal() {
 
   desligarLeds();
 
+#ifndef TELA_OLED
   digitalWrite(LED_VERDE, HIGH);
+#endif
 
   Serial.println("STATUS DA CARGA: NORMAL");
 }
@@ -129,7 +174,9 @@ void statusAtencao() {
 
   desligarLeds();
 
+#ifndef TELA_OLED
   digitalWrite(LED_AMARELO, HIGH);
+#endif
 
   Serial.println("STATUS DA CARGA: ATENCAO");
 }
@@ -139,7 +186,9 @@ void statusCritico() {
 
   desligarLeds();
 
+#ifndef TELA_OLED
   digitalWrite(LED_VERMELHO, HIGH);
+#endif
 
   Serial.println("STATUS DA CARGA: CRITICO");
 }
@@ -199,6 +248,15 @@ String idDoChip() {
 
 bool lerSerial();
 
+// ESP32-C3 com OLED 0.42": a antena de chip nao aguenta a potencia padrao e o
+// handshake com o roteador falha (sai como senha errada). Potencia menor resolve.
+void ajustarRadio() {
+#ifdef TELA_OLED
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+#endif
+}
+
+
 void conectarWiFi() {
 
   if (cfgSsid.length() == 0) {
@@ -212,6 +270,7 @@ void conectarWiFi() {
   Serial.print(cfgSsid);
 
   WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
+  ajustarRadio();
 
   int tentativas = 0;
 
@@ -771,6 +830,7 @@ String testarWiFi(const String &ssid, const String &senha) {
 
   motivoQueda = 0;
   WiFi.begin(ssid.c_str(), senha.c_str());
+  ajustarRadio();
 
   unsigned long inicio = millis();
   wl_status_t status = WiFi.status();
@@ -873,13 +933,16 @@ void tratarComando() {
 
     Serial.print("CONFIG: falhou (");
     Serial.print(erro);
-    Serial.println("). Nada foi gravado; voltando para a rede anterior.");
+    Serial.print("). Motivo do Wi-Fi: ");
+    Serial.print(motivoQueda);
+    Serial.println(". Nada foi gravado; voltando para a rede anterior.");
 
-    responder("{\"ok\":false,\"erro\":\"" + erro + "\"}");
+    responder("{\"ok\":false,\"erro\":\"" + erro + "\",\"motivo\":" + String(motivoQueda) + "}");
 
     WiFi.disconnect();
     if (cfgSsid.length() > 0) {
       WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
+      ajustarRadio();
     }
     return;
   }
@@ -934,11 +997,18 @@ void setup() {
 
   delay(1000);
 
+#ifdef TELA_OLED
+  Wire.begin(TELA_SDA, TELA_SCL);
+  tela.begin();
+  tela.setContrast(255);
+  mostrarNaTela(NAN, NAN, "INICIANDO");
+#else
   pinMode(LED_VERDE, OUTPUT);
   pinMode(LED_AMARELO, OUTPUT);
   pinMode(LED_VERMELHO, OUTPUT);
 
   desligarLeds();
+#endif
 
   dht.begin();
 
@@ -1004,7 +1074,16 @@ void loop() {
 
     static unsigned long ultimoAviso = 0;
 
+#ifdef TELA_OLED
+    // Sem rede a tela segue mostrando o sensor, com o aviso de configurar.
+    static unsigned long ultimaLeitura = 0;
+    if (millis() - ultimaLeitura >= 3000 || ultimaLeitura == 0) {
+      ultimaLeitura = millis();
+      mostrarNaTela(dht.readTemperature(), dht.readHumidity(), "CONFIGURAR");
+    }
+#else
     digitalWrite(LED_AMARELO, (millis() / 500) % 2);
+#endif
 
     if (millis() - ultimoAviso >= 10000 || ultimoAviso == 0) {
 
@@ -1062,9 +1141,13 @@ void loop() {
 
       desligarLeds();
 
+#ifdef TELA_OLED
+      mostrarNaTela(NAN, NAN, "ERRO SENSOR");
+#else
       digitalWrite(LED_VERMELHO, HIGH);
       delay(300);
       digitalWrite(LED_VERMELHO, LOW);
+#endif
 
       return;
     }
@@ -1090,22 +1173,33 @@ void loop() {
     // Mesma regra da nuvem (contrato.py): sem limite inferior quando faixaMin e NAN.
     float minimo = isnan(faixaMin) ? -1000.0 : faixaMin;
 
+    const char *statusTela;
+
     if (temperatura >= minimo && temperatura <= faixaMax) {
 
       statusNormal();
+      statusTela = "NORMAL";
 
     }
 
     else if (temperatura >= minimo - faixaMargem && temperatura <= faixaMax + faixaMargem) {
 
       statusAtencao();
+      statusTela = "ATENCAO";
 
     }
 
     else {
 
       statusCritico();
+      statusTela = "CRITICO";
     }
+
+#ifdef TELA_OLED
+    mostrarNaTela(temperatura, umidade, statusTela);
+#else
+    (void)statusTela;
+#endif
 
 
     // ======================================================
