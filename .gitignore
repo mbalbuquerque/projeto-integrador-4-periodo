@@ -1,0 +1,11 @@
+# Credenciais (Wi-Fi, chaves de API) — usar secrets.example.h como modelo
+secrets.h
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+local.settings.json
+
+# Dados da analise (baixados e gerados pelos scripts)
+analise/dados/
