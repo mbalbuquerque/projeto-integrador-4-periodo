@@ -1,15 +1,17 @@
 # ColdTrack — Stack Técnica
 
 Documento de referência da arquitetura do ColdTrack: o que cada parte faz, em que tecnologia
-foi feita, onde roda, como os dados circulam e como o sistema é publicado. Situação em 26/09/2026.
-Para colocar um cliente novo em operação, ver [`implantacao.md`](implantacao.md).
+foi feita, onde roda, como os dados circulam e como o sistema é publicado.
+Para colocar um cliente novo em operação, ver [`implantacao.md`](implantacao.md); para as rotas,
+[`api.md`](api.md); para os controles de segurança, [`seguranca.md`](seguranca.md).
 
 ## 1. Visão geral
 
 O ColdTrack monitora a temperatura e a umidade dentro do baú refrigerado de caminhões que levam
 frutas do Vale do São Francisco aos portos. Um sensor instalado no baú mede as condições a cada
 20 segundos e envia as leituras pela internet para a nuvem. Um painel web mostra a situação
-atual da carga, o histórico, os alertas e os relatórios.
+atual da carga, o histórico, os alertas e os relatórios. O site também tem um chat público e,
+dentro do painel, um assistente, ambos com Azure OpenAI.
 
 ![Figura 1 — Arquitetura: borda IoT, contrato HTTPS/JSON, serviços Azure e camada de apresentação.](arquitetura.png)
 
@@ -28,7 +30,8 @@ O caminho de uma leitura:
 | Firmware | Leitura do sensor, LEDs, envio das leituras, fila sem conexão | C++ (Arduino Framework) | ESP32-C3 no baú (hoje simulado no Wokwi) |
 | API (backend) | Recebe e valida leituras, login, cadastros, consulta de dados | Python 3.11 | Azure Functions |
 | Banco de dados | Guarda empresas, usuários, sensores, veículos, viagens e leituras | NoSQL (documentos JSON) | Azure Cosmos DB |
-| Painel (frontend) | Dashboard, calor na rota, alertas, relatórios, sensores, veículos, viagens, usuários | HTML, CSS e JavaScript (sem framework), PWA | Azure Storage — site estático |
+| Painel (frontend) | Dashboard, calor na rota, alertas, relatórios, sensores, veículos, viagens, usuários | React 18 + Vite, PWA | Azure Storage — site estático |
+| Chat do site e assistente do painel | Respondem sobre o projeto e sobre os dados da empresa (busca na documentação) | Azure OpenAI (`gpt-4.1-mini`, `text-embedding-3-small`) | Chamados pela mesma Azure Function |
 | Análise de dados | Clima da rota e modelo preliminar de risco térmico | Python (Pandas, Matplotlib) | Máquina local; resultado versionado no repositório |
 | Testes automáticos | Testes da API e compilação do firmware a cada envio | GitHub Actions | GitHub |
 
@@ -37,7 +40,7 @@ Repositórios:
 | Repositório | Conteúdo |
 |---|---|
 | `projeto-integrador-4-periodo` | Firmware (`firmware/coldtrack/coldtrack.ino`), API (`cloud/function/`), análise (`analise/`), documentação (`docs/`) |
-| `Front-End-pi` | Painel web |
+| [`Front-End-pi`](https://github.com/mbalbuquerque/Front-End-pi) | Painel web (React + Vite) |
 
 ## 3. Borda (IoT)
 
@@ -90,6 +93,7 @@ Todos os recursos ficam no grupo de recursos `rg-coldtrack`.
 | Azure Cosmos DB for NoSQL (camada gratuita) | `cosmos-coldtrack-7319` | Banco de dados |
 | Azure Storage — site estático | `stcoldtrackweb7319` | Hospeda o painel web |
 | Azure Storage | `stcoldtrack7319` | Armazenamento interno da Function |
+| Azure OpenAI | `aoai-coldtrack-7319` | Modelo do chat e do assistente, e embeddings da busca |
 | Application Insights | `func-coldtrack-7319` | Logs e erros da API |
 
 ### 4.1 Azure Functions (serverless)
@@ -108,7 +112,7 @@ particionadas por dispositivo, então consultar o histórico de um caminhão lê
 
 ### 4.3 Site estático no Azure Storage
 
-Os arquivos do painel (HTML, CSS, JavaScript e imagens) ficam em um armazenamento com a opção
+Os arquivos do painel (o build do React: HTML, CSS, JavaScript e imagens) ficam em um armazenamento com a opção
 de site estático ativada e são servidos por HTTPS. Não há código executando no servidor: o
 JavaScript roda no navegador do usuário e busca os dados na API.
 
@@ -117,7 +121,7 @@ liberadas para a assinatura acadêmica; por isso o login foi implementado na pr�
 
 ## 5. Modelo de dados
 
-Banco `coldtrack`, seis containers. Todo documento (menos `empresas`) leva o `empresaId`,
+Banco `coldtrack`, sete containers. Todo documento (menos `empresas`) leva o `empresaId`,
 e toda consulta da API filtra pela empresa de quem está logado.
 
 | Container | Chave de partição | Conteúdo |
@@ -128,6 +132,7 @@ e toda consulta da API filtra pela empresa de quem está logado.
 | `veiculos` | `/id` (`<empresa>~<código>`) | Frota e o sensor instalado em cada veículo |
 | `viagens` | `/id` (`<empresa>~<código>`) | Trajetos, com origem, destino, carga, início e fim |
 | `leituras` | `/deviceId` | Uma leitura do sensor por documento |
+| `limites` | `/id` | Contadores dos limites de uso (login, chat, assistente), com expiração automática |
 
 Veículos e viagens são gravados com o código prefixado pela empresa: duas transportadoras
 podem ter um `CT-001` cada. A API devolve só o código.
@@ -185,7 +190,10 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `POST /telemetria` | Sensor | Chave do sensor (`x-device-key`) | Valida, classifica e grava a leitura; devolve a faixa da carga |
 | `POST /empresas` | Pessoa | Aberta | Cadastra a empresa e o primeiro gestor, já logado |
 | `POST /login` | Pessoa | Aberta | Troca e-mail e senha por um token de acesso |
+| `POST /sair` | Painel | Operador ou gestor | Encerra a sessão (derruba os tokens do usuário) |
 | `GET /perfis` | Painel | Aberta | Perfis de carga e faixas |
+| `POST /chat` | Site | Aberta | Chat público sobre o projeto (Azure OpenAI), com limite por IP |
+| `POST /assistente` | Painel | Operador ou gestor | Assistente do painel: uso das telas e dados da própria empresa, somente leitura |
 | `GET /eu` | Painel | Operador ou gestor | Dados do usuário logado e da empresa |
 | `POST /senha` | Painel | Operador ou gestor | Troca a própria senha (pede a atual) |
 | `GET /leituras` | Painel | Operador ou gestor | Leituras de um sensor da empresa, com filtros de período (`horas`) e `status` |
@@ -206,13 +214,14 @@ Organização do código (`cloud/function/`):
 | Arquivo | Responsabilidade |
 |---|---|
 | `function_app.py` | Rotas da API e acesso ao banco |
-| `contrato.py` | Validação e classificação das leituras |
-| `contrato.py` (perfis) | Perfis de carga e faixas de temperatura |
+| `contrato.py` | Validação e classificação das leituras; perfis de carga e faixas de temperatura |
 | `seguranca.py` | Hash de senha, token de acesso, espera do login, chave de sensor |
 | `limites.py` | Limites de uso compartilhados entre instâncias (container `limites` do Cosmos) |
 | `cadastros.py` | Validação de empresas, usuários, sensores, veículos e viagens |
+| `chat.py`, `base_chat.json` | Chat do site: busca nos trechos da documentação e resposta do Azure OpenAI |
+| `assistente.py` | Assistente do painel: dados da empresa do token mais a base do chat |
 | `scripts/criar_usuario.py`, `scripts/migrar_multiempresa.py` | Suporte: criar usuário direto no banco; migração única dos dados do piloto para o modelo com empresas |
-| `test_contrato.py`, `test_seguranca.py`, `test_pacote.py` | 61 testes automatizados (o último confere a lista de arquivos publicados, `pacote.txt`) |
+| `test_*.py` | Testes automatizados (`python -m unittest`); `test_pacote.py` confere a lista de arquivos publicados, `pacote.txt` |
 
 ## 7. Painel web
 
@@ -260,23 +269,23 @@ computador e celular.
 | Parte | Publicação automática | Publicação manual |
 |---|---|---|
 | API | GitHub Actions `publicar-api.yml`: a cada envio à branch `everson` que altere a API, roda os testes e publica | `bash publicar.sh` em `cloud/function/` |
-| Painel | GitHub Actions `publicar-site.yml`: a cada envio à branch `everson`, confere os scripts e publica | `bash publicar.sh` no repositório do painel |
+| Painel | GitHub Actions `publicar-site.yml`: a cada envio à branch `everson`, roda lint, testes e build e publica | `bash publicar.sh` no repositório do painel |
 | Firmware | — | Compilado e gravado no ESP32 pelo cabo USB |
 
 **Credencial da publicação automática.** O GitHub entra no Azure por OIDC: não existe senha
 guardada no repositório. A identidade `coldtrack-github-deploy` tem permissão apenas no grupo
-de recursos `rg-coldtrack` e só é aceita para a branch `everson` destes dois repositórios.
+de recursos `rg-coldtrack` e só é aceita para a branch `everson` destes dois repositórios (por isso a `everson` não pode ser apagada).
 A publicação manual usa o **Azure CLI** (comando `az`) autenticado na assinatura do projeto.
 
 Testes:
 
 | Tipo | Onde roda | O que cobre |
 |---|---|---|
-| Testes automatizados da API | Máquina local e GitHub Actions | Contrato, horário, filtros, faixas por perfil, senha, token, bloqueio, chave de sensor, cadastros |
-| Teste da API publicada | Script contra o Azure | 45 verificações: isolamento entre empresas, chave de sensor, troca e redefinição de senha, bloqueio |
+| Testes automatizados da API | Máquina local e GitHub Actions | Contrato, horário, filtros, faixas por perfil, senha, token, bloqueio, chave de sensor, cadastros, limites de uso, chat e assistente |
 | Compilação do firmware | GitHub Actions | Sketch compilado para ESP32-C3 com DHT22 e com DHT11 |
 | Simulação | Wokwi (wokwi-cli) | Firmware real enviando ao Azure; queda de conexão; excursão térmica; faixa da manga recebida e LED de frio demais |
-| Ponta a ponta | Navegador automatizado | Login, perfis, cadastros e telas no painel publicado |
+| Painel (unitários e e2e simulado) | Vitest e Playwright, no repositório do painel e no GitHub Actions | Telas, regras de faixa e fluxos com a API simulada |
+| Ponta a ponta real | Playwright contra o painel e a API publicados (opt-in) | Login, perfis, cadastros e telas em produção; resultados no relatório de testes do painel |
 
 ## 10. Custos
 

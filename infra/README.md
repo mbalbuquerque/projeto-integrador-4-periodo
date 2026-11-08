@@ -143,5 +143,6 @@ Consequência: um push em outra branch (inclusive `main`) não consegue publicar
 publicar a partir de outra branch é preciso criar outra credencial federada com o
 *subject* dessa branch.
 
-O painel (repositório Front-End-pi) usa o mesmo aplicativo com uma segunda credencial
-federada, também presa à branch `everson` daquele repositório.
+O painel (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)) usa o mesmo aplicativo com uma segunda credencial
+federada, também presa à branch `everson` daquele repositório. Por isso a `everson` dos dois repositórios
+nunca deve ser apagada: o deploy e o login por OIDC dependem dela.

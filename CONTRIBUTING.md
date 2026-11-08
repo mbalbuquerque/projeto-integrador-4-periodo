@@ -4,12 +4,18 @@
 
 - `everson`: branch de trabalho do back-end, firmware e infraestrutura. Todo push nela que
   altere `cloud/function/` **publica a API em produção** (workflow `publicar-api.yml`).
-- `main`: recebe o trabalho por pull request de `everson` no fim de cada etapa.
+- `main`: versão consolidada. Recebe a `everson` por pull request quando uma etapa fica pronta, com os
+  testes verdes. Depois do merge, a `everson` continua existindo e segue como branch de trabalho.
+- **Nunca apagar a `everson`** (nem marcar "apagar branch após o merge" no pull request): a publicação
+  da API e do painel e o login do GitHub Actions no Azure dependem dela.
 - Mudança maior ou arriscada: criar uma branch a partir de `everson`
   (`everson/<assunto>`), abrir pull request para `everson` e esperar os testes passarem.
 
-Antes de editar, atualizar a branch (`git pull`). Quando a `main` mudar, trazer as mudanças
-para a `everson` com merge.
+Antes de editar, atualizar a branch (`git pull`). Depois de cada pull request para a `main`, trazer
+a `main` de volta para a `everson` com merge.
+
+O painel web está em outro repositório, [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi),
+com fluxo igual (ver o `CONTRIBUTING.md` de lá).
 
 O login do GitHub Actions no Azure é aceito só para a branch `everson` deste repositório
 (ver [`infra/README.md`](infra/README.md)); push em outra branch roda os testes, mas não publica.

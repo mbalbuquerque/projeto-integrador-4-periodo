@@ -4,6 +4,7 @@ API do ColdTrack: recebe a telemetria dos sensores, valida o contrato JSON, clas
 pela faixa da carga, grava no Azure Cosmos DB e atende o painel (login, cadastros, consultas).
 Cada empresa só enxerga os próprios dados.
 
+Visão do projeto e do painel web: [README da raiz](../../README.md) e [repositório do painel](https://github.com/mbalbuquerque/Front-End-pi).
 Visão completa (modelo de dados, segurança, publicação): [`docs/stack-tecnica.md`](../../docs/stack-tecnica.md).
 Referência de todas as rotas: [`docs/api.md`](../../docs/api.md). Infraestrutura em Bicep:
 [`infra/`](../../infra/README.md).
@@ -13,9 +14,9 @@ Referência de todas as rotas: [`docs/api.md`](../../docs/api.md). Infraestrutur
 | recurso | nome |
 |---|---|
 | Function App (Flex Consumption, Python 3.11) | `func-coldtrack-7319` |
-| Cosmos DB for NoSQL (free tier) | `cosmos-coldtrack-7319` — banco `coldtrack`: `empresas`, `usuarios`, `dispositivos`, `veiculos`, `viagens` (partição `/id`) e `leituras` (partição `/deviceId`) |
+| Cosmos DB for NoSQL (free tier) | `cosmos-coldtrack-7319` — banco `coldtrack`: `empresas`, `usuarios`, `dispositivos`, `veiculos`, `viagens` e `limites` (partição `/id`) e `leituras` (partição `/deviceId`) |
 | Storage Account | `stcoldtrack7319` |
-| Azure OpenAI | `aoai-coldtrack-7319` — deploys `gpt-4.1-mini` (resposta do chat) e `text-embedding-3-small` (busca na base) |
+| Azure OpenAI | `aoai-coldtrack-7319` — deploys `gpt-4.1-mini` (resposta do chat e do assistente) e `text-embedding-3-small` (busca na base) |
 
 App settings lidas pelo código: `COSMOS_CONNECTION`, `COSMOS_DATABASE`, `COSMOS_CONTAINER`,
 `JWT_SECRET` e, para o chat, `AOAI_ENDPOINT`, `AOAI_DEPLOY_CHAT`, `AOAI_DEPLOY_EMBED` e
@@ -32,7 +33,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `POST /empresas` | pessoa | aberta: cria a empresa e o primeiro gestor |
 | `POST /login` | pessoa | e-mail e senha → token (8 h) |
 | `GET /perfis` | painel | aberta |
-| `POST /chat` | site | aberta: pergunta ao assistente (10 por minuto por IP, 2000 por dia no total) |
+| `POST /chat` | site | aberta: pergunta ao chat do site (10 por minuto por IP, 2000 por dia no total) |
 | `GET /eu`, `POST /senha`, `POST /sair` | operador, gestor | `Authorization: Bearer <token>` |
 | `POST /assistente` | operador, gestor | token: assistente do painel (15 por minuto por usuário, 300 por dia por empresa) |
 | `GET /leituras`, `GET /dispositivos`, `GET /veiculos`, `GET /viagens` | operador, gestor | token |
@@ -81,7 +82,7 @@ Sensor sem veículo usa o perfil demonstrativo (normal até 15 °C, atenção at
 
 ### `POST /chat`
 
-Assistente do site com um modelo de linguagem do Azure OpenAI (`chat.py`). A pergunta vira um
+Chat do site com um modelo de linguagem do Azure OpenAI (`chat.py`). A pergunta vira um
 embedding, os 4 trechos mais parecidos de `base_chat.json` (cosseno em Python puro) entram no
 prompt como contexto e o modelo responde em português, só sobre o ColdTrack. Sem
 configuração ou com falha da IA, responde `503` e o site cai no FAQ. Detalhes em

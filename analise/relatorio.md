@@ -1,6 +1,6 @@
 # Análise climática da rota Petrolina → Suape
 
-Gerado por `explorar.py` a partir dos dados horários das estações automáticas do INMET
+Produzido por `explorar.py` a partir dos dados horários das estações automáticas do INMET
 (2019–2025). Estação principal: **A307 Petrolina** (32153 horas válidas, 1330 dias completos).
 
 ## Qualidade dos dados

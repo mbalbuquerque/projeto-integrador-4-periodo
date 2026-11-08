@@ -14,9 +14,9 @@ O protótipo utiliza um ESP32-C3 conectado a um sensor DHT11, responsável pela 
 - 🟡 Amarelo: condição de atenção;
 - 🔴 Vermelho: condição crítica ou falha de leitura.
 
-Os limites utilizados inicialmente são demonstrativos e poderão ser configurados de acordo com as necessidades específicas da mercadoria transportada.
+Os limites dependem do perfil da carga (por exemplo manga ou uva), cadastrado na API e enviado ao sensor a cada leitura; o perfil demonstrativo (normal até 15 °C, atenção até 20 °C) vale para sensor sem veículo.
 
-Por meio de uma conexão Wi-Fi, os dados são enviados periodicamente para a plataforma ThingSpeak, utilizando comunicação HTTP/REST. O canal possui campos destinados à temperatura, umidade relativa e intensidade do sinal Wi-Fi (RSSI).
+Por meio de uma conexão Wi-Fi, as leituras são enviadas a cada 20 segundos, em JSON por HTTPS, para uma API em Azure Functions, que as classifica pela faixa da carga e grava no Azure Cosmos DB. Cada leitura traz temperatura, umidade relativa e intensidade do sinal Wi-Fi (RSSI). Sem rede, as leituras ficam guardadas na memória flash da placa e são reenviadas quando a conexão volta. O envio ao ThingSpeak por MQTT é opcional e ficou como experimento e para a tela de demonstração do painel.
 
 ## 3. Aplicação no Negócio
 
@@ -38,12 +38,12 @@ O gabinete produzido por reaproveitamento de materiais também não possui grau 
 
 ## 6. Evolução do Projeto
 
-Em uma etapa futura, os dados coletados poderão ser integrados a serviços de nuvem como AWS ou Microsoft Azure, permitindo armazenamento histórico, geração de alertas, dashboards e utilização de modelos preditivos para identificação de riscos à qualidade das mercadorias transportadas.
+Os dados já são integrados ao Microsoft Azure, com armazenamento histórico, alertas e painel web (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)). Fica como etapa futura o uso de modelos preditivos para identificação de riscos à qualidade das mercadorias; há uma análise climática preliminar da rota em `analise/`.
 
-O fluxo proposto é:
+O fluxo implementado é:
 
 ```
-Sensor → ESP32-C3 → processamento Edge → Wi-Fi → ThingSpeak → Cloud → banco de dados → análise preditiva
+Sensor → ESP32-C3 → processamento Edge → Wi-Fi → HTTPS → Azure Functions → Cosmos DB → painel web
 ```
 
 O ColdTrack Edge, portanto, funciona como uma prova de conceito para demonstrar a aquisição, processamento e transmissão de dados ambientais aplicados ao monitoramento da cadeia fria no transporte de mercadorias.
