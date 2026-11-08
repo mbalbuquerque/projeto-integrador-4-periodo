@@ -7,15 +7,21 @@ API no Azure. Um painel web mostra as leituras, os alertas e os cadastros de cad
 
 Projeto Integrador do 4º período, Faculdade Senac PE, 2026.2.
 
-Este repositório reúne o firmware, a API, a infraestrutura e a documentação. O painel web
-fica em outro repositório: [mbalbuquerque/Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi).
+O projeto tem dois repositórios:
+
+| repositório | conteúdo |
+|---|---|
+| [projeto-integrador-4-periodo](https://github.com/mbalbuquerque/projeto-integrador-4-periodo) (este) | firmware do ESP32-C3, API (Azure Functions, Python), infraestrutura, análise climática e documentação |
+| [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) | painel web (React + Vite) publicado no Azure Storage |
+
+Os dois são publicados pela branch `everson` (ver [Publicação](#publicação)).
 
 | | endereço |
 |---|---|
 | Painel publicado | <https://stcoldtrackweb7319.z15.web.core.windows.net> |
-| API | <https://func-coldtrack-7319.azurewebsites.net/api> |
+| API (base) | `https://func-coldtrack-7319.azurewebsites.net/api`; exemplo público: <https://func-coldtrack-7319.azurewebsites.net/api/perfis> |
 | Simulação no Wokwi | <https://wokwi.com/projects/475352296477619201> |
-| Canal no ThingSpeak | <https://thingspeak.mathworks.com/channels/3496439> |
+| Canal no ThingSpeak (só demonstração e experimento MQTT) | <https://thingspeak.mathworks.com/channels/3496439> |
 
 ## Arquitetura
 
@@ -41,9 +47,17 @@ fica em outro repositório: [mbalbuquerque/Front-End-pi](https://github.com/mbal
  +-----------------------+                           +--------------------------+
 ```
 
+O painel é uma aplicação React + Vite (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)).
+A API é a única fonte dos dados: o painel não lê o ThingSpeak, que aparece apenas na tela
+demonstrativa de Monitoramento e no envio MQTT opcional do firmware. Os perfis de carga
+(manga, uva, demonstrativo) definem a faixa de temperatura de cada veículo; a API envia a
+faixa ao sensor a cada leitura.
+
 O chat do site (`POST /api/chat`) responde dúvidas sobre o projeto com um modelo de linguagem
-do Azure OpenAI, usando como contexto trechos desta documentação; se a IA não responder, o site
-usa o FAQ.
+do Azure OpenAI (`gpt-4.1-mini`), usando como contexto trechos desta documentação (busca por
+embeddings); se a IA não responder, o site usa o FAQ. Dentro do painel, o assistente do painel (`POST /api/assistente`, com login) responde
+sobre o uso das telas e sobre os dados da própria empresa (sensores, leituras, veículos e
+viagens), sem executar ações.
 
 Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas da API:
 [`docs/api.md`](docs/api.md). Recursos do Azure: [`infra/README.md`](infra/README.md).
@@ -61,16 +75,19 @@ Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas
 ├── cloud/function/          API (Azure Function em Python)
 │   ├── function_app.py      rotas
 │   ├── contrato.py          contrato da telemetria, perfis de carga e classificação
-│   ├── seguranca.py         senha, token, bloqueio de login, chave de sensor
+│   ├── seguranca.py         senha, token, espera do login, chave de sensor
+│   ├── limites.py           limites de uso compartilhados (container limites)
 │   ├── cadastros.py         validação dos cadastros
 │   ├── chat.py              chat do site (Azure OpenAI + busca na base_chat.json)
+│   ├── assistente.py        assistente do painel (dados da empresa + base do chat)
+│   ├── base_chat.json       trechos da documentação com embeddings, usados pelo chat
 │   ├── test_*.py            testes (unittest)
 │   ├── pacote.txt           arquivos publicados no Azure
 │   ├── publicar.sh          publicação manual
 │   └── scripts/             scripts de suporte (criar usuário, migração)
 ├── infra/                   main.bicep do ambiente atual e notas de infraestrutura
 ├── analise/                 análise climática da rota (dados do INMET)
-├── docs/                    documentação técnica, API, implantação, memorial descritivo
+├── docs/                    documentação técnica, API, segurança, implantação, memorial descritivo
 └── .github/workflows/       testes (API e firmware) e publicação da API
 ```
 
@@ -131,19 +148,24 @@ Ver [`analise/README.md`](analise/README.md).
 - **API**: o workflow `publicar-api.yml` roda os testes e publica na Function App a cada push
   na branch `everson` que altere `cloud/function/`. O login no Azure é por OIDC, aceito só para
   essa branch. Publicação manual: `bash cloud/function/publicar.sh`.
-- **Painel**: publicado pelo repositório do painel.
+- **Painel**: publicado pelo repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi),
+  também a cada push na `everson`.
 - **Infraestrutura**: `infra/main.bicep` documenta o ambiente; não aplicar sem `what-if`
   (ver [`infra/README.md`](infra/README.md)).
 
-Fluxo de branches e convenção de commits: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Fluxo de trabalho: commits na `everson`, pull request para a `main` quando a etapa fica pronta.
+**A `everson` nunca deve ser apagada**, porque a publicação e o login por OIDC dependem dela.
+Detalhes e convenção de commits em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Segurança
 
 - Credenciais de Wi-Fi e a chave do sensor não ficam no código. Cada sensor tem chave própria,
   gerada no painel; o banco guarda só o hash.
-- Senhas com scrypt e sal por usuário; tokens JWT de 8 horas; 5 senhas erradas bloqueiam a
-  conta por 15 minutos.
+- Senhas com scrypt e sal por usuário; tokens JWT de 8 horas, derrubados ao sair
+  (`POST /sair`) ou trocar a senha. A partir da 5ª senha errada a conta entra em espera
+  crescente (1 a 15 min), e cada IP tem limite de tentativas.
 - Cada empresa só enxerga os próprios dados; o acesso é conferido pela API em toda chamada.
+- Controles, correções da revisão e limitações conhecidas: [`docs/seguranca.md`](docs/seguranca.md).
 
 ## Status
 
@@ -162,12 +184,26 @@ Fluxo de branches e convenção de commits: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - [x] Troca de senha, bloqueio de login e etiqueta QR por veículo
 - [x] Previsão de calor na rota (Open-Meteo + histórico INMET) no dashboard
 - [x] Chat do site com modelo de linguagem do Azure OpenAI, respondendo pela documentação do projeto
+- [x] Assistente do painel (Azure OpenAI), com os dados da empresa de quem está logado
 - [ ] Montagem física
 - [ ] Gabinete reciclado
 - [ ] Testes de campo
 - [ ] Relatório técnico
 
-Memorial descritivo do protótipo: [`docs/memorial-descritivo.md`](docs/memorial-descritivo.md).
+## Documentação
+
+| documento | conteúdo |
+|---|---|
+| [`docs/stack-tecnica.md`](docs/stack-tecnica.md) | arquitetura, componentes, modelo de dados, publicação |
+| [`docs/api.md`](docs/api.md) | referência das rotas da API |
+| [`docs/seguranca.md`](docs/seguranca.md) | controles de segurança e limitações conhecidas |
+| [`docs/implantacao.md`](docs/implantacao.md) | passo a passo para pôr uma transportadora em operação |
+| [`docs/memorial-descritivo.md`](docs/memorial-descritivo.md) | memorial descritivo do protótipo |
+| [`cloud/function/README.md`](cloud/function/README.md) | API: rodar, testar e publicar |
+| [`infra/README.md`](infra/README.md) | recursos do Azure e publicação por OIDC |
+| [`analise/README.md`](analise/README.md) | análise climática da rota |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | branches, commits e verificações |
+| [Documentação do painel](https://github.com/mbalbuquerque/Front-End-pi#readme) | README, arquitetura, guia de uso e relatório de testes do front |
 
 ## Equipe
 

@@ -21,13 +21,29 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | tipo | como | usado por |
 |---|---|---|
 | chave do sensor | header `x-device-key: <chave>` | `POST /telemetria` |
-| token do painel | header `Authorization: Bearer <token>` | rotas do painel |
+| token do painel | header `Authorization: Bearer <token>` | rotas do painel, `POST /assistente` e `POST /sair` |
 | nenhuma | — | `POST /empresas`, `POST /login`, `GET /perfis`, `POST /chat` |
 
 O token é um JWT HS256 válido por 8 horas, emitido por `POST /login`, `POST /empresas` e
 `POST /senha`. A cada chamada a API confere o usuário no banco: usuário removido, senha
-trocada ou redefinida (versão da sessão diferente) e empresa diferente derrubam o token.
-O perfil considerado é o atual do usuário, não o de quando o token foi emitido.
+trocada ou redefinida, `POST /sair` (versão da sessão diferente) e empresa diferente
+derrubam o token. O perfil considerado é o atual do usuário, não o de quando o token foi
+emitido; cadastro sem perfil ou sem empresa recebe `403`.
+
+### Limites de uso
+
+Contados no Cosmos (container `limites`), somando todas as instâncias da Function. O IP é o
+do header `X-Azure-ClientIP` ou, sem ele, o último item do `X-Forwarded-For` (o que o Azure
+acrescenta; os anteriores podem ter sido escritos pelo cliente).
+
+| rota | limite | resposta |
+|---|---|---|
+| `POST /login` | 20 tentativas erradas por IP a cada 15 min (em qualquer conta) | `429` |
+| `POST /login` | por conta: espera de 1 min a partir da 5ª senha errada seguida, dobrando até 15 min | `401` (mesma resposta de senha errada) |
+| `POST /chat` | 10 perguntas por minuto por IP; 2000 por dia no site todo | `429` |
+| `POST /assistente` | 15 perguntas por minuto por usuário; 300 por dia por empresa | `429` |
+
+As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 
 ### Códigos comuns
 
@@ -119,8 +135,14 @@ Acesso: aberto.
 | resposta | corpo |
 |---|---|
 | `200` | `{"token", "usuario": {"id", "nome", "perfil", "empresaId", "empresa"}}` |
-| `401` | `e-mail ou senha incorretos` (mesma mensagem e mesmo tempo para e-mail inexistente) |
-| `429` | `muitas tentativas erradas. Tente de novo em N min.` (5 erros seguidos bloqueiam por 15 min) |
+| `401` | `e-mail ou senha incorretos. Se errou várias vezes, aguarde alguns minutos.` |
+| `429` | `muitas tentativas de login erradas. Aguarde alguns minutos.` (20 erros do mesmo IP em 15 min) |
+
+O `401` é igual, na mensagem e no tempo, para e-mail inexistente, senha errada e conta em
+espera: a resposta não revela quem tem conta. A partir da 5ª senha errada seguida a conta
+fica em espera (1 min, depois 2, 4, 8 e no máximo 15 min); durante a espera nem a senha
+certa entra, e as tentativas não aumentam a espera. Falhas com mais de 24 h são esquecidas;
+o gestor também tira a conta da espera ao redefinir a senha (`PUT /usuarios/{email}`).
 
 ### `GET /eu`
 
@@ -136,6 +158,12 @@ Acesso: operador, gestor. Troca a própria senha.
 
 `nova` com 8 a 128 caracteres e diferente de `atual`. Respostas: `200 {"token", "usuario"}`
 (novo token; os anteriores param de valer); `400` validação ou `atual: senha atual incorreta`.
+
+### `POST /sair`
+
+Acesso: operador, gestor. Sem corpo. Encerra **todas** as sessões do usuário (todos os
+aparelhos): sobe a versão da sessão e todo token já emitido passa a receber `401`.
+Resposta: `204`. O painel deve chamar antes de apagar o token guardado no navegador.
 
 ## Chat do site
 
@@ -165,10 +193,59 @@ da pergunta.
 | `200` | `{"resposta": "...", "fontes": ["docs/api.md", "FAQ do site"], "origem": "ia"}` |
 | `400` | erros de validação (ex.: `pergunta: no máximo 500 caracteres`, `historico[0].papel: use usuario ou assistente`) |
 | `429` | `muitas perguntas seguidas. Tente de novo em 1 min.` (mais de 10 perguntas por minuto do mesmo IP) |
+| `429` | `o chat atingiu o limite de perguntas de hoje. Tente de novo amanhã.` (2000 perguntas no dia, somando todos os IPs) |
 | `503` | `chat indisponível`: IA não configurada, fora do ar, sem cota ou sem resposta em 20 s |
 
 `fontes` lista os documentos usados como contexto, sem repetir. No `503`, o site usa as
-respostas prontas do FAQ. O limite por IP é contado em memória, por instância da Function.
+respostas prontas do FAQ. Pergunta com erro de validação não gasta a cota do dia. Todo link
+`http(s)` na resposta que não seja do site (`https://stcoldtrackweb7319.z15.web.core.windows.net`)
+sai como `[link removido]`.
+
+## Assistente do painel
+
+### `POST /assistente`
+
+Acesso: token (`operador` e `gestor`). Assistente do painel para o usuário logado: tira
+dúvidas de uso (o que cada tela faz, como cadastrar veículo, registrar sensor, registrar
+viagem, como funcionam alertas e faixas, o que gestor e operador podem fazer) e responde
+sobre os dados da **própria empresa**. Não executa ações: quando pedem uma, explica o caminho
+nas telas (Dashboard, Veículos, Sensores, Viagens, Alertas, Relatórios, Configurações).
+
+Corpo e validação iguais aos de `POST /chat` (`pergunta` 1 a 500 caracteres, `historico`
+opcional com até 6 mensagens de até 1000 caracteres; campo não previsto é erro).
+
+A cada pergunta a API monta um retrato somente leitura da empresa do token, com as mesmas
+consultas das rotas `GET` do painel (nunca de outra empresa), e o envia ao modelo junto com
+os trechos da base do chat:
+
+- empresa, nome e perfil de quem pergunta, data e hora atuais (horário de Pernambuco, UTC-3);
+- perfis de carga e faixas; veículos (até 30: id, tipo, perfil, sensor);
+- sensores (até 10, os ligados a veículo primeiro): última leitura (temperatura, umidade,
+  RSSI, status, horários e "sem sinal há X" quando passa de 10 min) e resumo das últimas
+  24 h (até 500 leituras: quantidade, mínima, máxima, média, leituras em atenção e em crítico,
+  horário da última fora da faixa);
+- viagens em andamento (até 10), agendadas (até 5) e as 5 últimas encerradas;
+- só para `gestor`: usuários da empresa (e-mail, nome, perfil) e a contagem por perfil.
+
+Os totais acompanham as listas cortadas; acima de ~18 mil caracteres as listas encolhem.
+
+| resposta | corpo |
+|---|---|
+| `200` | `{"resposta": "...", "fontes": ["dados da empresa", "docs/api.md"], "origem": "ia"}` |
+| `400` | erros de validação (os mesmos de `POST /chat`) |
+| `401` | `faça login para continuar` |
+| `429` | `muitas perguntas seguidas. Tente de novo em 1 min.` (mais de 15 perguntas por minuto do mesmo usuário) |
+| `429` | `sua empresa atingiu o limite de perguntas de hoje ao assistente. Tente de novo amanhã.` (300 perguntas no dia por empresa) |
+| `503` | `assistente indisponível`: IA não configurada, banco ou IA fora do ar, sem resposta em 20 s |
+
+`fontes` começa sempre com `dados da empresa`, seguida dos documentos da base usados como
+contexto. Pergunta fora do assunto recebe recusa curta e `fontes: []`. Nada da conversa é
+gravado; o log guarda só o usuário (e-mail mascarado) e o tamanho da pergunta.
+
+Os textos do retrato (nomes, tipos, cargas, cidades) foram digitados por usuários e podem
+trazer instruções maliciosas. O prompt manda o modelo tratar o bloco como dado, nunca como
+instrução, e não escrever links nem pedir login ou credencial; e a resposta passa pelo mesmo
+filtro de links do `POST /chat`.
 
 ## Leituras
 
@@ -260,9 +337,11 @@ Todas as operações exigem perfil gestor e valem só para a empresa dele.
 |---|---|---|
 | `GET /usuarios` | — | `200 {"usuarios": [{"id", "nome", "perfil"}]}` |
 | `POST /usuarios` | `{"email", "nome", "perfil", "senha"}` | `201 {"id", "nome", "perfil", "empresaId"}` |
-| `PUT /usuarios/{email}` | `{"senha"}` | `200 {"id", "nome", "perfil", "empresaId"}`: redefine a senha, derruba as sessões e desbloqueia a conta |
+| `PUT /usuarios/{email}` | `{"senha"}` | `200 {"id", "nome", "perfil", "empresaId"}`: redefine a senha de outro usuário, derruba as sessões dele e tira a conta da espera do login |
 | `DELETE /usuarios/{email}` | — | `204` |
 
 Regras do `POST` iguais às de `POST /empresas` (sem `empresa`), com `perfil` `operador` ou
-`gestor`. Erros: `400` validação ou `você não pode remover o próprio usuário`; `404`
+`gestor`. Erros: `400` validação, `você não pode remover o próprio usuário` ou, no `PUT`
+com o próprio e-mail, `para trocar a própria senha use Configurações → Trocar senha` (a
+própria senha só muda com a atual, em `POST /senha`); `404`
 `não encontrado`; `409` `já existe um usuário com esse e-mail`.

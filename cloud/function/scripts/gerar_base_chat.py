@@ -42,7 +42,7 @@ DOCS_BACK = [
     "analise/README.md",
 ]
 # Fontes do repositório do painel.
-DOCS_FRONT = ["README.md", "docs/ARQUITETURA.md", "CONTRIBUTING.md"]
+DOCS_FRONT = ["README.md", "docs/guia-de-uso.md", "docs/ARQUITETURA.md", "CONTRIBUTING.md"]
 FAQ_FRONT = "src/components/ChatWidget/respostas.js"
 
 PROIBIDOS = re.compile(r"(^|/)(\.specs|local\.settings[^/]*|secrets\.h)(/|$)|\.txt$")

@@ -33,6 +33,18 @@ Assinatura *Azure for Students*, grupo `rg-coldtrack`, região Brazil South.
 | `dispositivos` | `/id` |
 | `viagens` | `/id` |
 | `leituras` | `/deviceId` |
+| `limites` | `/id` (TTL ligado, padrão de 2 dias; sem índice) |
+
+O container `limites` guarda os contadores dos limites de uso (falhas de login por IP,
+perguntas por minuto e cotas diárias do `/chat` e do `/assistente`), somados entre todas as
+instâncias da Function. Cada contador some sozinho pelo TTL quando a janela acaba, e o id
+é um hash: IP e e-mail não ficam gravados. Se o container não existir, a API conta na
+memória de cada instância e avisa uma vez no log. Ele usa a vazão compartilhada do banco
+(1000 RU/s, free tier), sem RU próprias. Criação (uma vez, fora do `main.bicep`):
+
+```bash
+az cosmosdb sql container create -g rg-coldtrack -a cosmos-coldtrack-7319 -d coldtrack   -n limites -p /id --ttl 172800   --idx '{"indexingMode":"consistent","automatic":true,"includedPaths":[],"excludedPaths":[{"path":"/*"}]}'
+```
 
 A chave de partição não muda depois que o container é criado; trocar exige criar outro
 container e copiar os dados.
@@ -49,6 +61,7 @@ Só os nomes ficam no repositório. Os valores ficam no Azure.
 | `COSMOS_CONNECTION` | chave do Cosmos DB | acesso ao banco |
 | `COSMOS_DATABASE` | `coldtrack` | nome do banco |
 | `COSMOS_CONTAINER` | `leituras` | container padrão das leituras |
+| `LIMITES_CONTAINER` | (não definida: vale `limites`) | container dos contadores dos limites de uso |
 | `TEMP_NORMAL_MAX`, `TEMP_ATENCAO_MAX` | `15`, `20` | legado: o código atual não lê; as faixas vêm de `PERFIS_CARGA` em `contrato.py` |
 | `JWT_SECRET` | parâmetro `@secure()` | assinatura dos tokens do painel |
 | `AOAI_ENDPOINT` | endpoint da `aoai-coldtrack-7319` | chat do site |
@@ -78,16 +91,18 @@ conta do `az login`.
 
 ### CORS da API
 
-`http://127.0.0.1:5500`, `http://localhost:5500` (painel rodando localmente) e
-`https://stcoldtrackweb7319.z15.web.core.windows.net` (painel publicado).
+Só `https://stcoldtrackweb7319.z15.web.core.windows.net` (painel publicado). As origens de
+desenvolvimento (`localhost:5500`) foram tiradas de produção: para testar o painel na
+máquina, rodar a API local (`func start`) e apontar o painel para ela.
 
 ### Pontos de atenção
 
 - O chat público tem custo por uso no Azure OpenAI (sai do crédito da assinatura). A rota
-  limita 10 perguntas por minuto por IP e respostas curtas; a cota dos deploys (20 mil tokens
+  limita 10 perguntas por minuto por IP e 2000 por dia no total; o assistente do painel,
+  15 por minuto por usuário e 300 por dia por empresa. A cota dos deploys (20 mil tokens
   por minuto) é o teto. Cota esgotada vira `503` e o site cai no FAQ.
-- `httpsOnly` está `false` na Function App. Os sensores e o painel já usam HTTPS; ligar
-  exige confirmar antes que nenhuma placa grava a URL com `http://`.
+- `httpsOnly` está `true` na Function App (ligado em produção): chamada por `http://` é
+  redirecionada para HTTPS. Os sensores e o painel já usavam HTTPS.
 - O site estático não é uma propriedade do ARM; foi ligado pela CLI
   (`az storage blob service-properties update --static-website --index-document index.html`).
 - A URL da API (`func-coldtrack-7319.azurewebsites.net`) está gravada na memória das placas
@@ -128,5 +143,6 @@ Consequência: um push em outra branch (inclusive `main`) não consegue publicar
 publicar a partir de outra branch é preciso criar outra credencial federada com o
 *subject* dessa branch.
 
-O painel (repositório Front-End-pi) usa o mesmo aplicativo com uma segunda credencial
-federada, também presa à branch `everson` daquele repositório.
+O painel (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)) usa o mesmo aplicativo com uma segunda credencial
+federada, também presa à branch `everson` daquele repositório. Por isso a `everson` dos dois repositórios
+nunca deve ser apagada: o deploy e o login por OIDC dependem dela.

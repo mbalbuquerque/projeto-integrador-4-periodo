@@ -4,6 +4,7 @@ API do ColdTrack: recebe a telemetria dos sensores, valida o contrato JSON, clas
 pela faixa da carga, grava no Azure Cosmos DB e atende o painel (login, cadastros, consultas).
 Cada empresa só enxerga os próprios dados.
 
+Visão do projeto e do painel web: [README da raiz](../../README.md) e [repositório do painel](https://github.com/mbalbuquerque/Front-End-pi).
 Visão completa (modelo de dados, segurança, publicação): [`docs/stack-tecnica.md`](../../docs/stack-tecnica.md).
 Referência de todas as rotas: [`docs/api.md`](../../docs/api.md). Infraestrutura em Bicep:
 [`infra/`](../../infra/README.md).
@@ -13,9 +14,9 @@ Referência de todas as rotas: [`docs/api.md`](../../docs/api.md). Infraestrutur
 | recurso | nome |
 |---|---|
 | Function App (Flex Consumption, Python 3.11) | `func-coldtrack-7319` |
-| Cosmos DB for NoSQL (free tier) | `cosmos-coldtrack-7319` — banco `coldtrack`: `empresas`, `usuarios`, `dispositivos`, `veiculos`, `viagens` (partição `/id`) e `leituras` (partição `/deviceId`) |
+| Cosmos DB for NoSQL (free tier) | `cosmos-coldtrack-7319` — banco `coldtrack`: `empresas`, `usuarios`, `dispositivos`, `veiculos`, `viagens` e `limites` (partição `/id`) e `leituras` (partição `/deviceId`) |
 | Storage Account | `stcoldtrack7319` |
-| Azure OpenAI | `aoai-coldtrack-7319` — deploys `gpt-4.1-mini` (resposta do chat) e `text-embedding-3-small` (busca na base) |
+| Azure OpenAI | `aoai-coldtrack-7319` — deploys `gpt-4.1-mini` (resposta do chat e do assistente) e `text-embedding-3-small` (busca na base) |
 
 App settings lidas pelo código: `COSMOS_CONNECTION`, `COSMOS_DATABASE`, `COSMOS_CONTAINER`,
 `JWT_SECRET` e, para o chat, `AOAI_ENDPOINT`, `AOAI_DEPLOY_CHAT`, `AOAI_DEPLOY_EMBED` e
@@ -32,8 +33,9 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `POST /empresas` | pessoa | aberta: cria a empresa e o primeiro gestor |
 | `POST /login` | pessoa | e-mail e senha → token (8 h) |
 | `GET /perfis` | painel | aberta |
-| `POST /chat` | site | aberta: pergunta ao assistente (10 por minuto por IP) |
-| `GET /eu`, `POST /senha` | operador, gestor | `Authorization: Bearer <token>` |
+| `POST /chat` | site | aberta: pergunta ao chat do site (10 por minuto por IP, 2000 por dia no total) |
+| `GET /eu`, `POST /senha`, `POST /sair` | operador, gestor | `Authorization: Bearer <token>` |
+| `POST /assistente` | operador, gestor | token: assistente do painel (15 por minuto por usuário, 300 por dia por empresa) |
 | `GET /leituras`, `GET /dispositivos`, `GET /veiculos`, `GET /viagens` | operador, gestor | token |
 | `POST /dispositivos`, `PUT/DELETE /dispositivos/{id}` | gestor | token |
 | `POST /veiculos`, `PUT/DELETE /veiculos/{id}` | gestor | token |
@@ -41,16 +43,20 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `GET/POST /usuarios`, `PUT/DELETE /usuarios/{id}` | gestor | token |
 
 Sem token ou sessão derrubada: 401. Perfil sem permissão: 403. Dado de outra empresa: 404.
-Login bloqueado: 429. O acesso é conferido pela API em cada chamada; a tela só esconde o que o
+Muitas falhas de login do mesmo IP: 429. O acesso é conferido pela API em cada chamada; a tela só esconde o que o
 perfil não pode fazer.
 
 ### Acesso
 
 - Senhas com scrypt e sal por usuário; o hash nunca sai da API.
-- Token JWT HS256 com a empresa e a versão da sessão. Trocar ou redefinir a senha, ou remover
-  o usuário, derruba os tokens antigos na hora (a API confere o usuário no banco a cada chamada).
-- Mesma mensagem e mesmo tempo para e-mail inexistente e senha errada; 5 senhas erradas
-  seguidas bloqueiam a conta por 15 minutos (o gestor libera redefinindo a senha).
+- Token JWT HS256 com a empresa e a versão da sessão. Trocar ou redefinir a senha, sair
+  (`POST /sair`) ou remover o usuário derruba os tokens antigos na hora (a API confere o
+  usuário no banco a cada chamada).
+- Mesma resposta (401) e mesmo tempo para e-mail inexistente, senha errada e conta em espera.
+  A partir da 5ª senha errada seguida a conta espera 1 min, dobrando até 15 min (o gestor
+  libera redefinindo a senha); cada IP tem até 20 falhas a cada 15 min.
+- Limites de uso contados no container `limites` do Cosmos, somando todas as instâncias
+  (`limites.py`). Detalhes e limitações conhecidas: [`docs/seguranca.md`](../../docs/seguranca.md).
 - Chave de sensor: 32 bytes aleatórios, mostrada uma vez no registro; o banco guarda o SHA-256.
 
 ### `POST /telemetria`
@@ -76,10 +82,18 @@ Sensor sem veículo usa o perfil demonstrativo (normal até 15 °C, atenção at
 
 ### `POST /chat`
 
-Assistente do site com um modelo de linguagem do Azure OpenAI (`chat.py`). A pergunta vira um
+Chat do site com um modelo de linguagem do Azure OpenAI (`chat.py`). A pergunta vira um
 embedding, os 4 trechos mais parecidos de `base_chat.json` (cosseno em Python puro) entram no
 prompt como contexto e o modelo responde em português, só sobre o ColdTrack. Sem
 configuração ou com falha da IA, responde `503` e o site cai no FAQ. Detalhes em
+[`docs/api.md`](../../docs/api.md).
+
+### `POST /assistente`
+
+Assistente do painel (`assistente.py`), para o usuário logado. Monta um retrato somente leitura
+da empresa do token (veículos, sensores com última leitura e resumo de 24 h, viagens e, para
+gestor, usuários) com as mesmas consultas das rotas `GET`, junta os trechos da base do chat e
+responde sobre o uso do painel e os dados da empresa. Não executa ações. Detalhes em
 [`docs/api.md`](../../docs/api.md).
 
 ### `GET /leituras?deviceId=coldtrack-01&limite=50&horas=24&status=ATENCAO,CRITICO`

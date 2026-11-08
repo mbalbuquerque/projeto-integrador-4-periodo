@@ -11,7 +11,9 @@ Público:
 
 Painel (token do login no header `Authorization: Bearer <token>`):
   GET  /api/eu                  dados do usuário logado
+  POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
   POST /api/senha               troca a própria senha                   (operador, gestor)
+  POST /api/sair                encerra todas as sessões do usuário     (operador, gestor)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/dispositivos        sensores da empresa                     (operador, gestor)
   POST/PUT/DELETE /api/dispositivos[/{id}]  registra, troca a chave, remove (gestor)
@@ -36,7 +38,9 @@ from datetime import datetime, timezone
 import azure.functions as func
 from azure.cosmos import CosmosClient, exceptions
 
+import assistente
 import chat
+import limites
 from cadastros import (
     SENHA_MIN,
     validar_dispositivo,
@@ -56,16 +60,20 @@ from contrato import (
     mesma_leitura,
     validar,
 )
+from limites import Limites, ip_do_cliente
 from seguranca import (
+    OPERACOES_DE_SUCESSO,
     bloqueado_ate,
     conferir_chave,
     conferir_senha,
+    espera_para,
     gerar_chave_dispositivo,
     gerar_hash,
     gerar_token,
     hash_chave,
     ler_token,
-    registrar_falha,
+    mascarar_email,
+    operacoes_de_falha,
     token_do_cabecalho,
 )
 
@@ -79,8 +87,20 @@ TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
 SEP = "~"
 
-# Por instância: 10 perguntas por minuto por IP.
-LIMITE_CHAT = chat.LimiteDeUso(maximo=10, janela_s=60)
+# Limites de uso (contados no Cosmos, valem somando todas as instâncias):
+# chat do site: 10 perguntas por minuto por IP e 2000 por dia no total;
+# assistente do painel: 15 por minuto por usuário e 300 por dia por empresa.
+CHAT_POR_MINUTO = 10
+CHAT_POR_DIA = 2000
+ASSISTENTE_POR_MINUTO = 15
+ASSISTENTE_POR_DIA = 300
+
+# Login: até 20 tentativas erradas por IP a cada 15 minutos.
+LOGIN_FALHAS_POR_IP = 20
+LOGIN_JANELA_IP_S = 15 * 60
+MSG_LOGIN_RECUSADO = ("e-mail ou senha incorretos. Se errou várias vezes, "
+                      "aguarde alguns minutos.")
+MSG_IP_EM_ESPERA = "muitas tentativas de login erradas. Aguarde alguns minutos."
 
 _banco = None
 _containers = {}
@@ -95,6 +115,10 @@ def container(nome=None):
             _banco = cliente.get_database_client(os.getenv("COSMOS_DATABASE", "coldtrack"))
         _containers[nome] = _banco.get_container_client(nome)
     return _containers[nome]
+
+
+# Contadores dos limites, no container `limites` (sem ele, na memória da instância).
+LIMITES = Limites(lambda: container(os.getenv("LIMITES_CONTAINER", "limites")))
 
 
 def ler(nome, item_id):
@@ -137,7 +161,8 @@ def autorizar(req, perfis):
             or usuario.get("empresaId") != carga["emp"]
             or usuario.get("sessao", 0) != carga.get("ver", 0)):
         return None, resposta({"erros": ["faça login para continuar"]}, 401)
-    if usuario["perfil"] not in perfis:
+    # Cadastro sem perfil ou sem empresa (dado quebrado) nega: na dúvida, nunca libera.
+    if usuario.get("perfil") not in perfis or not usuario.get("empresaId"):
         return None, resposta({"erros": ["seu perfil não tem acesso a esta ação"]}, 403)
     return usuario, None
 
@@ -264,11 +289,35 @@ def empresas(req: func.HttpRequest) -> func.HttpResponse:
         "id": empresa_id, "nome": doc["empresa"],
         "criadaEm": datetime.now(timezone.utc).isoformat(),
     })
-    logging.info("empresa %s criada por %s", empresa_id, usuario["id"])
+    logging.info("empresa %s criada por %s", empresa_id, mascarar_email(usuario["id"]))
 
     token = gerar_token(usuario, os.environ["JWT_SECRET"])
     return resposta({"token": token,
                      "usuario": {**publico(usuario), "empresa": doc["empresa"]}}, 201)
+
+
+def _patch_usuario(usuario_id, operacoes):
+    """Muda só os campos pedidos do usuário (patch atômico do Cosmos).
+
+    Nunca regrava o documento inteiro: uma troca de senha ou de sessão feita por
+    outra chamada no meio do caminho não é desfeita. Devolve o documento
+    atualizado, ou None se o usuário não existe mais.
+    """
+    try:
+        return container("usuarios").patch_item(usuario_id, partition_key=usuario_id,
+                                                 patch_operations=operacoes)
+    except exceptions.CosmosResourceNotFoundError:
+        return None
+
+
+def _registrar_falha(usuario, agora=None):
+    """Conta a senha errada e, da 5ª em diante, põe a conta em espera crescente."""
+    agora = time.time() if agora is None else agora
+    doc = _patch_usuario(usuario["id"], operacoes_de_falha(usuario, agora))
+    espera = espera_para(doc.get("falhas", 0)) if doc else 0
+    if espera:
+        _patch_usuario(usuario["id"], [{"op": "set", "path": "/bloqueadoAte",
+                                        "value": int(agora + espera)}])
 
 
 @app.route(route="login", methods=["POST"])
@@ -280,30 +329,36 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
     email = str((dados or {}).get("email", "")).strip().lower()
     senha = str((dados or {}).get("senha", ""))
 
+    # Um mesmo IP com falhas demais para de tentar, em qualquer conta: segura
+    # quem tenta senhas em massa e quem tenta deixar várias contas em espera.
+    chave_ip = f"login:ip:{ip_do_cliente(req.headers)}"
+    if LIMITES.total(chave_ip, LOGIN_JANELA_IP_S) >= LOGIN_FALHAS_POR_IP:
+        logging.warning("login recusado: IP com %d falhas ou mais", LOGIN_FALHAS_POR_IP)
+        return resposta({"erros": [MSG_IP_EM_ESPERA]}, 429)
+
     usuario = ler("usuarios", email) if email else None
 
-    # Mesma mensagem e mesmo custo para e-mail inexistente e senha errada:
-    # sem o hash de mentira, a resposta mais rápida revelaria quem tem conta.
+    # Mesmo custo para e-mail inexistente e senha errada: sem o hash de mentira,
+    # a resposta mais rápida revelaria quem tem conta.
     senha_ok = conferir_senha(senha, usuario["senhaHash"] if usuario else HASH_FALSO)
+    em_espera = usuario is not None and bloqueado_ate(usuario) > 0
 
-    if usuario is not None:
-        fim = bloqueado_ate(usuario)
-        if fim:
-            minutos = max(1, round((fim - time.time()) / 60))
-            return resposta({"erros": [
-                f"muitas tentativas erradas. Tente de novo em {minutos} min."]}, 429)
-        if not senha_ok:
-            container("usuarios").upsert_item(registrar_falha(usuario))
-        elif usuario.get("falhas"):
-            usuario["falhas"] = 0
-            container("usuarios").upsert_item(usuario)
+    if usuario is not None and senha_ok and not em_espera:
+        if usuario.get("falhas") or usuario.get("bloqueadoAte"):
+            usuario = _patch_usuario(usuario["id"], OPERACOES_DE_SUCESSO) or usuario
+        token = gerar_token(usuario, os.environ["JWT_SECRET"])
+        return resposta({"token": token, "usuario": com_empresa(usuario)})
 
-    if usuario is None or not senha_ok:
-        logging.warning("login recusado para %s", email or "(vazio)")
-        return resposta({"erros": ["e-mail ou senha incorretos"]}, 401)
-
-    token = gerar_token(usuario, os.environ["JWT_SECRET"])
-    return resposta({"token": token, "usuario": com_empresa(usuario)})
+    # E-mail inexistente, senha errada e conta em espera recebem a mesma resposta:
+    # a API não revela quem tem conta nem quem está em espera. Na espera a
+    # tentativa não conta para a conta (senão um terceiro estenderia a espera
+    # para sempre), mas conta para o IP.
+    LIMITES.contar(chave_ip, LOGIN_JANELA_IP_S)
+    if usuario is not None and not em_espera:
+        _registrar_falha(usuario)
+    logging.warning("login recusado para %s%s", mascarar_email(email),
+                    " (conta em espera)" if em_espera else "")
+    return resposta({"erros": [MSG_LOGIN_RECUSADO]}, 401)
 
 
 @app.route(route="eu", methods=["GET"])
@@ -327,12 +382,27 @@ def senha(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"erros": ["atual: senha atual incorreta"]}, 400)
 
     # Nova versão da sessão: tokens emitidos antes (outros aparelhos) param de valer.
-    usuario["senhaHash"] = gerar_hash(doc["nova"])
-    usuario["sessao"] = usuario.get("sessao", 0) + 1
-    container("usuarios").upsert_item(usuario)
-    logging.info("%s trocou a senha", usuario["id"])
-    return resposta({"token": gerar_token(usuario, os.environ["JWT_SECRET"]),
-                     "usuario": com_empresa(usuario)})
+    # Patch: grava só a senha e a sessão, sem regravar o resto do cadastro.
+    atualizado = _patch_usuario(usuario["id"], [
+        {"op": "set", "path": "/senhaHash", "value": gerar_hash(doc["nova"])},
+        {"op": "incr", "path": "/sessao", "value": 1},
+    ])
+    if atualizado is None:
+        return resposta({"erros": ["faça login para continuar"]}, 401)
+    logging.info("%s trocou a senha", mascarar_email(usuario["id"]))
+    return resposta({"token": gerar_token(atualizado, os.environ["JWT_SECRET"]),
+                     "usuario": com_empresa(atualizado)})
+
+
+@app.route(route="sair", methods=["POST"])
+def sair(req: func.HttpRequest) -> func.HttpResponse:
+    """Sai de todos os aparelhos: sobe a versão da sessão e todo token emitido morre."""
+    usuario, erro = autorizar(req, TODOS)
+    if erro:
+        return erro
+    _patch_usuario(usuario["id"], [{"op": "incr", "path": "/sessao", "value": 1}])
+    logging.info("%s saiu (sessões encerradas)", mascarar_email(usuario["id"]))
+    return func.HttpResponse(status_code=204)
 
 
 # ------------------------------------------------------------ chat do site
@@ -342,7 +412,8 @@ def chat_site(req: func.HttpRequest) -> func.HttpResponse:
     # Sem configuração ou com a IA fora do ar: 503, e o site cai no FAQ.
     if not chat.configurado():
         return resposta({"erros": ["chat indisponível"]}, 503)
-    if not LIMITE_CHAT.permitir(chat.ip_do_cliente(req.headers)):
+    ip = ip_do_cliente(req.headers)
+    if not LIMITES.permitir(f"chat:ip:{ip}", CHAT_POR_MINUTO, limites.MINUTO):
         return resposta({"erros": ["muitas perguntas seguidas. Tente de novo em 1 min."]}, 429)
 
     dados, erro = corpo_json(req)
@@ -351,6 +422,11 @@ def chat_site(req: func.HttpRequest) -> func.HttpResponse:
     erros, doc = chat.validar_chat(dados)
     if erros:
         return resposta({"erros": erros}, 400)
+    # Teto do dia para o site todo: segura o custo da IA se muitos IPs perguntarem.
+    if not LIMITES.permitir("chat:dia", CHAT_POR_DIA, limites.DIA):
+        logging.warning("chat: limite diário de %d perguntas atingido", CHAT_POR_DIA)
+        return resposta({"erros": ["o chat atingiu o limite de perguntas de hoje. "
+                                   "Tente de novo amanhã."]}, 429)
 
     inicio = time.monotonic()
     try:
@@ -365,11 +441,114 @@ def chat_site(req: func.HttpRequest) -> func.HttpResponse:
     return resposta(corpo)
 
 
+# ------------------------------------------------------------ assistente do painel
+
+class DadosDaEmpresa:
+    """Consultas de leitura presas a uma empresa, para o retrato do assistente.
+
+    São as mesmas das rotas GET do painel (lista, ler, consultar_leituras), com
+    a empresa do token: o assistente não tem como pedir dados de outra.
+    """
+
+    def __init__(self, empresa):
+        self._empresa = empresa
+
+    def empresa(self):
+        return ler("empresas", self._empresa)
+
+    def veiculos(self):
+        return [id_externo(d) for d in lista("veiculos", self._empresa)]
+
+    def dispositivos(self):
+        return lista("dispositivos", self._empresa, "c.id, c.descricao, c.criadoEm")
+
+    def viagens(self):
+        return [id_externo(d) for d in lista("viagens", self._empresa)]
+
+    def usuarios(self):
+        return lista("usuarios", self._empresa, "c.id, c.nome, c.perfil")
+
+    def leituras(self, device, limite, desde=None):
+        return consultar_leituras(device, self._empresa, limite, desde)
+
+
+@app.route(route="assistente", methods=["POST"])
+def assistente_painel(req: func.HttpRequest) -> func.HttpResponse:
+    usuario, erro = autorizar(req, TODOS)
+    if erro:
+        return erro
+    if not chat.configurado():
+        return resposta({"erros": ["assistente indisponível"]}, 503)
+    if not LIMITES.permitir(f"assistente:usuario:{usuario['id']}", ASSISTENTE_POR_MINUTO,
+                            limites.MINUTO):
+        return resposta({"erros": ["muitas perguntas seguidas. Tente de novo em 1 min."]}, 429)
+
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    erros, doc = chat.validar_chat(dados)
+    if erros:
+        return resposta({"erros": erros}, 400)
+    if not LIMITES.permitir(f"assistente:empresa:{usuario['empresaId']}", ASSISTENTE_POR_DIA,
+                            limites.DIA):
+        return resposta({"erros": ["sua empresa atingiu o limite de perguntas de hoje "
+                                   "ao assistente. Tente de novo amanhã."]}, 429)
+
+    inicio = time.monotonic()
+    try:
+        retrato = assistente.montar_dados(usuario, DadosDaEmpresa(usuario["empresaId"]))
+        corpo = assistente.responder(doc["pergunta"], doc["historico"], retrato)
+    except Exception as e:  # banco ou IA fora do ar: 503, o painel avisa
+        # Nem a pergunta nem os dados vão para o log: só o tamanho.
+        logging.warning("assistente: falha (%s) com pergunta de %d caracteres",
+                        type(e).__name__, len(doc["pergunta"]))
+        return resposta({"erros": ["assistente indisponível"]}, 503)
+    logging.info("assistente: %s perguntou (%d caracteres), %d fontes, %.1f s",
+                 mascarar_email(usuario["id"]), len(doc["pergunta"]), len(corpo["fontes"]),
+                 time.monotonic() - inicio)
+    return resposta(corpo)
+
+
 # ------------------------------------------------------------ leituras
 
 def _dispositivo_da_empresa(device, empresa):
     disp = ler("dispositivos", device.lower()) if device else None
     return disp if disp and disp.get("empresaId") == empresa else None
+
+
+def consultar_leituras(device, empresa, limite, desde=None, status=None):
+    """Leituras de um sensor da empresa, da mais nova para a mais antiga.
+
+    `desde` é epoch UTC em segundos; `status`, lista de status aceitos.
+    Usada por GET /leituras e pelo assistente do painel.
+    """
+    condicoes = ["c.deviceId = @device", "c.empresaId = @empresa"]
+    parametros = [
+        {"name": "@limite", "value": limite},
+        {"name": "@device", "value": device},
+        {"name": "@empresa", "value": empresa},
+    ]
+    if desde is not None:
+        condicoes.append("c.medidoEm >= @desde")
+        parametros.append({
+            "name": "@desde",
+            "value": datetime.fromtimestamp(desde, timezone.utc).isoformat(),
+        })
+    if status is not None:
+        condicoes.append("ARRAY_CONTAINS(@status, c.status)")
+        parametros.append({"name": "@status", "value": status})
+    return list(
+        container().query_items(
+            query=(
+                "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
+                "c.perfil, c.status, c.medidoEm, c.recebidoEm FROM c WHERE "
+                + " AND ".join(condicoes)
+                + " ORDER BY c.medidoEm DESC"
+            ),
+            parameters=parametros,
+            partition_key=device,
+        )
+    )
 
 
 @app.route(route="leituras", methods=["GET"])
@@ -394,34 +573,8 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
     if erros:
         return resposta({"erros": erros}, 400)
 
-    condicoes = ["c.deviceId = @device", "c.empresaId = @empresa"]
-    parametros = [
-        {"name": "@limite", "value": limite},
-        {"name": "@device", "value": device},
-        {"name": "@empresa", "value": usuario["empresaId"]},
-    ]
-    if filtros["desde"] is not None:
-        condicoes.append("c.medidoEm >= @desde")
-        parametros.append({
-            "name": "@desde",
-            "value": datetime.fromtimestamp(filtros["desde"], timezone.utc).isoformat(),
-        })
-    if filtros["status"] is not None:
-        condicoes.append("ARRAY_CONTAINS(@status, c.status)")
-        parametros.append({"name": "@status", "value": filtros["status"]})
-
-    itens = list(
-        container().query_items(
-            query=(
-                "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
-                "c.perfil, c.status, c.medidoEm, c.recebidoEm FROM c WHERE "
-                + " AND ".join(condicoes)
-                + " ORDER BY c.medidoEm DESC"
-            ),
-            parameters=parametros,
-            partition_key=device,
-        )
-    )
+    itens = consultar_leituras(device, usuario["empresaId"], limite,
+                               filtros["desde"], filtros["status"])
     return resposta({"deviceId": device, "leituras": itens})
 
 
@@ -457,7 +610,7 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
             container("dispositivos").create_item(doc)
         except exceptions.CosmosResourceExistsError:
             return resposta({"erros": [f"o ID {doc['id']} já está em uso; escolha outro"]}, 409)
-        logging.info("%s registrou o dispositivo %s", gestor["id"], doc["id"])
+        logging.info("%s registrou o dispositivo %s", mascarar_email(gestor["id"]), doc["id"])
         # A chave aparece só agora: o banco guarda apenas o hash.
         return resposta({"id": doc["id"], "descricao": doc["descricao"],
                          "criadoEm": doc["criadoEm"], "chave": chave}, 201)
@@ -471,7 +624,8 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         chave = gerar_chave_dispositivo()
         disp["chaveHash"] = hash_chave(chave)
         container("dispositivos").upsert_item(disp)
-        logging.info("%s trocou a chave do dispositivo %s", gestor["id"], item_id)
+        logging.info("%s trocou a chave do dispositivo %s", mascarar_email(gestor["id"]),
+                     item_id)
         return resposta({"id": item_id, "chave": chave})
 
     em_uso = list(container("veiculos").query_items(
@@ -483,7 +637,7 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"erros": [f"o veículo {codigo} usa este sensor; "
                                    "remova ou troque o veículo antes"]}, 409)
     container("dispositivos").delete_item(item_id, partition_key=item_id)
-    logging.info("%s removeu o dispositivo %s", gestor["id"], item_id)
+    logging.info("%s removeu o dispositivo %s", mascarar_email(gestor["id"]), item_id)
     return func.HttpResponse(status_code=204)
 
 
@@ -511,7 +665,7 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
                                         partition_key=id_interno(empresa, item_id))
         except exceptions.CosmosResourceNotFoundError:
             return resposta({"erros": ["não encontrado"]}, 404)
-        logging.info("%s removeu %s/%s", usuario["id"], nome, item_id)
+        logging.info("%s removeu %s/%s", mascarar_email(usuario["id"]), nome, item_id)
         return func.HttpResponse(status_code=204)
 
     dados, erro = corpo_json(req)
@@ -538,7 +692,7 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
                                      "empresaId": empresa})
     except exceptions.CosmosResourceExistsError:
         return resposta({"erros": [f"já existe um cadastro com id {doc['id']}"]}, 409)
-    logging.info("%s criou %s/%s", usuario["id"], nome, doc["id"])
+    logging.info("%s criou %s/%s", mascarar_email(usuario["id"]), nome, doc["id"])
     return resposta(doc, 201)
 
 
@@ -601,7 +755,8 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
         if item_id == gestor["id"]:
             return resposta({"erros": ["você não pode remover o próprio usuário"]}, 400)
         container("usuarios").delete_item(item_id, partition_key=item_id)
-        logging.info("%s removeu o usuário %s", gestor["id"], item_id)
+        logging.info("%s removeu o usuário %s", mascarar_email(gestor["id"]),
+                     mascarar_email(item_id))
         return func.HttpResponse(status_code=204)
 
     dados, erro = corpo_json(req)
@@ -609,16 +764,26 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
         return erro
 
     if metodo == "PUT":
+        # A própria senha só muda com a senha atual (POST /senha): um token
+        # roubado não basta para tomar a conta do gestor.
+        if item_id == gestor["id"]:
+            return resposta({"erros": [
+                "para trocar a própria senha use Configurações → Trocar senha"]}, 400)
         # Gestor redefine a senha de quem esqueceu: derruba as sessões abertas
-        # e libera a conta se estava bloqueada.
+        # e tira a conta da espera do login.
         nova = (dados or {}).get("senha") if isinstance(dados, dict) else None
         if not isinstance(nova, str) or not SENHA_MIN <= len(nova) <= 128:
             return resposta({"erros": [f"senha: no mínimo {SENHA_MIN} caracteres"]}, 400)
-        alvo.update({"senhaHash": gerar_hash(nova), "sessao": alvo.get("sessao", 0) + 1,
-                     "falhas": 0, "bloqueadoAte": 0})
-        container("usuarios").upsert_item(alvo)
-        logging.info("%s redefiniu a senha de %s", gestor["id"], item_id)
-        return resposta(publico(alvo))
+        atualizado = _patch_usuario(item_id, [
+            {"op": "set", "path": "/senhaHash", "value": gerar_hash(nova)},
+            {"op": "incr", "path": "/sessao", "value": 1},
+            *OPERACOES_DE_SUCESSO,
+        ])
+        if atualizado is None:
+            return resposta({"erros": ["não encontrado"]}, 404)
+        logging.info("%s redefiniu a senha de %s", mascarar_email(gestor["id"]),
+                     mascarar_email(item_id))
+        return resposta(publico(atualizado))
 
     erros, doc = validar_usuario(dados)
     if erros:
@@ -630,5 +795,6 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
         container("usuarios").create_item(doc)
     except exceptions.CosmosResourceExistsError:
         return resposta({"erros": ["já existe um usuário com esse e-mail"]}, 409)
-    logging.info("%s criou o usuário %s (%s)", gestor["id"], doc["id"], doc["perfil"])
+    logging.info("%s criou o usuário %s (%s)", mascarar_email(gestor["id"]),
+                 mascarar_email(doc["id"]), doc["perfil"])
     return resposta(publico(doc), 201)

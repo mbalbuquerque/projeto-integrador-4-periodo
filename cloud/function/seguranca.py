@@ -5,7 +5,10 @@
 - Token: JWT HS256 assinado com o segredo da app setting JWT_SECRET, válido
   por 8 horas, com o e-mail (sub), o nome, o perfil, a empresa (emp) e a versão
   da sessão (ver). Trocar a senha sobe a versão e derruba os tokens antigos.
-- Login: 5 senhas erradas seguidas bloqueiam a conta por 15 minutos.
+- Login: a partir da 5ª senha errada seguida, a conta entra em espera de 1 min,
+  que dobra a cada nova falha (2, 4, 8 min) até o teto de 15 min. Durante a
+  espera nem a senha certa entra, e as tentativas não aumentam a espera.
+  Falhas com mais de 24 h são esquecidas.
 - Chave de dispositivo: 32 bytes aleatórios; o banco guarda só o SHA-256.
 
 Não depende do Azure: testado com `python -m unittest`.
@@ -23,7 +26,9 @@ import jwt
 PERFIS = ("operador", "gestor")
 VALIDADE_TOKEN_S = 8 * 3600
 MAX_FALHAS = 5
-BLOQUEIO_S = 15 * 60
+ESPERA_BASE_S = 60
+ESPERA_MAX_S = 15 * 60
+ESQUECER_FALHAS_S = 24 * 3600
 
 # Custo do scrypt: ~16 MB de memória por tentativa, caro para ataque de força bruta.
 N, R, P = 2 ** 14, 8, 1
@@ -81,25 +86,50 @@ def token_do_cabecalho(valor):
     return valor[len("Bearer "):].strip() or None
 
 
-# ------------------------------------------------------------ bloqueio do login
+# ------------------------------------------------------------ espera do login
 
 def bloqueado_ate(usuario, agora=None):
-    """Epoch até quando a conta está bloqueada, ou 0 se está liberada."""
+    """Epoch até quando a conta está em espera, ou 0 se está liberada."""
     agora = time.time() if agora is None else agora
     fim = usuario.get("bloqueadoAte", 0) or 0
     return fim if fim > agora else 0
 
 
-def registrar_falha(usuario, agora=None):
-    """Conta uma senha errada; na quinta seguida, bloqueia por 15 minutos."""
+def espera_para(falhas):
+    """Segundos de espera depois de `falhas` senhas erradas seguidas (0 = sem espera)."""
+    if falhas < MAX_FALHAS:
+        return 0
+    return min(ESPERA_BASE_S * 2 ** min(falhas - MAX_FALHAS, 10), ESPERA_MAX_S)
+
+
+def operacoes_de_falha(usuario, agora=None):
+    """Operações de patch do Cosmos que contam uma senha errada.
+
+    Só mexem em `falhas` e `ultimaFalha`: um patch não sobrescreve a senha nem a
+    sessão, mesmo que elas tenham mudado depois da leitura. A soma é atômica no
+    banco (`incr`), então duas tentativas ao mesmo tempo contam duas.
+    """
     agora = time.time() if agora is None else agora
-    falhas = usuario.get("falhas", 0) + 1
-    if falhas >= MAX_FALHAS:
-        usuario["falhas"] = 0
-        usuario["bloqueadoAte"] = int(agora + BLOQUEIO_S)
-    else:
-        usuario["falhas"] = falhas
-    return usuario
+    recente = agora - (usuario.get("ultimaFalha") or 0) < ESQUECER_FALHAS_S
+    contar = ({"op": "incr", "path": "/falhas", "value": 1} if recente
+              else {"op": "set", "path": "/falhas", "value": 1})
+    return [contar, {"op": "set", "path": "/ultimaFalha", "value": int(agora)}]
+
+
+OPERACOES_DE_SUCESSO = [{"op": "set", "path": "/falhas", "value": 0},
+                        {"op": "set", "path": "/bloqueadoAte", "value": 0}]
+
+
+# ------------------------------------------------------------ logs
+
+def mascarar_email(email):
+    """'ana.souza@vale.com' -> 'a***@vale.com': o log mostra o domínio, não a pessoa."""
+    if not isinstance(email, str) or not email:
+        return "(vazio)"
+    nome, arroba, dominio = email.partition("@")
+    if not arroba:
+        return email[:1] + "***"
+    return f"{nome[:1]}***@{dominio}"
 
 
 # ------------------------------------------------------------ chave de dispositivo
