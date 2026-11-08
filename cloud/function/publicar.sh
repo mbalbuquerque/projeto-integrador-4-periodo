@@ -15,10 +15,11 @@ python -m unittest
 
 echo "2/3 Pacote"
 rm -rf __pycache__ publicar.zip
+# A lista de arquivos e a mesma do workflow publicar-api.yml: pacote.txt.
 python - <<'PY'
 import zipfile
-arquivos = ["function_app.py", "contrato.py", "seguranca.py", "cadastros.py",
-            "host.json", "requirements.txt"]
+with open("pacote.txt", encoding="utf-8") as f:
+    arquivos = [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
 with zipfile.ZipFile("publicar.zip", "w") as z:
     for nome in arquivos:
         z.write(nome)
