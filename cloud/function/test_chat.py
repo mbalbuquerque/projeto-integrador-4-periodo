@@ -220,6 +220,13 @@ class TestRota(unittest.TestCase):
         self.assertEqual(corpo["fontes"], [])
         self.assertEqual([c[0] for c in self.falso.chamadas], ["chat"])
 
+    def test_recusa_sem_contexto_zera_fontes(self):
+        self.falso._texto = "[SEM_CONTEXTO] Não sei responder; use o WhatsApp."
+        status, corpo = self.chamar({"pergunta": "receita de bolo?"})
+        self.assertEqual(status, 200)
+        self.assertEqual(corpo["resposta"], "Não sei responder; use o WhatsApp.")
+        self.assertEqual(corpo["fontes"], [])
+
     def test_resposta_vazia_do_modelo(self):
         self.falso._texto = None
         status, corpo = self.chamar({"pergunta": "oi"})
