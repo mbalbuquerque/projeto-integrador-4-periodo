@@ -57,7 +57,8 @@ class TestToken(unittest.TestCase):
         token = gerar_token({**USUARIO, "perfil": "operador"}, SEGREDO)
         cabecalho, carga, assinatura = token.split(".")
         falso = jwt.encode({"sub": USUARIO["id"], "perfil": "gestor",
-                            "exp": int(time.time()) + 60}, "chute", algorithm="HS256")
+                            "exp": int(time.time()) + 60},
+                           "chute-de-segredo-com-mais-de-32-bytes", algorithm="HS256")
         self.assertIsNone(ler_token(falso, SEGREDO))
         self.assertIsNone(ler_token(f"{cabecalho}.{carga}x.{assinatura}", SEGREDO))
 
