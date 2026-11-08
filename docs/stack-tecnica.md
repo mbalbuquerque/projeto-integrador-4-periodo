@@ -210,7 +210,7 @@ Organização do código (`cloud/function/`):
 | `contrato.py` (perfis) | Perfis de carga e faixas de temperatura |
 | `seguranca.py` | Hash de senha, token de acesso, bloqueio do login, chave de sensor |
 | `cadastros.py` | Validação de empresas, usuários, sensores, veículos e viagens |
-| `migrar_multiempresa.py` | Migração única dos dados do piloto para o modelo com empresas |
+| `scripts/migrar_multiempresa.py` | Migração única dos dados do piloto para o modelo com empresas |
 | `test_contrato.py`, `test_seguranca.py` | 53 testes automatizados |
 
 ## 7. Painel web

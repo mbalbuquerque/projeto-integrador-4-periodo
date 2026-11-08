@@ -88,5 +88,5 @@ esta pasta. Manual: `bash publicar.sh`.
 
 | script | uso |
 |---|---|
-| `criar_usuario.py` | cria um usuário direto no banco numa empresa existente |
-| `migrar_multiempresa.py` | migração única dos dados do piloto para o modelo com empresas (já executada em 26/09/2026) |
+| `scripts/criar_usuario.py` | cria um usuário direto no banco numa empresa existente |
+| `scripts/migrar_multiempresa.py` | migração única dos dados do piloto para o modelo com empresas (já executada em 26/09/2026) |
