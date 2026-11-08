@@ -3,9 +3,9 @@
 O caminho normal é o painel: a empresa se cadastra em cadastro.html e o gestor
 cria os demais usuários em Configurações.
 
-Uso:
+Uso (a partir de cloud/function):
   set COSMOS_CONNECTION=<string de conexão do Cosmos>
-  python criar_usuario.py <email> "<nome>" <operador|gestor> <id da empresa>
+  python scripts/criar_usuario.py <email> "<nome>" <operador|gestor> <id da empresa>
   (a senha é pedida no terminal, sem aparecer na tela)
 """
 
@@ -15,8 +15,11 @@ import sys
 
 from azure.cosmos import CosmosClient, exceptions
 
-from cadastros import validar_usuario
-from seguranca import gerar_hash
+# Os módulos da API ficam na pasta acima (cloud/function).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from cadastros import validar_usuario  # noqa: E402
+from seguranca import gerar_hash  # noqa: E402
 
 
 def main():

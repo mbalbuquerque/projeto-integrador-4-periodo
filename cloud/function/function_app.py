@@ -7,6 +7,7 @@ Público:
   POST /api/empresas            cadastro de empresa nova + primeiro gestor
   POST /api/login               e-mail e senha -> token de 8 h
   GET  /api/perfis              perfis de carga e faixas de temperatura
+  POST /api/chat                pergunta ao assistente do site (Azure OpenAI)
 
 Painel (token do login no header `Authorization: Bearer <token>`):
   GET  /api/eu                  dados do usuário logado
@@ -35,13 +36,38 @@ from datetime import datetime, timezone
 import azure.functions as func
 from azure.cosmos import CosmosClient, exceptions
 
-from cadastros import (validar_dispositivo, validar_empresa, validar_troca_senha,
-                       validar_usuario, validar_veiculo, validar_viagem, SENHA_MIN)
-from contrato import (PERFIL_PADRAO, PERFIS_CARGA, classificar, faixa, id_leitura, mesma_leitura,
-                      filtros_de_leitura, validar)
-from seguranca import (bloqueado_ate, conferir_chave, conferir_senha,
-                       gerar_chave_dispositivo, gerar_hash, gerar_token,
-                       hash_chave, ler_token, registrar_falha, token_do_cabecalho)
+import chat
+from cadastros import (
+    SENHA_MIN,
+    validar_dispositivo,
+    validar_empresa,
+    validar_troca_senha,
+    validar_usuario,
+    validar_veiculo,
+    validar_viagem,
+)
+from contrato import (
+    PERFIL_PADRAO,
+    PERFIS_CARGA,
+    classificar,
+    faixa,
+    filtros_de_leitura,
+    id_leitura,
+    mesma_leitura,
+    validar,
+)
+from seguranca import (
+    bloqueado_ate,
+    conferir_chave,
+    conferir_senha,
+    gerar_chave_dispositivo,
+    gerar_hash,
+    gerar_token,
+    hash_chave,
+    ler_token,
+    registrar_falha,
+    token_do_cabecalho,
+)
 
 # Quem confere o acesso é o próprio código (token ou chave do dispositivo).
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -52,6 +78,9 @@ HASH_FALSO = gerar_hash(uuid.uuid4().hex)
 TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
 SEP = "~"
+
+# Por instância: 10 perguntas por minuto por IP.
+LIMITE_CHAT = chat.LimiteDeUso(maximo=10, janela_s=60)
 
 _banco = None
 _containers = {}
@@ -196,9 +225,11 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         if mesma_leitura(gravada, leitura):
             # Reenvio depois de resposta perdida: já está gravada, o sensor tira da fila.
             return resposta({"id": gravada["id"], "duplicada": True}, 200)
-        logging.warning("telemetria: %s já gravada com outros valores (relógio repetido ou adulteração)",
+        logging.warning("telemetria: %s já gravada com outros valores "
+                        "(relógio repetido ou adulteração)",
                         leitura["id"])
-        return resposta({"erros": ["já existe leitura deste sensor neste horário, com outros valores"]}, 409)
+        return resposta(
+            {"erros": ["já existe leitura deste sensor neste horário, com outros valores"]}, 409)
     # A faixa volta na resposta: o sensor acende o LED certo para a carga do veículo.
     return resposta({"id": leitura["id"], "status": leitura["status"],
                      "perfil": perfil, "faixa": faixa(perfil)}, 201)
@@ -304,6 +335,36 @@ def senha(req: func.HttpRequest) -> func.HttpResponse:
                      "usuario": com_empresa(usuario)})
 
 
+# ------------------------------------------------------------ chat do site
+
+@app.route(route="chat", methods=["POST"])
+def chat_site(req: func.HttpRequest) -> func.HttpResponse:
+    # Sem configuração ou com a IA fora do ar: 503, e o site cai no FAQ.
+    if not chat.configurado():
+        return resposta({"erros": ["chat indisponível"]}, 503)
+    if not LIMITE_CHAT.permitir(chat.ip_do_cliente(req.headers)):
+        return resposta({"erros": ["muitas perguntas seguidas. Tente de novo em 1 min."]}, 429)
+
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    erros, doc = chat.validar_chat(dados)
+    if erros:
+        return resposta({"erros": erros}, 400)
+
+    inicio = time.monotonic()
+    try:
+        corpo = chat.responder(doc["pergunta"], doc["historico"])
+    except Exception as e:  # qualquer falha da IA (rede, cota, filtro) vira 503
+        # O texto da pergunta não vai para o log: só o tamanho.
+        logging.warning("chat: falha da IA (%s) com pergunta de %d caracteres",
+                        type(e).__name__, len(doc["pergunta"]))
+        return resposta({"erros": ["chat indisponível"]}, 503)
+    logging.info("chat: pergunta de %d caracteres, %d fontes, %.1f s",
+                 len(doc["pergunta"]), len(corpo["fontes"]), time.monotonic() - inicio)
+    return resposta(corpo)
+
+
 # ------------------------------------------------------------ leituras
 
 def _dispositivo_da_empresa(device, empresa):
@@ -373,7 +434,8 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
 
     if metodo == "GET":
         usuario, erro = autorizar(req, TODOS)
-        return erro or resposta({"dispositivos": lista("dispositivos", usuario["empresaId"], campos)})
+        return erro or resposta(
+            {"dispositivos": lista("dispositivos", usuario["empresaId"], campos)})
 
     gestor, erro = autorizar(req, GESTOR)
     if erro:
@@ -418,7 +480,8 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         enable_cross_partition_query=True))
     if em_uso:
         codigo = em_uso[0].split(SEP, 1)[-1]
-        return resposta({"erros": [f"o veículo {codigo} usa este sensor; remova ou troque o veículo antes"]}, 409)
+        return resposta({"erros": [f"o veículo {codigo} usa este sensor; "
+                                   "remova ou troque o veículo antes"]}, 409)
     container("dispositivos").delete_item(item_id, partition_key=item_id)
     logging.info("%s removeu o dispositivo %s", gestor["id"], item_id)
     return func.HttpResponse(status_code=204)

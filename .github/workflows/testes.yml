@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   api:
-    name: API (testes de contrato e segurança)
+    name: API (lint, testes de contrato e segurança)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -27,6 +27,11 @@ jobs:
 
       - name: Instalar dependências
         run: pip install -r requirements.txt
+
+      - name: Lint (ruff, regras em pyproject.toml)
+        run: |
+          pip install ruff==0.17.4
+          ruff check .
 
       - name: Rodar testes
         run: python -m unittest -v
@@ -48,16 +53,17 @@ jobs:
           arduino-cli lib install "DHT sensor library" "Adafruit Unified Sensor"
 
       # secrets.h real nunca está no repositório; o modelo basta para compilar.
+      # A pasta precisa ter o mesmo nome do .ino (coldtrack/coldtrack.ino).
       - name: Preparar sketch
         run: |
-          mkdir -p build/sketch
-          cp sketch.ino azure_ca.h build/sketch/
-          cp secrets.example.h build/sketch/secrets.h
+          mkdir -p build/coldtrack
+          cp firmware/coldtrack/coldtrack.ino firmware/coldtrack/azure_ca.h build/coldtrack/
+          cp firmware/coldtrack/secrets.example.h build/coldtrack/secrets.h
 
       - name: Compilar (DHT22, simulação)
-        run: arduino-cli compile --fqbn esp32:esp32:esp32c3 build/sketch
+        run: arduino-cli compile --fqbn esp32:esp32:esp32c3 build/coldtrack
 
       - name: Compilar (DHT11, placa física)
         run: |
-          echo '#define DHT_TYPE DHT11' >> build/sketch/secrets.h
-          arduino-cli compile --fqbn esp32:esp32:esp32c3 build/sketch
+          echo '#define DHT_TYPE DHT11' >> build/coldtrack/secrets.h
+          arduino-cli compile --fqbn esp32:esp32:esp32c3 build/coldtrack

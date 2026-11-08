@@ -5,9 +5,9 @@
 - Registra um dispositivo para cada sensor usado pela frota (e o coldtrack-01) com chave
   própria. As chaves vão para o arquivo indicado, nunca para a tela.
 
-Uso:
+Uso (a partir de cloud/function):
   set COSMOS_CONNECTION=<string de conexão do Cosmos>
-  python migrar_multiempresa.py <arquivo-das-chaves>
+  python scripts/migrar_multiempresa.py <arquivo-das-chaves>
 
 Pode rodar de novo: o que já foi migrado é pulado.
 """
@@ -18,7 +18,10 @@ from datetime import datetime, timezone
 
 from azure.cosmos import CosmosClient, exceptions
 
-from seguranca import gerar_chave_dispositivo, hash_chave
+# Os módulos da API ficam na pasta acima (cloud/function).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from seguranca import gerar_chave_dispositivo, hash_chave  # noqa: E402
 
 EMPRESA = {"id": "coldtrack", "nome": "ColdTrack (demonstração)"}
 SEP = "~"

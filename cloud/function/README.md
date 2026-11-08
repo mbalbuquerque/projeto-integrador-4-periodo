@@ -5,6 +5,8 @@ pela faixa da carga, grava no Azure Cosmos DB e atende o painel (login, cadastro
 Cada empresa só enxerga os próprios dados.
 
 Visão completa (modelo de dados, segurança, publicação): [`docs/stack-tecnica.md`](../../docs/stack-tecnica.md).
+Referência de todas as rotas: [`docs/api.md`](../../docs/api.md). Infraestrutura em Bicep:
+[`infra/`](../../infra/README.md).
 
 ## Recursos no Azure (região Brazil South, resource group `rg-coldtrack`)
 
@@ -13,8 +15,12 @@ Visão completa (modelo de dados, segurança, publicação): [`docs/stack-tecnic
 | Function App (Flex Consumption, Python 3.11) | `func-coldtrack-7319` |
 | Cosmos DB for NoSQL (free tier) | `cosmos-coldtrack-7319` — banco `coldtrack`: `empresas`, `usuarios`, `dispositivos`, `veiculos`, `viagens` (partição `/id`) e `leituras` (partição `/deviceId`) |
 | Storage Account | `stcoldtrack7319` |
+| Azure OpenAI | `aoai-coldtrack-7319` — deploys `gpt-4.1-mini` (resposta do chat) e `text-embedding-3-small` (busca na base) |
 
-App settings: `COSMOS_CONNECTION` e `JWT_SECRET`.
+App settings lidas pelo código: `COSMOS_CONNECTION`, `COSMOS_DATABASE`, `COSMOS_CONTAINER`,
+`JWT_SECRET` e, para o chat, `AOAI_ENDPOINT`, `AOAI_DEPLOY_CHAT`, `AOAI_DEPLOY_EMBED` e
+`AOAI_API_VERSION` (lista completa em [`infra/README.md`](../../infra/README.md)). O chat entra
+no Azure OpenAI pela identidade gerenciada da Function, sem chave guardada.
 
 ## Endpoints
 
@@ -26,6 +32,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `POST /empresas` | pessoa | aberta: cria a empresa e o primeiro gestor |
 | `POST /login` | pessoa | e-mail e senha → token (8 h) |
 | `GET /perfis` | painel | aberta |
+| `POST /chat` | site | aberta: pergunta ao assistente (10 por minuto por IP) |
 | `GET /eu`, `POST /senha` | operador, gestor | `Authorization: Bearer <token>` |
 | `GET /leituras`, `GET /dispositivos`, `GET /veiculos`, `GET /viagens` | operador, gestor | token |
 | `POST /dispositivos`, `PUT/DELETE /dispositivos/{id}` | gestor | token |
@@ -67,26 +74,72 @@ Classificação pelo perfil de carga do veículo que usa o sensor (`contrato.py`
 faixa normal `[min, max]`; até `margem` °C fora é `ATENCAO`; além disso, `CRITICO`.
 Sensor sem veículo usa o perfil demonstrativo (normal até 15 °C, atenção até 20 °C).
 
+### `POST /chat`
+
+Assistente do site com um modelo de linguagem do Azure OpenAI (`chat.py`). A pergunta vira um
+embedding, os 4 trechos mais parecidos de `base_chat.json` (cosseno em Python puro) entram no
+prompt como contexto e o modelo responde em português, só sobre o ColdTrack. Sem
+configuração ou com falha da IA, responde `503` e o site cai no FAQ. Detalhes em
+[`docs/api.md`](../../docs/api.md).
+
 ### `GET /leituras?deviceId=coldtrack-01&limite=50&horas=24&status=ATENCAO,CRITICO`
 
 Leituras de um sensor da empresa, da medição mais recente para a mais antiga. `limite` de 1 a
 500; `horas` (1 a 168) e `status` são opcionais.
 
-## Testes
+## Rodar localmente
+
+Requer Python 3.11 e o [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-functions/functions-run-local) v4.
+
+```bash
+cd cloud/function
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp local.settings.example.json local.settings.json  # preencher COSMOS_CONNECTION e JWT_SECRET
+func start                                          # http://localhost:7071/api
+```
+
+O `local.settings.json` está no `.gitignore`. Usar um banco de desenvolvimento, nunca o de
+produção. Para o chat local, a conta do `az login` precisa do papel "Cognitive Services OpenAI
+User" no recurso do Azure OpenAI: a autenticação por chave está desligada no recurso
+(`AOAI_KEY` só serve para outro recurso que aceite chave).
+
+### Base de conhecimento do chat
+
+```bash
+cd cloud/function
+export AOAI_ENDPOINT=https://aoai-coldtrack-7319.openai.azure.com/
+export AOAI_DEPLOY_EMBED=text-embedding-3-small
+python scripts/gerar_base_chat.py --seco                         # só lista os trechos
+python scripts/gerar_base_chat.py --front ../../../Front-End-pi  # gera e grava base_chat.json
+python -m unittest
+```
+
+Só entram os arquivos listados no script (READMEs, `docs/` e o FAQ do painel); `.specs`,
+`local.settings*`, `secrets.h` e `.txt` nunca são lidos, e trecho com cara de credencial é
+descartado. Os vetores têm 512 dimensões (`chat.DIMENSOES`), iguais na base e na pergunta.
+
+## Testes e lint
 
 ```bash
 cd cloud/function
 python -m unittest -v
+pip install ruff==0.17.4 && ruff check .
 ```
 
 ## Deploy
 
 Automático pelo GitHub Actions (`publicar-api.yml`) a cada push na branch `everson` que altere
-esta pasta. Manual: `bash publicar.sh`.
+esta pasta. Manual: `bash publicar.sh`. Os dois publicam exatamente os arquivos listados em
+`pacote.txt`; o `test_pacote.py` falha se um módulo novo da API ficar de fora. Testes,
+`scripts/` e configuração de lint não são publicados.
 
 ## Scripts de suporte
 
+Ficam em `scripts/` e rodam a partir desta pasta (ex.: `python scripts/criar_usuario.py`).
+
 | script | uso |
 |---|---|
-| `criar_usuario.py` | cria um usuário direto no banco numa empresa existente |
-| `migrar_multiempresa.py` | migração única dos dados do piloto para o modelo com empresas (já executada em 26/09/2026) |
+| `scripts/criar_usuario.py` | cria um usuário direto no banco numa empresa existente |
+| `scripts/gerar_base_chat.py` | gera `base_chat.json` (trechos da documentação dos dois repositórios e do FAQ do site, com embeddings); rodar de novo quando a documentação mudar |
+| `scripts/migrar_multiempresa.py` | migração única dos dados do piloto para o modelo com empresas (já executada em 26/09/2026) |

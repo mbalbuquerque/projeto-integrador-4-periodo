@@ -39,8 +39,11 @@ jobs:
           pip install -r requirements.txt
           python -m unittest
 
+      # Mesma lista do publicar.sh (pacote.txt); o test_pacote.py a confere.
       - name: Empacotar
-        run: zip publicar.zip function_app.py contrato.py seguranca.py cadastros.py host.json requirements.txt
+        run: |
+          grep -v -e '^#' -e '^[[:space:]]*$' pacote.txt | zip publicar.zip -@
+          unzip -l publicar.zip
 
       - uses: azure/login@v2
         with:

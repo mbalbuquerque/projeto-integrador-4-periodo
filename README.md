@@ -1,70 +1,151 @@
+# ColdTrack Edge
 
-# FACULDADE SENAC PE
-## PROJETO INTEGRADOR
-## PROFESSOR ORIENTADOR ARNOT CAIADO
+Monitoramento da cadeia fria no transporte refrigerado de frutas (manga e uva do Vale do
+São Francisco). Um nó sensor com ESP32-C3 mede temperatura e umidade dentro do baú,
+classifica a leitura pela faixa da carga, sinaliza na placa e envia a telemetria para uma
+API no Azure. Um painel web mostra as leituras, os alertas e os cadastros de cada empresa.
 
-## EQUIPE: ENZO ANTÔNIO, EVERSON, EMMANUEL LUÍS, GABRIEL EDUARDO, JOSÉ ALLAMBERG, MARCELO BARBOSA
+Projeto Integrador do 4º período, Faculdade Senac PE, 2026.2.
 
+Este repositório reúne o firmware, a API, a infraestrutura e a documentação. O painel web
+fica em outro repositório: [mbalbuquerque/Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi).
 
+| | endereço |
+|---|---|
+| Painel publicado | <https://stcoldtrackweb7319.z15.web.core.windows.net> |
+| API | <https://func-coldtrack-7319.azurewebsites.net/api> |
+| Simulação no Wokwi | <https://wokwi.com/projects/475352296477619201> |
+| Canal no ThingSpeak | <https://thingspeak.mathworks.com/channels/3496439> |
 
-# 🚚 ColdTrack Edge
+## Arquitetura
 
-Projeto desenvolvido para o **Projeto Integrador – 4º Período**, com foco no monitoramento de **temperatura e umidade durante o transporte refrigerado de mercadorias**.
-
-📘 Documentação técnica completa (arquitetura, tecnologias, dados, API, segurança e publicação): [`docs/stack-tecnica.md`](docs/stack-tecnica.md)
-🛠️ Guia de implantação de um cliente novo (acesso, gravação do ESP32, validação, instalação): [`docs/implantacao.md`](docs/implantacao.md)
-
-## 🎯 Objetivo
-
-Desenvolver um nó sensor IoT capaz de monitorar as condições ambientais no interior de um compartimento refrigerado, realizando processamento local e envio de telemetria para a nuvem.
-
-## 🛠️ Tecnologias e Componentes
-
-- ESP32-C3
-- Sensor DHT11
-- LEDs de sinalização
-- Wi-Fi
-- Microsoft Azure (Functions, Cosmos DB, Storage)
-- Wokwi
-- Arduino Framework (C/C++)
-
-## 🚦 Sinalização Local
-
-O protótipo utiliza três LEDs para indicar o estado das condições monitoradas:
-
-- 🟢 **Verde:** condição normal
-- 🟡 **Amarelo:** atenção
-- 🔴 **Vermelho:** condição crítica ou falha
-
-A faixa de temperatura segue o perfil da carga do veículo (demonstrativo, manga ou uva): o sensor recebe a faixa da nuvem a cada envio e a guarda na memória.
-
-## ☁️ Telemetria
-
-O ESP32-C3 envia cada leitura em JSON, por HTTPS e com a chave própria do sensor, para uma Azure Function que valida os dados e grava no Azure Cosmos DB:
-
-```json
-{"deviceId": "coldtrack-01", "temperatura": 12.4, "umidade": 81.0, "rssi": -58, "medidoEm": 1790000000}
+```
+ ESP32-C3 + DHT11/DHT22                          Azure (rg-coldtrack, Brazil South)
+ +-----------------------+    HTTPS + JSON     +--------------------------------+
+ | lê a cada ciclo       |  x-device-key       | Azure Function (Python 3.11)   |
+ | classifica pela faixa | ------------------> | POST /api/telemetria           |
+ | LEDs ou tela OLED     | <------------------ | valida, classifica, grava      |
+ | fila em flash (sem    |  status + faixa     +---------------+----------------+
+ | rede, reenvia depois) |                                     |
+ +-----------+-----------+                                     v
+             |                                 +--------------------------------+
+             | MQTT/TLS (opcional)             | Cosmos DB for NoSQL            |
+             v                                 | empresas, usuarios, veiculos,  |
+       ThingSpeak                              | dispositivos, viagens, leituras|
+                                               +---------------+----------------+
+                                                               ^
+ Navegador (painel)          token JWT                         |
+ +-----------------------+   Authorization: Bearer   +---------+----------------+
+ | site estático no      | ------------------------> | rotas do painel na mesma |
+ | Azure Storage ($web)  |                           | Azure Function           |
+ +-----------------------+                           +--------------------------+
 ```
 
-Sem conexão, as leituras ficam guardadas na memória flash do ESP32 e são reenviadas quando a conexão volta. Detalhes da API em [`cloud/function/README.md`](cloud/function/README.md).
+O chat do site (`POST /api/chat`) responde dúvidas sobre o projeto com um modelo de linguagem
+do Azure OpenAI, usando como contexto trechos desta documentação; se a IA não responder, o site
+usa o FAQ.
 
-Dashboard publicado: https://stcoldtrackweb7319.z15.web.core.windows.net
+Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas da API:
+[`docs/api.md`](docs/api.md). Recursos do Azure: [`infra/README.md`](infra/README.md).
 
-## 🔐 Segurança
+## Estrutura do repositório
 
-Credenciais Wi-Fi e a chave do sensor não ficam no código-fonte. Cada sensor tem chave própria, gerada no painel (Sensores); cada empresa só enxerga os próprios dados.
+```
+.
+├── firmware/
+│   ├── coldtrack/           firmware do ESP32-C3 (Arduino)
+│   │   ├── coldtrack.ino
+│   │   ├── azure_ca.h       certificado raiz usado no HTTPS
+│   │   └── secrets.example.h  modelo do secrets.h (o real não vai para o Git)
+│   └── wokwi/               circuito da simulação (diagram.json, libraries.txt)
+├── cloud/function/          API (Azure Function em Python)
+│   ├── function_app.py      rotas
+│   ├── contrato.py          contrato da telemetria, perfis de carga e classificação
+│   ├── seguranca.py         senha, token, bloqueio de login, chave de sensor
+│   ├── cadastros.py         validação dos cadastros
+│   ├── chat.py              chat do site (Azure OpenAI + busca na base_chat.json)
+│   ├── test_*.py            testes (unittest)
+│   ├── pacote.txt           arquivos publicados no Azure
+│   ├── publicar.sh          publicação manual
+│   └── scripts/             scripts de suporte (criar usuário, migração)
+├── infra/                   main.bicep do ambiente atual e notas de infraestrutura
+├── analise/                 análise climática da rota (dados do INMET)
+├── docs/                    documentação técnica, API, implantação, memorial descritivo
+└── .github/workflows/       testes (API e firmware) e publicação da API
+```
 
-Na placa física, Wi-Fi, ID e chave são gravados pelo cabo USB a partir do painel (Sensores → Conectar sensor pelo cabo) e ficam na memória da placa; a senha do Wi-Fi não passa pela API. No simulador, as credenciais ficam em `secrets.h`, ignorado pelo Git (modelo: `secrets.example.h`).
+## Como rodar
 
-## ♻️ Design Circular
+### Firmware
 
-A versão física utilizará um gabinete produzido a partir de embalagem reaproveitada, com aberturas para circulação de ar junto ao sensor e passagem para alimentação USB-C.
+Na simulação, abrir o projeto no Wokwi (link acima). Para montar um projeto novo no Wokwi,
+copiar `firmware/coldtrack/coldtrack.ino` (como `sketch.ino`), `azure_ca.h`, um `secrets.h`
+feito a partir do `secrets.example.h` e os arquivos de `firmware/wokwi/`.
 
-## 🚧 Status
+Na placa física (ESP32-C3), com o [arduino-cli](https://arduino.github.io/arduino-cli/):
 
-Projeto em desenvolvimento.
+```bash
+cp firmware/coldtrack/secrets.example.h firmware/coldtrack/secrets.h   # editar; nunca commitar
+arduino-cli core install esp32:esp32 \
+  --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli lib install "DHT sensor library" "Adafruit Unified Sensor"
+arduino-cli compile --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc firmware/coldtrack
+arduino-cli upload  --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc -p COM5 firmware/coldtrack
+```
 
-### Etapa atual
+Na placa física com DHT11, descomentar `#define DHT_TYPE DHT11` no `secrets.h`. Tela OLED e
+MQTT do ThingSpeak são opcionais e pedem as bibliotecas U8g2 e PubSubClient. Wi-Fi, ID e chave
+do sensor são gravados pelo cabo USB a partir do painel (Sensores, Conectar sensor pelo cabo).
+Passo a passo completo: [`docs/implantacao.md`](docs/implantacao.md).
+
+### API
+
+```bash
+cd cloud/function
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp local.settings.example.json local.settings.json   # preencher com um banco de desenvolvimento
+func start                                           # http://localhost:7071/api
+```
+
+Requer Python 3.11 e Azure Functions Core Tools v4. Mais detalhes em
+[`cloud/function/README.md`](cloud/function/README.md).
+
+### Testes e lint
+
+```bash
+cd cloud/function
+python -m unittest -v
+pip install ruff==0.17.4 && ruff check .
+```
+
+O GitHub Actions (`testes.yml`) roda o lint, os testes da API e compila o firmware nas duas
+variantes de sensor (DHT22 da simulação e DHT11 da placa) a cada push e pull request.
+
+### Análise climática
+
+Ver [`analise/README.md`](analise/README.md).
+
+## Publicação
+
+- **API**: o workflow `publicar-api.yml` roda os testes e publica na Function App a cada push
+  na branch `everson` que altere `cloud/function/`. O login no Azure é por OIDC, aceito só para
+  essa branch. Publicação manual: `bash cloud/function/publicar.sh`.
+- **Painel**: publicado pelo repositório do painel.
+- **Infraestrutura**: `infra/main.bicep` documenta o ambiente; não aplicar sem `what-if`
+  (ver [`infra/README.md`](infra/README.md)).
+
+Fluxo de branches e convenção de commits: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Segurança
+
+- Credenciais de Wi-Fi e a chave do sensor não ficam no código. Cada sensor tem chave própria,
+  gerada no painel; o banco guarda só o hash.
+- Senhas com scrypt e sal por usuário; tokens JWT de 8 horas; 5 senhas erradas bloqueiam a
+  conta por 15 minutos.
+- Cada empresa só enxerga os próprios dados; o acesso é conferido pela API em toda chamada.
+
+## Status
 
 - [x] Definição da arquitetura
 - [x] Simulação ESP32-C3 no Wokwi
@@ -74,18 +155,28 @@ Projeto em desenvolvimento.
 - [x] Armazenamento das leituras sem conexão e reenvio
 - [x] Dashboard web publicado no Azure
 - [x] Login com perfis (operador logístico e gestor)
-- [x] Análise climática da rota (INMET) e modelo preliminar de risco térmico — ver [`analise/`](analise/)
+- [x] Análise climática da rota (INMET) e modelo preliminar de risco térmico
 - [x] Testes automáticos e compilação do firmware no GitHub Actions
 - [x] Várias empresas com dados separados, cadastro de empresa e chave por sensor
 - [x] Faixa por perfil de carga (manga, uva) enviada ao sensor
 - [x] Troca de senha, bloqueio de login e etiqueta QR por veículo
 - [x] Previsão de calor na rota (Open-Meteo + histórico INMET) no dashboard
+- [x] Chat do site com modelo de linguagem do Azure OpenAI, respondendo pela documentação do projeto
 - [ ] Montagem física
 - [ ] Gabinete reciclado
 - [ ] Testes de campo
 - [ ] Relatório técnico
 
----
+Memorial descritivo do protótipo: [`docs/memorial-descritivo.md`](docs/memorial-descritivo.md).
 
-**Projeto Integrador – 4º Período**  
-**2026.2**
+## Equipe
+
+Faculdade Senac PE, Projeto Integrador, 4º período (2026.2).
+Professor orientador: Arnot Caiado.
+
+- Enzo Antônio
+- Everson
+- Emmanuel Luís
+- Gabriel Eduardo
+- José Allamberg
+- Marcelo Barbosa

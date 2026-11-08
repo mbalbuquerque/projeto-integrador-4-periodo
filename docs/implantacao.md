@@ -40,8 +40,8 @@ Visão técnica do sistema: [`stack-tecnica.md`](stack-tecnica.md).
 A placa sai da gravação **sem rede e sem chave**: Wi-Fi, ID e chave chegam depois, pelo cabo,
 no passo 3. Só é preciso gravar de novo quando o firmware mudar.
 
-1. Copiar para uma pasta chamada `sketch` os arquivos `sketch.ino`, `azure_ca.h` e
-   `secrets.example.h` do repositório. Renomear `secrets.example.h` para `secrets.h`.
+1. Na pasta `firmware/coldtrack/` do repositório, copiar `secrets.example.h` para
+   `secrets.h` (o Arduino exige que a pasta tenha o mesmo nome do `.ino`, `coldtrack.ino`).
 2. No `secrets.h`, apagar as linhas `WIFI_*`, `DEVICE_ID` e `DEVICE_KEY` (sem elas a placa
    espera a configuração pelo cabo) e descomentar `#define DHT_TYPE DHT11` quando o sensor
    for o DHT11. O `secrets.h` **nunca** vai para o repositório (está no `.gitignore`).
@@ -55,15 +55,15 @@ no passo 3. Só é preciso gravar de novo quando o firmware mudar.
 4. Placa: **ESP32C3 Dev Module**. Em placas com USB nativo (sem chip conversor, como a
    ESP32-C3 SuperMini), ativar **USB CDC On Boot: Enabled**. Sem isso o painel não enxerga
    o sensor pelo cabo.
-5. Abrir a pasta `sketch`, selecionar a porta COM do ESP32 e clicar em **Carregar**.
+5. Abrir a pasta `firmware/coldtrack`, selecionar a porta COM do ESP32 e clicar em **Carregar**.
 6. **Fechar a Arduino IDE** (ou o monitor serial) antes do passo 3: a porta só abre em um
    programa por vez.
 
 **Pelo terminal (arduino-cli)**
 
 ```
-arduino-cli compile --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc sketch
-arduino-cli upload  --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc -p COM5 sketch
+arduino-cli compile --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc firmware/coldtrack
+arduino-cli upload  --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc -p COM5 firmware/coldtrack
 ```
 
 Placa gravada e sem configuração: o LED amarelo pisca, esperando o cabo.

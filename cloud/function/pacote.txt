@@ -1,0 +1,12 @@
+# Arquivos que vao para a Azure Function, um por linha (relativos a cloud/function).
+# Lido pelo publicar.sh e pelo workflow publicar-api.yml; o teste test_pacote.py
+# confere que todo modulo .py da raiz desta pasta (menos test_*) esta aqui.
+# Scripts de suporte (scripts/), testes e configuracao de lint nao sao publicados.
+function_app.py
+contrato.py
+seguranca.py
+cadastros.py
+chat.py
+base_chat.json
+host.json
+requirements.txt

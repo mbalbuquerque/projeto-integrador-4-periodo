@@ -1,5 +1,6 @@
 # Credenciais (Wi-Fi, chaves de API) — usar secrets.example.h como modelo
 secrets.h
+firmware/coldtrack/secrets.h
 
 # Python
 __pycache__/
@@ -9,3 +10,9 @@ local.settings.json
 
 # Dados da analise (baixados e gerados pelos scripts)
 analise/dados/
+
+# Pacote gerado pelo publicar.sh
+cloud/function/publicar.zip
+
+# Copia temporaria do sketch para compilar (ver CONTRIBUTING.md)
+build/
