@@ -136,7 +136,8 @@ class TestClassificar(unittest.TestCase):
 class TestLeituraDuplicada(unittest.TestCase):
     def test_id_deterministico_com_horario(self):
         self.assertEqual(id_leitura("coldtrack-0e0b2c", 1790000000), "coldtrack-0e0b2c~1790000000")
-        self.assertEqual(id_leitura("coldtrack-0e0b2c", 1790000000.0), "coldtrack-0e0b2c~1790000000")
+        self.assertEqual(id_leitura("coldtrack-0e0b2c", 1790000000.0),
+                         "coldtrack-0e0b2c~1790000000")
 
     def test_sem_horario_nao_tem_id(self):
         self.assertIsNone(id_leitura("coldtrack-0e0b2c", None))

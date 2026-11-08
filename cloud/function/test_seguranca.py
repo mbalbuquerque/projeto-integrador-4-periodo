@@ -5,12 +5,28 @@ import unittest
 
 import jwt
 
-from cadastros import (validar_dispositivo, validar_empresa, validar_troca_senha,
-                       validar_usuario, validar_veiculo, validar_viagem)
-from seguranca import (BLOQUEIO_S, MAX_FALHAS, bloqueado_ate, conferir_chave,
-                       conferir_senha, gerar_chave_dispositivo, gerar_hash,
-                       gerar_token, hash_chave, ler_token, registrar_falha,
-                       token_do_cabecalho)
+from cadastros import (
+    validar_dispositivo,
+    validar_empresa,
+    validar_troca_senha,
+    validar_usuario,
+    validar_veiculo,
+    validar_viagem,
+)
+from seguranca import (
+    BLOQUEIO_S,
+    MAX_FALHAS,
+    bloqueado_ate,
+    conferir_chave,
+    conferir_senha,
+    gerar_chave_dispositivo,
+    gerar_hash,
+    gerar_token,
+    hash_chave,
+    ler_token,
+    registrar_falha,
+    token_do_cabecalho,
+)
 
 SEGREDO = "segredo-de-teste-com-tamanho-suficiente-32b"
 USUARIO = {"id": "gestor@coldtrack.dev", "nome": "Gestor", "perfil": "gestor",
@@ -51,7 +67,8 @@ class TestToken(unittest.TestCase):
         self.assertIsNone(ler_token(antigo, SEGREDO))
 
     def test_outro_segredo(self):
-        self.assertIsNone(ler_token(gerar_token(USUARIO, SEGREDO), "outro-segredo-qualquer-com-32-bytes"))
+        self.assertIsNone(ler_token(gerar_token(USUARIO, SEGREDO),
+                                    "outro-segredo-qualquer-com-32-bytes"))
 
     def test_token_adulterado(self):
         token = gerar_token({**USUARIO, "perfil": "operador"}, SEGREDO)

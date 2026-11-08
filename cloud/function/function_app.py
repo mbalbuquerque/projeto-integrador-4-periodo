@@ -35,13 +35,37 @@ from datetime import datetime, timezone
 import azure.functions as func
 from azure.cosmos import CosmosClient, exceptions
 
-from cadastros import (validar_dispositivo, validar_empresa, validar_troca_senha,
-                       validar_usuario, validar_veiculo, validar_viagem, SENHA_MIN)
-from contrato import (PERFIL_PADRAO, PERFIS_CARGA, classificar, faixa, id_leitura, mesma_leitura,
-                      filtros_de_leitura, validar)
-from seguranca import (bloqueado_ate, conferir_chave, conferir_senha,
-                       gerar_chave_dispositivo, gerar_hash, gerar_token,
-                       hash_chave, ler_token, registrar_falha, token_do_cabecalho)
+from cadastros import (
+    SENHA_MIN,
+    validar_dispositivo,
+    validar_empresa,
+    validar_troca_senha,
+    validar_usuario,
+    validar_veiculo,
+    validar_viagem,
+)
+from contrato import (
+    PERFIL_PADRAO,
+    PERFIS_CARGA,
+    classificar,
+    faixa,
+    filtros_de_leitura,
+    id_leitura,
+    mesma_leitura,
+    validar,
+)
+from seguranca import (
+    bloqueado_ate,
+    conferir_chave,
+    conferir_senha,
+    gerar_chave_dispositivo,
+    gerar_hash,
+    gerar_token,
+    hash_chave,
+    ler_token,
+    registrar_falha,
+    token_do_cabecalho,
+)
 
 # Quem confere o acesso é o próprio código (token ou chave do dispositivo).
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -196,9 +220,11 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         if mesma_leitura(gravada, leitura):
             # Reenvio depois de resposta perdida: já está gravada, o sensor tira da fila.
             return resposta({"id": gravada["id"], "duplicada": True}, 200)
-        logging.warning("telemetria: %s já gravada com outros valores (relógio repetido ou adulteração)",
+        logging.warning("telemetria: %s já gravada com outros valores "
+                        "(relógio repetido ou adulteração)",
                         leitura["id"])
-        return resposta({"erros": ["já existe leitura deste sensor neste horário, com outros valores"]}, 409)
+        return resposta(
+            {"erros": ["já existe leitura deste sensor neste horário, com outros valores"]}, 409)
     # A faixa volta na resposta: o sensor acende o LED certo para a carga do veículo.
     return resposta({"id": leitura["id"], "status": leitura["status"],
                      "perfil": perfil, "faixa": faixa(perfil)}, 201)
@@ -373,7 +399,8 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
 
     if metodo == "GET":
         usuario, erro = autorizar(req, TODOS)
-        return erro or resposta({"dispositivos": lista("dispositivos", usuario["empresaId"], campos)})
+        return erro or resposta(
+            {"dispositivos": lista("dispositivos", usuario["empresaId"], campos)})
 
     gestor, erro = autorizar(req, GESTOR)
     if erro:
@@ -418,7 +445,8 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         enable_cross_partition_query=True))
     if em_uso:
         codigo = em_uso[0].split(SEP, 1)[-1]
-        return resposta({"erros": [f"o veículo {codigo} usa este sensor; remova ou troque o veículo antes"]}, 409)
+        return resposta({"erros": [f"o veículo {codigo} usa este sensor; "
+                                   "remova ou troque o veículo antes"]}, 409)
     container("dispositivos").delete_item(item_id, partition_key=item_id)
     logging.info("%s removeu o dispositivo %s", gestor["id"], item_id)
     return func.HttpResponse(status_code=204)
