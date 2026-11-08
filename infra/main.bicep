@@ -61,15 +61,13 @@ param openAiApiVersion string = '2024-10-21'
 @secure()
 param jwtSecret string
 
-@description('Origens liberadas no CORS da API.')
+@description('Origens liberadas no CORS da API: so o painel publicado. Para testar o painel na maquina, rodar a API local (func start).')
 param corsOrigins array = [
-  'http://127.0.0.1:5500'
-  'http://localhost:5500'
   'https://${webStorageName}.z15.web.${environment().suffixes.storage}'
 ]
 
-@description('Em producao hoje esta false; os sensores e o painel ja chamam a API por HTTPS.')
-param httpsOnly bool = false
+@description('So HTTPS: a Function App recusa HTTP (ligado em producao).')
+param httpsOnly bool = true
 
 // Containers do banco e suas chaves de particao (nao podem mudar depois de criados).
 var containers = [
@@ -162,6 +160,27 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15
   properties: {
     resource: { id: cosmosDatabaseName }
     options: { throughput: cosmosThroughput }
+  }
+}
+
+// Contadores dos limites de uso (login, /chat, /assistente), compartilhados entre as
+// instancias da Function. TTL ligado: cada contador some sozinho quando a janela acaba
+// (o codigo poe o ttl de cada item; o padrao de 2 dias e so a rede de seguranca).
+// Sem este container a API conta na memoria de cada instancia e avisa no log.
+resource limitesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: 'limites'
+  properties: {
+    resource: {
+      id: 'limites'
+      partitionKey: { paths: [ '/id' ], kind: 'Hash' }
+      defaultTtl: 172800
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        includedPaths: []
+        excludedPaths: [ { path: '/*' } ]
+      }
+    }
   }
 }
 
