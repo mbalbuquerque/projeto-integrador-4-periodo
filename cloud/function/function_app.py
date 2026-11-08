@@ -39,6 +39,7 @@ from azure.cosmos import CosmosClient, exceptions
 
 import assistente
 import chat
+import limites
 from cadastros import (
     SENHA_MIN,
     validar_dispositivo,
@@ -58,6 +59,7 @@ from contrato import (
     mesma_leitura,
     validar,
 )
+from limites import Limites, ip_do_cliente
 from seguranca import (
     bloqueado_ate,
     conferir_chave,
@@ -81,10 +83,13 @@ TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
 SEP = "~"
 
-# Por instância: 10 perguntas por minuto por IP.
-LIMITE_CHAT = chat.LimiteDeUso(maximo=10, janela_s=60)
-# Assistente do painel: 15 perguntas por minuto por usuário logado.
-LIMITE_ASSISTENTE = chat.LimiteDeUso(maximo=15, janela_s=60)
+# Limites de uso (contados no Cosmos, valem somando todas as instâncias):
+# chat do site: 10 perguntas por minuto por IP e 2000 por dia no total;
+# assistente do painel: 15 por minuto por usuário e 300 por dia por empresa.
+CHAT_POR_MINUTO = 10
+CHAT_POR_DIA = 2000
+ASSISTENTE_POR_MINUTO = 15
+ASSISTENTE_POR_DIA = 300
 
 _banco = None
 _containers = {}
@@ -99,6 +104,10 @@ def container(nome=None):
             _banco = cliente.get_database_client(os.getenv("COSMOS_DATABASE", "coldtrack"))
         _containers[nome] = _banco.get_container_client(nome)
     return _containers[nome]
+
+
+# Contadores dos limites, no container `limites` (sem ele, na memória da instância).
+LIMITES = Limites(lambda: container(os.getenv("LIMITES_CONTAINER", "limites")))
 
 
 def ler(nome, item_id):
@@ -346,7 +355,8 @@ def chat_site(req: func.HttpRequest) -> func.HttpResponse:
     # Sem configuração ou com a IA fora do ar: 503, e o site cai no FAQ.
     if not chat.configurado():
         return resposta({"erros": ["chat indisponível"]}, 503)
-    if not LIMITE_CHAT.permitir(chat.ip_do_cliente(req.headers)):
+    ip = ip_do_cliente(req.headers)
+    if not LIMITES.permitir(f"chat:ip:{ip}", CHAT_POR_MINUTO, limites.MINUTO):
         return resposta({"erros": ["muitas perguntas seguidas. Tente de novo em 1 min."]}, 429)
 
     dados, erro = corpo_json(req)
@@ -355,6 +365,11 @@ def chat_site(req: func.HttpRequest) -> func.HttpResponse:
     erros, doc = chat.validar_chat(dados)
     if erros:
         return resposta({"erros": erros}, 400)
+    # Teto do dia para o site todo: segura o custo da IA se muitos IPs perguntarem.
+    if not LIMITES.permitir("chat:dia", CHAT_POR_DIA, limites.DIA):
+        logging.warning("chat: limite diário de %d perguntas atingido", CHAT_POR_DIA)
+        return resposta({"erros": ["o chat atingiu o limite de perguntas de hoje. "
+                                   "Tente de novo amanhã."]}, 429)
 
     inicio = time.monotonic()
     try:
@@ -407,7 +422,8 @@ def assistente_painel(req: func.HttpRequest) -> func.HttpResponse:
         return erro
     if not chat.configurado():
         return resposta({"erros": ["assistente indisponível"]}, 503)
-    if not LIMITE_ASSISTENTE.permitir(usuario["id"]):
+    if not LIMITES.permitir(f"assistente:usuario:{usuario['id']}", ASSISTENTE_POR_MINUTO,
+                            limites.MINUTO):
         return resposta({"erros": ["muitas perguntas seguidas. Tente de novo em 1 min."]}, 429)
 
     dados, erro = corpo_json(req)
@@ -416,6 +432,10 @@ def assistente_painel(req: func.HttpRequest) -> func.HttpResponse:
     erros, doc = chat.validar_chat(dados)
     if erros:
         return resposta({"erros": erros}, 400)
+    if not LIMITES.permitir(f"assistente:empresa:{usuario['empresaId']}", ASSISTENTE_POR_DIA,
+                            limites.DIA):
+        return resposta({"erros": ["sua empresa atingiu o limite de perguntas de hoje "
+                                   "ao assistente. Tente de novo amanhã."]}, 429)
 
     inicio = time.monotonic()
     try:

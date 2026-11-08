@@ -10,6 +10,7 @@ import azure.functions as func
 
 import chat
 import function_app
+from test_falsos import ContainerFalso
 
 BASE = [
     {"id": "a#0", "fonte": "README.md", "texto": "Sensor ESP32-C3.", "vetor": [1.0, 0.0, 0.0]},
@@ -148,24 +149,6 @@ class TestPrompt(unittest.TestCase):
         self.assertTrue(all(len(m["content"]) <= chat.HISTORICO_NO_PROMPT for m in msgs[1:-1]))
 
 
-class TestLimite(unittest.TestCase):
-    def test_janela(self):
-        limite = chat.LimiteDeUso(maximo=3, janela_s=60)
-        self.assertEqual([limite.permitir("ip", t) for t in (0, 1, 2, 3)],
-                         [True, True, True, False])
-        self.assertTrue(limite.permitir("outro", 3))
-        self.assertFalse(limite.permitir("ip", 59))
-        self.assertTrue(limite.permitir("ip", 60.5))
-
-    def test_ip(self):
-        self.assertEqual(chat.ip_do_cliente({"x-forwarded-for": "200.1.2.3:5678, 10.0.0.1"}),
-                         "200.1.2.3")
-        self.assertEqual(chat.ip_do_cliente({"x-forwarded-for": "[2001:db8::1]:443"}),
-                         "2001:db8::1")
-        self.assertEqual(chat.ip_do_cliente({"x-forwarded-for": "2001:db8::1"}), "2001:db8::1")
-        self.assertEqual(chat.ip_do_cliente({}), "desconhecido")
-
-
 def pedido(corpo, ip="200.1.2.3:5000"):
     dados = corpo if isinstance(corpo, bytes) else json.dumps(corpo).encode()
     return func.HttpRequest(method="POST", url="/api/chat", body=dados,
@@ -186,13 +169,18 @@ class TestRota(unittest.TestCase):
         self.fabrica.start()
         chat.reiniciar()
         chat._base = list(BASE)
-        function_app.LIMITE_CHAT._chamadas.clear()
+        self.limites = ContainerFalso([])
+        self.cosmos = mock.patch.object(function_app, "container",
+                                        lambda nome=None: self.limites)
+        self.cosmos.start()
+        function_app.LIMITES.reiniciar()
 
     def tearDown(self):
+        self.cosmos.stop()
         self.fabrica.stop()
         self.env.stop()
         chat.reiniciar()
-        function_app.LIMITE_CHAT._chamadas.clear()
+        function_app.LIMITES.reiniciar()
 
     def chamar(self, corpo, **kw):
         r = ROTA(pedido(corpo, **kw))

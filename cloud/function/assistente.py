@@ -11,7 +11,7 @@ empresa, então não tem como ler a de outra.
 O retrato vai no prompt junto com os trechos da base do chat (RAG, de chat.py).
 O modelo não executa nada: quando pedem uma ação, explica o caminho nas telas.
 
-Validação, cliente da IA, base e limite de uso vêm de chat.py. Testado com
+Validação, cliente da IA e base vêm de chat.py; o limite de uso, de limites.py. Testado com
 `python -m unittest`, com o cliente da IA e o Cosmos trocados por falsos.
 """
 

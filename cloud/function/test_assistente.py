@@ -2,20 +2,19 @@
 
 import json
 import os
-import re
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
 
 import azure.functions as func
-from azure.cosmos import exceptions
 
 import assistente
 import chat
 import function_app
 from seguranca import gerar_token
 from test_chat import BASE, CONFIG, ClienteFalso
+from test_falsos import ContainerFalso
 
 SEGREDO = "segredo-de-teste-com-tamanho-suficiente-para-hs256"
 AGORA = datetime.now(timezone.utc)
@@ -23,48 +22,6 @@ AGORA = datetime.now(timezone.utc)
 
 def iso(**delta):
     return (AGORA - timedelta(**delta)).isoformat()
-
-
-class ContainerFalso:
-    """Imita o ContainerProxy do Cosmos para as consultas que a function_app usa.
-
-    Só filtra por empresa quando a consulta pede (@e ou @empresa): consulta sem
-    filtro devolveria dados das duas empresas, e o teste pegaria o vazamento.
-    """
-
-    def __init__(self, itens):
-        self.itens = [dict(i) for i in itens]
-        self.consultas = []
-
-    def read_item(self, item, partition_key):
-        for i in self.itens:
-            if i["id"] == item:
-                return dict(i)
-        raise exceptions.CosmosResourceNotFoundError(status_code=404, message="não achou")
-
-    def query_items(self, query, parameters=(), partition_key=None, **_):
-        self.consultas.append(query)
-        p = {x["name"]: x["value"] for x in parameters}
-        itens = list(self.itens)
-        if partition_key is not None:
-            itens = [i for i in itens if i.get("deviceId") == partition_key]
-        for nome in ("@e", "@empresa"):
-            if nome in p:
-                itens = [i for i in itens if i.get("empresaId") == p[nome]]
-        for nome in ("@d", "@device"):
-            if nome in p:
-                itens = [i for i in itens if i.get("deviceId") == p[nome]]
-        if "@desde" in p:
-            itens = [i for i in itens if i["medidoEm"] >= p["@desde"]]
-        if "ORDER BY c.medidoEm DESC" in query:
-            itens.sort(key=lambda i: i["medidoEm"], reverse=True)
-        if "@limite" in p:
-            itens = itens[:p["@limite"]]
-        campos = re.match(r"SELECT (?:TOP @limite )?(.+?) FROM", query).group(1)
-        if campos != "*" and not campos.startswith("VALUE"):
-            nomes = [c.strip()[2:] for c in campos.split(",")]
-            itens = [{k: i[k] for k in nomes if k in i} for i in itens]
-        return iter(itens)
 
 
 def usuario(email, empresa, perfil):
@@ -150,6 +107,7 @@ class BaseRota(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {**CONFIG, "JWT_SECRET": SEGREDO})
         self.env.start()
         self.containers = {nome: ContainerFalso(itens) for nome, itens in banco().items()}
+        self.containers["limites"] = ContainerFalso([])
         self.cosmos = mock.patch.object(
             function_app, "container",
             lambda nome=None: self.containers[nome or "leituras"])
@@ -159,14 +117,14 @@ class BaseRota(unittest.TestCase):
         self.fabrica.start()
         chat.reiniciar()
         chat._base = list(BASE)
-        function_app.LIMITE_ASSISTENTE._chamadas.clear()
+        function_app.LIMITES.reiniciar()
 
     def tearDown(self):
         self.fabrica.stop()
         self.cosmos.stop()
         self.env.stop()
         chat.reiniciar()
-        function_app.LIMITE_ASSISTENTE._chamadas.clear()
+        function_app.LIMITES.reiniciar()
 
     def chamar(self, corpo, email="gestor@a.com", perfil="gestor"):
         r = ROTA(pedido(corpo, email, perfil=perfil))

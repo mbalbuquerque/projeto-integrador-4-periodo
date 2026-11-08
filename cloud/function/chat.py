@@ -11,17 +11,14 @@ Configuração (app settings): AOAI_ENDPOINT, AOAI_DEPLOY_CHAT, AOAI_DEPLOY_EMBE
 AOAI_API_VERSION e, opcional, AOAI_KEY. Sem AOAI_KEY, o acesso é pela
 identidade gerenciada da Function (papel "Cognitive Services OpenAI User").
 
-Validação, busca, montagem do prompt e limite de uso não dependem do Azure:
-testados com `python -m unittest`, com o cliente da IA trocado por um falso
+Validação, busca e montagem do prompt não dependem do Azure (o limite de uso
+fica em limites.py): testados com `python -m unittest`, com o cliente da IA trocado por um falso
 (`fabrica_cliente`).
 """
 
 import json
 import math
 import os
-import threading
-import time
-from collections import deque
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 ARQUIVO_BASE = os.path.join(PASTA, "base_chat.json")
@@ -252,48 +249,3 @@ def responder(pergunta, historico=()):
         texto = texto.replace(MARCA_SEM_CONTEXTO, "").strip()
         usadas = []
     return {"resposta": texto or SEM_RESPOSTA, "fontes": usadas, "origem": "ia"}
-
-
-# ------------------------------------------------------------ limite de uso
-
-def ip_do_cliente(headers):
-    """Primeiro IP do X-Forwarded-For (o Azure acrescenta a porta: 1.2.3.4:5678)."""
-    bruto = (headers.get("x-forwarded-for") or headers.get("x-client-ip") or "").split(",")[0]
-    bruto = bruto.strip()
-    if bruto.startswith("["):  # IPv6 com porta: [::1]:5678
-        return bruto[1:bruto.find("]")] if "]" in bruto else bruto
-    if bruto.count(":") == 1:  # IPv4 com porta
-        return bruto.split(":")[0]
-    return bruto or "desconhecido"
-
-
-class LimiteDeUso:
-    """Janela deslizante em memória, por instância da Function.
-
-    Não é um limite exato com várias instâncias, mas segura quem repete a rota
-    em laço. Reiniciar a instância zera a contagem.
-    """
-
-    def __init__(self, maximo=10, janela_s=60):
-        self.maximo = maximo
-        self.janela_s = janela_s
-        self._chamadas = {}
-        self._trava = threading.Lock()
-
-    def permitir(self, chave, agora=None):
-        agora = time.monotonic() if agora is None else agora
-        corte = agora - self.janela_s
-        with self._trava:
-            if len(self._chamadas) > 5000:
-                self._limpar(corte)
-            fila = self._chamadas.setdefault(chave, deque())
-            while fila and fila[0] <= corte:
-                fila.popleft()
-            if len(fila) >= self.maximo:
-                return False
-            fila.append(agora)
-            return True
-
-    def _limpar(self, corte):
-        for chave in [c for c, f in self._chamadas.items() if not f or f[-1] <= corte]:
-            del self._chamadas[chave]

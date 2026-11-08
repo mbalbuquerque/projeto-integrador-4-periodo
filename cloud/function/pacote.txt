@@ -8,6 +8,7 @@ seguranca.py
 cadastros.py
 chat.py
 assistente.py
+limites.py
 base_chat.json
 host.json
 requirements.txt
