@@ -29,6 +29,10 @@ class TestPacote(unittest.TestCase):
                    if n.endswith(".py") and not n.startswith("test_")}
         self.assertEqual(modulos - pacote, set())
 
+    def test_base_do_chat_publicada(self):
+        # chat.py le a base do disco: sem ela no pacote, a rota /chat quebra na nuvem.
+        self.assertIn("base_chat.json", set(ler_pacote()))
+
     def test_nada_de_teste_ou_script_publicado(self):
         for nome in ler_pacote():
             self.assertFalse(nome.startswith(("test_", "scripts/")), nome)
