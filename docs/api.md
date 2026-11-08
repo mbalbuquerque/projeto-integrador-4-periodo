@@ -21,7 +21,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | tipo | como | usado por |
 |---|---|---|
 | chave do sensor | header `x-device-key: <chave>` | `POST /telemetria` |
-| token do painel | header `Authorization: Bearer <token>` | rotas do painel |
+| token do painel | header `Authorization: Bearer <token>` | rotas do painel e `POST /assistente` |
 | nenhuma | — | `POST /empresas`, `POST /login`, `GET /perfis`, `POST /chat` |
 
 O token é um JWT HS256 válido por 8 horas, emitido por `POST /login`, `POST /empresas` e
@@ -169,6 +169,46 @@ da pergunta.
 
 `fontes` lista os documentos usados como contexto, sem repetir. No `503`, o site usa as
 respostas prontas do FAQ. O limite por IP é contado em memória, por instância da Function.
+
+## Assistente do painel
+
+### `POST /assistente`
+
+Acesso: token (`operador` e `gestor`). Assistente do painel para o usuário logado: tira
+dúvidas de uso (o que cada tela faz, como cadastrar veículo, registrar sensor, registrar
+viagem, como funcionam alertas e faixas, o que gestor e operador podem fazer) e responde
+sobre os dados da **própria empresa**. Não executa ações: quando pedem uma, explica o caminho
+nas telas (Dashboard, Veículos, Sensores, Viagens, Alertas, Relatórios, Configurações).
+
+Corpo e validação iguais aos de `POST /chat` (`pergunta` 1 a 500 caracteres, `historico`
+opcional com até 6 mensagens de até 1000 caracteres; campo não previsto é erro).
+
+A cada pergunta a API monta um retrato somente leitura da empresa do token, com as mesmas
+consultas das rotas `GET` do painel (nunca de outra empresa), e o envia ao modelo junto com
+os trechos da base do chat:
+
+- empresa, nome e perfil de quem pergunta, data e hora atuais (horário de Pernambuco, UTC-3);
+- perfis de carga e faixas; veículos (até 30: id, tipo, perfil, sensor);
+- sensores (até 10, os ligados a veículo primeiro): última leitura (temperatura, umidade,
+  RSSI, status, horários e "sem sinal há X" quando passa de 10 min) e resumo das últimas
+  24 h (até 500 leituras: quantidade, mínima, máxima, média, leituras em atenção e em crítico,
+  horário da última fora da faixa);
+- viagens em andamento (até 10), agendadas (até 5) e as 5 últimas encerradas;
+- só para `gestor`: usuários da empresa (e-mail, nome, perfil) e a contagem por perfil.
+
+Os totais acompanham as listas cortadas; acima de ~18 mil caracteres as listas encolhem.
+
+| resposta | corpo |
+|---|---|
+| `200` | `{"resposta": "...", "fontes": ["dados da empresa", "docs/api.md"], "origem": "ia"}` |
+| `400` | erros de validação (os mesmos de `POST /chat`) |
+| `401` | `faça login para continuar` |
+| `429` | `muitas perguntas seguidas. Tente de novo em 1 min.` (mais de 15 perguntas por minuto do mesmo usuário) |
+| `503` | `assistente indisponível`: IA não configurada, banco ou IA fora do ar, sem resposta em 20 s |
+
+`fontes` começa sempre com `dados da empresa`, seguida dos documentos da base usados como
+contexto. Pergunta fora do assunto recebe recusa curta e `fontes: []`. Nada da conversa é
+gravado; o log guarda só o usuário e o tamanho da pergunta.
 
 ## Leituras
 

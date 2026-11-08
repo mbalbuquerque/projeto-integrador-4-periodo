@@ -34,6 +34,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `GET /perfis` | painel | aberta |
 | `POST /chat` | site | aberta: pergunta ao assistente (10 por minuto por IP) |
 | `GET /eu`, `POST /senha` | operador, gestor | `Authorization: Bearer <token>` |
+| `POST /assistente` | operador, gestor | token: assistente do painel (15 por minuto por usuário) |
 | `GET /leituras`, `GET /dispositivos`, `GET /veiculos`, `GET /viagens` | operador, gestor | token |
 | `POST /dispositivos`, `PUT/DELETE /dispositivos/{id}` | gestor | token |
 | `POST /veiculos`, `PUT/DELETE /veiculos/{id}` | gestor | token |
@@ -80,6 +81,14 @@ Assistente do site com um modelo de linguagem do Azure OpenAI (`chat.py`). A per
 embedding, os 4 trechos mais parecidos de `base_chat.json` (cosseno em Python puro) entram no
 prompt como contexto e o modelo responde em português, só sobre o ColdTrack. Sem
 configuração ou com falha da IA, responde `503` e o site cai no FAQ. Detalhes em
+[`docs/api.md`](../../docs/api.md).
+
+### `POST /assistente`
+
+Assistente do painel (`assistente.py`), para o usuário logado. Monta um retrato somente leitura
+da empresa do token (veículos, sensores com última leitura e resumo de 24 h, viagens e, para
+gestor, usuários) com as mesmas consultas das rotas `GET`, junta os trechos da base do chat e
+responde sobre o uso do painel e os dados da empresa. Não executa ações. Detalhes em
 [`docs/api.md`](../../docs/api.md).
 
 ### `GET /leituras?deviceId=coldtrack-01&limite=50&horas=24&status=ATENCAO,CRITICO`

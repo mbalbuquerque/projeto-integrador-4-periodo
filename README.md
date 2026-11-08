@@ -43,7 +43,9 @@ fica em outro repositório: [mbalbuquerque/Front-End-pi](https://github.com/mbal
 
 O chat do site (`POST /api/chat`) responde dúvidas sobre o projeto com um modelo de linguagem
 do Azure OpenAI, usando como contexto trechos desta documentação; se a IA não responder, o site
-usa o FAQ.
+usa o FAQ. Dentro do painel, o assistente do painel (`POST /api/assistente`, com login) responde
+sobre o uso das telas e sobre os dados da própria empresa (sensores, leituras, veículos e
+viagens), sem executar ações.
 
 Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas da API:
 [`docs/api.md`](docs/api.md). Recursos do Azure: [`infra/README.md`](infra/README.md).
@@ -64,6 +66,7 @@ Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas
 │   ├── seguranca.py         senha, token, bloqueio de login, chave de sensor
 │   ├── cadastros.py         validação dos cadastros
 │   ├── chat.py              chat do site (Azure OpenAI + busca na base_chat.json)
+│   ├── assistente.py        assistente do painel (dados da empresa + base do chat)
 │   ├── test_*.py            testes (unittest)
 │   ├── pacote.txt           arquivos publicados no Azure
 │   ├── publicar.sh          publicação manual
