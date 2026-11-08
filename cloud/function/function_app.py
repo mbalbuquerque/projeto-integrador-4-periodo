@@ -372,6 +372,41 @@ def _dispositivo_da_empresa(device, empresa):
     return disp if disp and disp.get("empresaId") == empresa else None
 
 
+def consultar_leituras(device, empresa, limite, desde=None, status=None):
+    """Leituras de um sensor da empresa, da mais nova para a mais antiga.
+
+    `desde` é epoch UTC em segundos; `status`, lista de status aceitos.
+    Usada por GET /leituras e pelo assistente do painel.
+    """
+    condicoes = ["c.deviceId = @device", "c.empresaId = @empresa"]
+    parametros = [
+        {"name": "@limite", "value": limite},
+        {"name": "@device", "value": device},
+        {"name": "@empresa", "value": empresa},
+    ]
+    if desde is not None:
+        condicoes.append("c.medidoEm >= @desde")
+        parametros.append({
+            "name": "@desde",
+            "value": datetime.fromtimestamp(desde, timezone.utc).isoformat(),
+        })
+    if status is not None:
+        condicoes.append("ARRAY_CONTAINS(@status, c.status)")
+        parametros.append({"name": "@status", "value": status})
+    return list(
+        container().query_items(
+            query=(
+                "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
+                "c.perfil, c.status, c.medidoEm, c.recebidoEm FROM c WHERE "
+                + " AND ".join(condicoes)
+                + " ORDER BY c.medidoEm DESC"
+            ),
+            parameters=parametros,
+            partition_key=device,
+        )
+    )
+
+
 @app.route(route="leituras", methods=["GET"])
 def leituras(req: func.HttpRequest) -> func.HttpResponse:
     usuario, erro = autorizar(req, TODOS)
@@ -394,34 +429,8 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
     if erros:
         return resposta({"erros": erros}, 400)
 
-    condicoes = ["c.deviceId = @device", "c.empresaId = @empresa"]
-    parametros = [
-        {"name": "@limite", "value": limite},
-        {"name": "@device", "value": device},
-        {"name": "@empresa", "value": usuario["empresaId"]},
-    ]
-    if filtros["desde"] is not None:
-        condicoes.append("c.medidoEm >= @desde")
-        parametros.append({
-            "name": "@desde",
-            "value": datetime.fromtimestamp(filtros["desde"], timezone.utc).isoformat(),
-        })
-    if filtros["status"] is not None:
-        condicoes.append("ARRAY_CONTAINS(@status, c.status)")
-        parametros.append({"name": "@status", "value": filtros["status"]})
-
-    itens = list(
-        container().query_items(
-            query=(
-                "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
-                "c.perfil, c.status, c.medidoEm, c.recebidoEm FROM c WHERE "
-                + " AND ".join(condicoes)
-                + " ORDER BY c.medidoEm DESC"
-            ),
-            parameters=parametros,
-            partition_key=device,
-        )
-    )
+    itens = consultar_leituras(device, usuario["empresaId"], limite,
+                               filtros["desde"], filtros["status"])
     return resposta({"deviceId": device, "leituras": itens})
 
 
