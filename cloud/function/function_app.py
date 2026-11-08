@@ -7,6 +7,7 @@ Público:
   POST /api/empresas            cadastro de empresa nova + primeiro gestor
   POST /api/login               e-mail e senha -> token de 8 h
   GET  /api/perfis              perfis de carga e faixas de temperatura
+  POST /api/chat                pergunta ao assistente do site (Azure OpenAI)
 
 Painel (token do login no header `Authorization: Bearer <token>`):
   GET  /api/eu                  dados do usuário logado
@@ -35,6 +36,7 @@ from datetime import datetime, timezone
 import azure.functions as func
 from azure.cosmos import CosmosClient, exceptions
 
+import chat
 from cadastros import (
     SENHA_MIN,
     validar_dispositivo,
@@ -76,6 +78,9 @@ HASH_FALSO = gerar_hash(uuid.uuid4().hex)
 TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
 SEP = "~"
+
+# Por instância: 10 perguntas por minuto por IP.
+LIMITE_CHAT = chat.LimiteDeUso(maximo=10, janela_s=60)
 
 _banco = None
 _containers = {}
@@ -328,6 +333,36 @@ def senha(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("%s trocou a senha", usuario["id"])
     return resposta({"token": gerar_token(usuario, os.environ["JWT_SECRET"]),
                      "usuario": com_empresa(usuario)})
+
+
+# ------------------------------------------------------------ chat do site
+
+@app.route(route="chat", methods=["POST"])
+def chat_site(req: func.HttpRequest) -> func.HttpResponse:
+    # Sem configuração ou com a IA fora do ar: 503, e o site cai no FAQ.
+    if not chat.configurado():
+        return resposta({"erros": ["chat indisponível"]}, 503)
+    if not LIMITE_CHAT.permitir(chat.ip_do_cliente(req.headers)):
+        return resposta({"erros": ["muitas perguntas seguidas. Tente de novo em 1 min."]}, 429)
+
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    erros, doc = chat.validar_chat(dados)
+    if erros:
+        return resposta({"erros": erros}, 400)
+
+    inicio = time.monotonic()
+    try:
+        corpo = chat.responder(doc["pergunta"], doc["historico"])
+    except Exception as e:  # qualquer falha da IA (rede, cota, filtro) vira 503
+        # O texto da pergunta não vai para o log: só o tamanho.
+        logging.warning("chat: falha da IA (%s) com pergunta de %d caracteres",
+                        type(e).__name__, len(doc["pergunta"]))
+        return resposta({"erros": ["chat indisponível"]}, 503)
+    logging.info("chat: pergunta de %d caracteres, %d fontes, %.1f s",
+                 len(doc["pergunta"]), len(corpo["fontes"]), time.monotonic() - inicio)
+    return resposta(corpo)
 
 
 # ------------------------------------------------------------ leituras

@@ -6,5 +6,7 @@ function_app.py
 contrato.py
 seguranca.py
 cadastros.py
+chat.py
+base_chat.json
 host.json
 requirements.txt

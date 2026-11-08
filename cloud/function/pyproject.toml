@@ -7,4 +7,4 @@ target-version = "py311"
 select = ["E", "F", "W", "I"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["cadastros", "contrato", "function_app", "seguranca"]
+known-first-party = ["cadastros", "chat", "contrato", "function_app", "seguranca"]
