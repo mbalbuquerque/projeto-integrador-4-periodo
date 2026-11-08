@@ -5,6 +5,8 @@ pela faixa da carga, grava no Azure Cosmos DB e atende o painel (login, cadastro
 Cada empresa só enxerga os próprios dados.
 
 Visão completa (modelo de dados, segurança, publicação): [`docs/stack-tecnica.md`](../../docs/stack-tecnica.md).
+Referência de todas as rotas: [`docs/api.md`](../../docs/api.md). Infraestrutura em Bicep:
+[`infra/`](../../infra/README.md).
 
 ## Recursos no Azure (região Brazil South, resource group `rg-coldtrack`)
 
@@ -14,7 +16,8 @@ Visão completa (modelo de dados, segurança, publicação): [`docs/stack-tecnic
 | Cosmos DB for NoSQL (free tier) | `cosmos-coldtrack-7319` — banco `coldtrack`: `empresas`, `usuarios`, `dispositivos`, `veiculos`, `viagens` (partição `/id`) e `leituras` (partição `/deviceId`) |
 | Storage Account | `stcoldtrack7319` |
 
-App settings: `COSMOS_CONNECTION` e `JWT_SECRET`.
+App settings lidas pelo código: `COSMOS_CONNECTION`, `COSMOS_DATABASE`, `COSMOS_CONTAINER` e
+`JWT_SECRET` (lista completa em [`infra/README.md`](../../infra/README.md)).
 
 ## Endpoints
 
@@ -72,19 +75,39 @@ Sensor sem veículo usa o perfil demonstrativo (normal até 15 °C, atenção at
 Leituras de um sensor da empresa, da medição mais recente para a mais antiga. `limite` de 1 a
 500; `horas` (1 a 168) e `status` são opcionais.
 
-## Testes
+## Rodar localmente
+
+Requer Python 3.11 e o [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-functions/functions-run-local) v4.
+
+```bash
+cd cloud/function
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp local.settings.example.json local.settings.json  # preencher COSMOS_CONNECTION e JWT_SECRET
+func start                                          # http://localhost:7071/api
+```
+
+O `local.settings.json` está no `.gitignore`. Usar um banco de desenvolvimento, nunca o de
+produção.
+
+## Testes e lint
 
 ```bash
 cd cloud/function
 python -m unittest -v
+pip install ruff==0.17.4 && ruff check .
 ```
 
 ## Deploy
 
 Automático pelo GitHub Actions (`publicar-api.yml`) a cada push na branch `everson` que altere
-esta pasta. Manual: `bash publicar.sh`.
+esta pasta. Manual: `bash publicar.sh`. Os dois publicam exatamente os arquivos listados em
+`pacote.txt`; o `test_pacote.py` falha se um módulo novo da API ficar de fora. Testes,
+`scripts/` e configuração de lint não são publicados.
 
 ## Scripts de suporte
+
+Ficam em `scripts/` e rodam a partir desta pasta (ex.: `python scripts/criar_usuario.py`).
 
 | script | uso |
 |---|---|

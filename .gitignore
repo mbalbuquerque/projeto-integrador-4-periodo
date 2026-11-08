@@ -10,3 +10,6 @@ local.settings.json
 
 # Dados da analise (baixados e gerados pelos scripts)
 analise/dados/
+
+# Pacote gerado pelo publicar.sh
+cloud/function/publicar.zip
