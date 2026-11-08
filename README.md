@@ -41,6 +41,10 @@ fica em outro repositório: [mbalbuquerque/Front-End-pi](https://github.com/mbal
  +-----------------------+                           +--------------------------+
 ```
 
+O chat do site (`POST /api/chat`) responde dúvidas sobre o projeto com um modelo de linguagem
+do Azure OpenAI, usando como contexto trechos desta documentação; se a IA não responder, o site
+usa o FAQ.
+
 Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas da API:
 [`docs/api.md`](docs/api.md). Recursos do Azure: [`infra/README.md`](infra/README.md).
 
@@ -59,6 +63,7 @@ Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas
 │   ├── contrato.py          contrato da telemetria, perfis de carga e classificação
 │   ├── seguranca.py         senha, token, bloqueio de login, chave de sensor
 │   ├── cadastros.py         validação dos cadastros
+│   ├── chat.py              chat do site (Azure OpenAI + busca na base_chat.json)
 │   ├── test_*.py            testes (unittest)
 │   ├── pacote.txt           arquivos publicados no Azure
 │   ├── publicar.sh          publicação manual
@@ -156,6 +161,7 @@ Fluxo de branches e convenção de commits: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - [x] Faixa por perfil de carga (manga, uva) enviada ao sensor
 - [x] Troca de senha, bloqueio de login e etiqueta QR por veículo
 - [x] Previsão de calor na rota (Open-Meteo + histórico INMET) no dashboard
+- [x] Chat do site com modelo de linguagem do Azure OpenAI, respondendo pela documentação do projeto
 - [ ] Montagem física
 - [ ] Gabinete reciclado
 - [ ] Testes de campo

@@ -22,7 +22,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 |---|---|---|
 | chave do sensor | header `x-device-key: <chave>` | `POST /telemetria` |
 | token do painel | header `Authorization: Bearer <token>` | rotas do painel |
-| nenhuma | — | `POST /empresas`, `POST /login`, `GET /perfis` |
+| nenhuma | — | `POST /empresas`, `POST /login`, `GET /perfis`, `POST /chat` |
 
 O token é um JWT HS256 válido por 8 horas, emitido por `POST /login`, `POST /empresas` e
 `POST /senha`. A cada chamada a API confere o usuário no banco: usuário removido, senha
@@ -136,6 +136,39 @@ Acesso: operador, gestor. Troca a própria senha.
 
 `nova` com 8 a 128 caracteres e diferente de `atual`. Respostas: `200 {"token", "usuario"}`
 (novo token; os anteriores param de valer); `400` validação ou `atual: senha atual incorreta`.
+
+## Chat do site
+
+### `POST /chat`
+
+Acesso: aberto. Responde perguntas sobre o ColdTrack com um modelo de linguagem do Azure
+OpenAI (`gpt-4.1-mini`), usando como contexto os trechos da documentação mais parecidos com a
+pergunta (base `cloud/function/base_chat.json`, busca por embeddings). O modelo só responde
+sobre o projeto; fora do assunto, ou sem informação na base, diz que não sabe e indica o botão
+Falar com o desenvolvedor (WhatsApp).
+
+```json
+{"pergunta": "Como a manga é classificada?",
+ "historico": [{"papel": "usuario", "texto": "oi"}, {"papel": "assistente", "texto": "Olá!"}]}
+```
+
+| campo | regra |
+|---|---|
+| `pergunta` | obrigatória, 1 a 500 caracteres |
+| `historico` | opcional; até 6 mensagens anteriores da conversa, cada uma `{"papel": "usuario" ou "assistente", "texto": até 1000 caracteres}` |
+
+Campo não previsto é erro. Nada da conversa é gravado no servidor; o log guarda só o tamanho
+da pergunta.
+
+| resposta | corpo |
+|---|---|
+| `200` | `{"resposta": "...", "fontes": ["docs/api.md", "FAQ do site"], "origem": "ia"}` |
+| `400` | erros de validação (ex.: `pergunta: no máximo 500 caracteres`, `historico[0].papel: use usuario ou assistente`) |
+| `429` | `muitas perguntas seguidas. Tente de novo em 1 min.` (mais de 10 perguntas por minuto do mesmo IP) |
+| `503` | `chat indisponível`: IA não configurada, fora do ar, sem cota ou sem resposta em 20 s |
+
+`fontes` lista os documentos usados como contexto, sem repetir. No `503`, o site usa as
+respostas prontas do FAQ. O limite por IP é contado em memória, por instância da Function.
 
 ## Leituras
 
