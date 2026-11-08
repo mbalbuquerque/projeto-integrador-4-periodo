@@ -269,6 +269,23 @@ class TestSessao(BaseAcesso):
                                 id="caio@b.com")
         self.assertEqual(status, 404)
 
+    def test_logs_de_usuarios_sem_email_completo(self):
+        logging.disable(logging.NOTSET)
+        with self.assertLogs(level="INFO") as log:
+            self.chamar(USUARIOS, "POST", "/api/usuarios",
+                        {"email": "carla.dias@a.com", "nome": "Carla", "perfil": "operador",
+                         "senha": "senha-nova-123"}, email="ana@a.com")
+            self.chamar(USUARIOS, "PUT", "/api/usuarios/carla.dias@a.com",
+                        {"senha": "outra-senha-123"}, email="ana@a.com", id="carla.dias@a.com")
+            self.chamar(USUARIOS, "DELETE", "/api/usuarios/carla.dias@a.com",
+                        email="ana@a.com", id="carla.dias@a.com")
+            self.chamar(SAIR, "POST", "/api/sair", email="ana@a.com")
+        texto = "\n".join(log.output)
+        self.assertEqual(len(log.output), 4)
+        self.assertNotIn("carla.dias", texto)
+        self.assertNotIn("ana@a.com", texto)
+        self.assertIn("c***@a.com", texto)
+
     def test_cadastro_sem_perfil_nega(self):
         token = self.token("ana@a.com")
         del self.containers["usuarios"]._achar("ana@a.com")["perfil"]

@@ -289,7 +289,7 @@ def empresas(req: func.HttpRequest) -> func.HttpResponse:
         "id": empresa_id, "nome": doc["empresa"],
         "criadaEm": datetime.now(timezone.utc).isoformat(),
     })
-    logging.info("empresa %s criada por %s", empresa_id, usuario["id"])
+    logging.info("empresa %s criada por %s", empresa_id, mascarar_email(usuario["id"]))
 
     token = gerar_token(usuario, os.environ["JWT_SECRET"])
     return resposta({"token": token,
@@ -504,7 +504,7 @@ def assistente_painel(req: func.HttpRequest) -> func.HttpResponse:
                         type(e).__name__, len(doc["pergunta"]))
         return resposta({"erros": ["assistente indisponível"]}, 503)
     logging.info("assistente: %s perguntou (%d caracteres), %d fontes, %.1f s",
-                 usuario["id"], len(doc["pergunta"]), len(corpo["fontes"]),
+                 mascarar_email(usuario["id"]), len(doc["pergunta"]), len(corpo["fontes"]),
                  time.monotonic() - inicio)
     return resposta(corpo)
 
@@ -610,7 +610,7 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
             container("dispositivos").create_item(doc)
         except exceptions.CosmosResourceExistsError:
             return resposta({"erros": [f"o ID {doc['id']} já está em uso; escolha outro"]}, 409)
-        logging.info("%s registrou o dispositivo %s", gestor["id"], doc["id"])
+        logging.info("%s registrou o dispositivo %s", mascarar_email(gestor["id"]), doc["id"])
         # A chave aparece só agora: o banco guarda apenas o hash.
         return resposta({"id": doc["id"], "descricao": doc["descricao"],
                          "criadoEm": doc["criadoEm"], "chave": chave}, 201)
@@ -624,7 +624,8 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         chave = gerar_chave_dispositivo()
         disp["chaveHash"] = hash_chave(chave)
         container("dispositivos").upsert_item(disp)
-        logging.info("%s trocou a chave do dispositivo %s", gestor["id"], item_id)
+        logging.info("%s trocou a chave do dispositivo %s", mascarar_email(gestor["id"]),
+                     item_id)
         return resposta({"id": item_id, "chave": chave})
 
     em_uso = list(container("veiculos").query_items(
@@ -636,7 +637,7 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"erros": [f"o veículo {codigo} usa este sensor; "
                                    "remova ou troque o veículo antes"]}, 409)
     container("dispositivos").delete_item(item_id, partition_key=item_id)
-    logging.info("%s removeu o dispositivo %s", gestor["id"], item_id)
+    logging.info("%s removeu o dispositivo %s", mascarar_email(gestor["id"]), item_id)
     return func.HttpResponse(status_code=204)
 
 
@@ -664,7 +665,7 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
                                         partition_key=id_interno(empresa, item_id))
         except exceptions.CosmosResourceNotFoundError:
             return resposta({"erros": ["não encontrado"]}, 404)
-        logging.info("%s removeu %s/%s", usuario["id"], nome, item_id)
+        logging.info("%s removeu %s/%s", mascarar_email(usuario["id"]), nome, item_id)
         return func.HttpResponse(status_code=204)
 
     dados, erro = corpo_json(req)
@@ -691,7 +692,7 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
                                      "empresaId": empresa})
     except exceptions.CosmosResourceExistsError:
         return resposta({"erros": [f"já existe um cadastro com id {doc['id']}"]}, 409)
-    logging.info("%s criou %s/%s", usuario["id"], nome, doc["id"])
+    logging.info("%s criou %s/%s", mascarar_email(usuario["id"]), nome, doc["id"])
     return resposta(doc, 201)
 
 
@@ -754,7 +755,8 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
         if item_id == gestor["id"]:
             return resposta({"erros": ["você não pode remover o próprio usuário"]}, 400)
         container("usuarios").delete_item(item_id, partition_key=item_id)
-        logging.info("%s removeu o usuário %s", gestor["id"], item_id)
+        logging.info("%s removeu o usuário %s", mascarar_email(gestor["id"]),
+                     mascarar_email(item_id))
         return func.HttpResponse(status_code=204)
 
     dados, erro = corpo_json(req)
@@ -793,5 +795,6 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
         container("usuarios").create_item(doc)
     except exceptions.CosmosResourceExistsError:
         return resposta({"erros": ["já existe um usuário com esse e-mail"]}, 409)
-    logging.info("%s criou o usuário %s (%s)", gestor["id"], doc["id"], doc["perfil"])
+    logging.info("%s criou o usuário %s (%s)", mascarar_email(gestor["id"]),
+                 mascarar_email(doc["id"]), doc["perfil"])
     return resposta(publico(doc), 201)
