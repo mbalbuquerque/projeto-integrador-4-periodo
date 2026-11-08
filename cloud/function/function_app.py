@@ -61,15 +61,18 @@ from contrato import (
 )
 from limites import Limites, ip_do_cliente
 from seguranca import (
+    OPERACOES_DE_SUCESSO,
     bloqueado_ate,
     conferir_chave,
     conferir_senha,
+    espera_para,
     gerar_chave_dispositivo,
     gerar_hash,
     gerar_token,
     hash_chave,
     ler_token,
-    registrar_falha,
+    mascarar_email,
+    operacoes_de_falha,
     token_do_cabecalho,
 )
 
@@ -90,6 +93,13 @@ CHAT_POR_MINUTO = 10
 CHAT_POR_DIA = 2000
 ASSISTENTE_POR_MINUTO = 15
 ASSISTENTE_POR_DIA = 300
+
+# Login: até 20 tentativas erradas por IP a cada 15 minutos.
+LOGIN_FALHAS_POR_IP = 20
+LOGIN_JANELA_IP_S = 15 * 60
+MSG_LOGIN_RECUSADO = ("e-mail ou senha incorretos. Se errou várias vezes, "
+                      "aguarde alguns minutos.")
+MSG_IP_EM_ESPERA = "muitas tentativas de login erradas. Aguarde alguns minutos."
 
 _banco = None
 _containers = {}
@@ -284,6 +294,30 @@ def empresas(req: func.HttpRequest) -> func.HttpResponse:
                      "usuario": {**publico(usuario), "empresa": doc["empresa"]}}, 201)
 
 
+def _patch_usuario(usuario_id, operacoes):
+    """Muda só os campos pedidos do usuário (patch atômico do Cosmos).
+
+    Nunca regrava o documento inteiro: uma troca de senha ou de sessão feita por
+    outra chamada no meio do caminho não é desfeita. Devolve o documento
+    atualizado, ou None se o usuário não existe mais.
+    """
+    try:
+        return container("usuarios").patch_item(usuario_id, partition_key=usuario_id,
+                                                 patch_operations=operacoes)
+    except exceptions.CosmosResourceNotFoundError:
+        return None
+
+
+def _registrar_falha(usuario, agora=None):
+    """Conta a senha errada e, da 5ª em diante, põe a conta em espera crescente."""
+    agora = time.time() if agora is None else agora
+    doc = _patch_usuario(usuario["id"], operacoes_de_falha(usuario, agora))
+    espera = espera_para(doc.get("falhas", 0)) if doc else 0
+    if espera:
+        _patch_usuario(usuario["id"], [{"op": "set", "path": "/bloqueadoAte",
+                                        "value": int(agora + espera)}])
+
+
 @app.route(route="login", methods=["POST"])
 def login(req: func.HttpRequest) -> func.HttpResponse:
     dados, erro = corpo_json(req)
@@ -293,30 +327,36 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
     email = str((dados or {}).get("email", "")).strip().lower()
     senha = str((dados or {}).get("senha", ""))
 
+    # Um mesmo IP com falhas demais para de tentar, em qualquer conta: segura
+    # quem tenta senhas em massa e quem tenta deixar várias contas em espera.
+    chave_ip = f"login:ip:{ip_do_cliente(req.headers)}"
+    if LIMITES.total(chave_ip, LOGIN_JANELA_IP_S) >= LOGIN_FALHAS_POR_IP:
+        logging.warning("login recusado: IP com %d falhas ou mais", LOGIN_FALHAS_POR_IP)
+        return resposta({"erros": [MSG_IP_EM_ESPERA]}, 429)
+
     usuario = ler("usuarios", email) if email else None
 
-    # Mesma mensagem e mesmo custo para e-mail inexistente e senha errada:
-    # sem o hash de mentira, a resposta mais rápida revelaria quem tem conta.
+    # Mesmo custo para e-mail inexistente e senha errada: sem o hash de mentira,
+    # a resposta mais rápida revelaria quem tem conta.
     senha_ok = conferir_senha(senha, usuario["senhaHash"] if usuario else HASH_FALSO)
+    em_espera = usuario is not None and bloqueado_ate(usuario) > 0
 
-    if usuario is not None:
-        fim = bloqueado_ate(usuario)
-        if fim:
-            minutos = max(1, round((fim - time.time()) / 60))
-            return resposta({"erros": [
-                f"muitas tentativas erradas. Tente de novo em {minutos} min."]}, 429)
-        if not senha_ok:
-            container("usuarios").upsert_item(registrar_falha(usuario))
-        elif usuario.get("falhas"):
-            usuario["falhas"] = 0
-            container("usuarios").upsert_item(usuario)
+    if usuario is not None and senha_ok and not em_espera:
+        if usuario.get("falhas") or usuario.get("bloqueadoAte"):
+            usuario = _patch_usuario(usuario["id"], OPERACOES_DE_SUCESSO) or usuario
+        token = gerar_token(usuario, os.environ["JWT_SECRET"])
+        return resposta({"token": token, "usuario": com_empresa(usuario)})
 
-    if usuario is None or not senha_ok:
-        logging.warning("login recusado para %s", email or "(vazio)")
-        return resposta({"erros": ["e-mail ou senha incorretos"]}, 401)
-
-    token = gerar_token(usuario, os.environ["JWT_SECRET"])
-    return resposta({"token": token, "usuario": com_empresa(usuario)})
+    # E-mail inexistente, senha errada e conta em espera recebem a mesma resposta:
+    # a API não revela quem tem conta nem quem está em espera. Na espera a
+    # tentativa não conta para a conta (senão um terceiro estenderia a espera
+    # para sempre), mas conta para o IP.
+    LIMITES.contar(chave_ip, LOGIN_JANELA_IP_S)
+    if usuario is not None and not em_espera:
+        _registrar_falha(usuario)
+    logging.warning("login recusado para %s%s", mascarar_email(email),
+                    " (conta em espera)" if em_espera else "")
+    return resposta({"erros": [MSG_LOGIN_RECUSADO]}, 401)
 
 
 @app.route(route="eu", methods=["GET"])

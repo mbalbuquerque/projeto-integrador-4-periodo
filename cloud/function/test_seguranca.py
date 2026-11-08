@@ -14,17 +14,20 @@ from cadastros import (
     validar_viagem,
 )
 from seguranca import (
-    BLOQUEIO_S,
+    ESPERA_MAX_S,
+    ESQUECER_FALHAS_S,
     MAX_FALHAS,
     bloqueado_ate,
     conferir_chave,
     conferir_senha,
+    espera_para,
     gerar_chave_dispositivo,
     gerar_hash,
     gerar_token,
     hash_chave,
     ler_token,
-    registrar_falha,
+    mascarar_email,
+    operacoes_de_falha,
     token_do_cabecalho,
 )
 
@@ -100,19 +103,40 @@ class TestToken(unittest.TestCase):
         self.assertIsNone(token_do_cabecalho("Bearer "))
 
 
-class TestBloqueio(unittest.TestCase):
-    def test_bloqueia_na_quinta_falha(self):
-        usuario, agora = {}, 1_000_000
-        for _ in range(MAX_FALHAS - 1):
-            registrar_falha(usuario, agora)
-        self.assertEqual(bloqueado_ate(usuario, agora), 0)
-        registrar_falha(usuario, agora)
-        self.assertEqual(bloqueado_ate(usuario, agora), agora + BLOQUEIO_S)
-        self.assertEqual(usuario["falhas"], 0)
+class TestEspera(unittest.TestCase):
+    def test_espera_cresce_ate_o_teto(self):
+        self.assertEqual([espera_para(n) for n in range(MAX_FALHAS)], [0] * MAX_FALHAS)
+        self.assertEqual([espera_para(n) for n in range(5, 11)],
+                         [60, 120, 240, 480, 900, 900])
+        self.assertEqual(espera_para(10_000), ESPERA_MAX_S)
 
-    def test_bloqueio_vence(self):
+    def test_espera_vence(self):
         usuario = {"bloqueadoAte": 1000}
+        self.assertEqual(bloqueado_ate(usuario, 999), 1000)
         self.assertEqual(bloqueado_ate(usuario, 1001), 0)
+        self.assertEqual(bloqueado_ate({}, 1001), 0)
+
+    def test_falha_so_mexe_no_contador(self):
+        agora = 1_000_000
+        ops = operacoes_de_falha({"falhas": 3, "ultimaFalha": agora - 60}, agora)
+        self.assertEqual(ops, [{"op": "incr", "path": "/falhas", "value": 1},
+                               {"op": "set", "path": "/ultimaFalha", "value": agora}])
+        self.assertEqual({o["path"] for o in ops}, {"/falhas", "/ultimaFalha"})
+
+    def test_falha_antiga_e_esquecida(self):
+        agora = 1_000_000
+        velho = {"falhas": 9, "ultimaFalha": agora - ESQUECER_FALHAS_S - 1}
+        self.assertEqual(operacoes_de_falha(velho, agora)[0],
+                         {"op": "set", "path": "/falhas", "value": 1})
+        self.assertEqual(operacoes_de_falha({}, agora)[0]["op"], "set")
+
+
+class TestMascara(unittest.TestCase):
+    def test_email(self):
+        self.assertEqual(mascarar_email("ana.souza@vale.com"), "a***@vale.com")
+        self.assertEqual(mascarar_email("sem-arroba"), "s***")
+        self.assertEqual(mascarar_email(""), "(vazio)")
+        self.assertEqual(mascarar_email(None), "(vazio)")
 
 
 class TestChaveDispositivo(unittest.TestCase):
