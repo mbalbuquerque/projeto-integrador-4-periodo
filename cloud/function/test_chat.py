@@ -221,6 +221,13 @@ class TestRota(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(corpo["resposta"], chat.SEM_RESPOSTA)
 
+    def test_link_de_fora_sai_da_resposta(self):
+        self.falso._texto = "Baixe em https://evil.example/app ou veja " + chat.SITE + "/faq"
+        status, corpo = self.chamar({"pergunta": "onde baixo?"})
+        self.assertEqual(status, 200)
+        self.assertEqual(corpo["resposta"],
+                         "Baixe em [link removido] ou veja " + chat.SITE + "/faq")
+
     def test_validacao_400(self):
         status, corpo = self.chamar({"pergunta": ""})
         self.assertEqual(status, 400)
@@ -248,6 +255,30 @@ class TestRota(unittest.TestCase):
         self.assertEqual(status, 429)
         self.assertEqual(corpo, {"erros": ["muitas perguntas seguidas. Tente de novo em 1 min."]})
         self.assertEqual(self.chamar({"pergunta": "oi"}, ip="201.9.9.9")[0], 200)
+
+
+class TestLinks(unittest.TestCase):
+    def test_tira_link_de_fora(self):
+        self.assertEqual(chat.filtrar_links("Entre em https://evil.example/login agora."),
+                         "Entre em [link removido] agora.")
+        self.assertEqual(chat.filtrar_links("veja http://x.io."), "veja [link removido].")
+        self.assertEqual(chat.filtrar_links("[aqui](https://evil.example/a)"),
+                         "[aqui]([link removido])")
+
+    def test_mantem_o_site(self):
+        for texto in (chat.SITE, chat.SITE + "/", chat.SITE + "/painel.html?x=1",
+                      "Acesse " + chat.SITE.upper() + "/login.html.", chat.SITE + "#faq"):
+            self.assertEqual(chat.filtrar_links(texto), texto)
+
+    def test_imitacoes_do_site_saem(self):
+        for falso in (chat.SITE + ".evil.com/login", chat.SITE + "@evil.com",
+                      chat.SITE + ":8080@evil.com", chat.SITE.replace("https", "http"),
+                      "https://stcoldtrackweb7319.z15.web.core.windows.net-evil.com"):
+            self.assertEqual(chat.filtrar_links(falso), "[link removido]", falso)
+
+    def test_sistema_proibe_links(self):
+        self.assertIn(chat.SITE, chat.SISTEMA)
+        self.assertIn("Nunca peça senha", chat.SISTEMA)
 
 
 class TestCliente(unittest.TestCase):
