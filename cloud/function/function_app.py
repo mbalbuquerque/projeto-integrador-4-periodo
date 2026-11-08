@@ -13,6 +13,7 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   GET  /api/eu                  dados do usuário logado
   POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
   POST /api/senha               troca a própria senha                   (operador, gestor)
+  POST /api/sair                encerra todas as sessões do usuário     (operador, gestor)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/dispositivos        sensores da empresa                     (operador, gestor)
   POST/PUT/DELETE /api/dispositivos[/{id}]  registra, troca a chave, remove (gestor)
@@ -160,7 +161,8 @@ def autorizar(req, perfis):
             or usuario.get("empresaId") != carga["emp"]
             or usuario.get("sessao", 0) != carga.get("ver", 0)):
         return None, resposta({"erros": ["faça login para continuar"]}, 401)
-    if usuario["perfil"] not in perfis:
+    # Cadastro sem perfil ou sem empresa (dado quebrado) nega: na dúvida, nunca libera.
+    if usuario.get("perfil") not in perfis or not usuario.get("empresaId"):
         return None, resposta({"erros": ["seu perfil não tem acesso a esta ação"]}, 403)
     return usuario, None
 
@@ -380,12 +382,27 @@ def senha(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"erros": ["atual: senha atual incorreta"]}, 400)
 
     # Nova versão da sessão: tokens emitidos antes (outros aparelhos) param de valer.
-    usuario["senhaHash"] = gerar_hash(doc["nova"])
-    usuario["sessao"] = usuario.get("sessao", 0) + 1
-    container("usuarios").upsert_item(usuario)
-    logging.info("%s trocou a senha", usuario["id"])
-    return resposta({"token": gerar_token(usuario, os.environ["JWT_SECRET"]),
-                     "usuario": com_empresa(usuario)})
+    # Patch: grava só a senha e a sessão, sem regravar o resto do cadastro.
+    atualizado = _patch_usuario(usuario["id"], [
+        {"op": "set", "path": "/senhaHash", "value": gerar_hash(doc["nova"])},
+        {"op": "incr", "path": "/sessao", "value": 1},
+    ])
+    if atualizado is None:
+        return resposta({"erros": ["faça login para continuar"]}, 401)
+    logging.info("%s trocou a senha", mascarar_email(usuario["id"]))
+    return resposta({"token": gerar_token(atualizado, os.environ["JWT_SECRET"]),
+                     "usuario": com_empresa(atualizado)})
+
+
+@app.route(route="sair", methods=["POST"])
+def sair(req: func.HttpRequest) -> func.HttpResponse:
+    """Sai de todos os aparelhos: sobe a versão da sessão e todo token emitido morre."""
+    usuario, erro = autorizar(req, TODOS)
+    if erro:
+        return erro
+    _patch_usuario(usuario["id"], [{"op": "incr", "path": "/sessao", "value": 1}])
+    logging.info("%s saiu (sessões encerradas)", mascarar_email(usuario["id"]))
+    return func.HttpResponse(status_code=204)
 
 
 # ------------------------------------------------------------ chat do site
@@ -745,16 +762,26 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
         return erro
 
     if metodo == "PUT":
+        # A própria senha só muda com a senha atual (POST /senha): um token
+        # roubado não basta para tomar a conta do gestor.
+        if item_id == gestor["id"]:
+            return resposta({"erros": [
+                "para trocar a própria senha use Configurações → Trocar senha"]}, 400)
         # Gestor redefine a senha de quem esqueceu: derruba as sessões abertas
-        # e libera a conta se estava bloqueada.
+        # e tira a conta da espera do login.
         nova = (dados or {}).get("senha") if isinstance(dados, dict) else None
         if not isinstance(nova, str) or not SENHA_MIN <= len(nova) <= 128:
             return resposta({"erros": [f"senha: no mínimo {SENHA_MIN} caracteres"]}, 400)
-        alvo.update({"senhaHash": gerar_hash(nova), "sessao": alvo.get("sessao", 0) + 1,
-                     "falhas": 0, "bloqueadoAte": 0})
-        container("usuarios").upsert_item(alvo)
-        logging.info("%s redefiniu a senha de %s", gestor["id"], item_id)
-        return resposta(publico(alvo))
+        atualizado = _patch_usuario(item_id, [
+            {"op": "set", "path": "/senhaHash", "value": gerar_hash(nova)},
+            {"op": "incr", "path": "/sessao", "value": 1},
+            *OPERACOES_DE_SUCESSO,
+        ])
+        if atualizado is None:
+            return resposta({"erros": ["não encontrado"]}, 404)
+        logging.info("%s redefiniu a senha de %s", mascarar_email(gestor["id"]),
+                     mascarar_email(item_id))
+        return resposta(publico(atualizado))
 
     erros, doc = validar_usuario(dados)
     if erros:

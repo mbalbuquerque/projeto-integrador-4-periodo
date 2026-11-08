@@ -19,6 +19,10 @@ HASH = gerar_hash(SENHA)  # scrypt é caro: um hash só para todos os testes
 MSG = function_app.MSG_LOGIN_RECUSADO
 
 LOGIN = function_app.login.build().get_user_function()
+EU = function_app.eu.build().get_user_function()
+SAIR = function_app.sair.build().get_user_function()
+SENHA_ROTA = function_app.senha.build().get_user_function()
+USUARIOS = function_app.usuarios.build().get_user_function()
 
 
 def usuario(email, perfil="gestor", empresa="E-A", **extra):
@@ -187,6 +191,91 @@ class TestLogin(BaseAcesso):
         texto = "\n".join(log.output)
         self.assertNotIn("ana.souza", texto)
         self.assertIn("a***@vale.com", texto)
+
+
+
+class TestSessao(BaseAcesso):
+    def token(self, email):
+        return gerar_token(self.doc(email), SEGREDO)
+
+    def com_token(self, rota, metodo, url, token, corpo=None, **rota_params):
+        h = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+        dados = json.dumps(corpo).encode() if corpo is not None else b""
+        r = rota(func.HttpRequest(method=metodo, url=url, body=dados, headers=h,
+                                  route_params=rota_params))
+        return r.status_code, json.loads(r.get_body() or b"null")
+
+    def test_sair_derruba_todos_os_tokens(self):
+        celular, notebook = self.token("ana@a.com"), self.token("ana@a.com")
+        self.assertEqual(self.com_token(EU, "GET", "/api/eu", notebook)[0], 200)
+        self.assertEqual(self.com_token(SAIR, "POST", "/api/sair", celular), (204, None))
+        for token in (celular, notebook):
+            self.assertEqual(self.com_token(EU, "GET", "/api/eu", token),
+                             (401, {"erros": ["faça login para continuar"]}))
+        self.assertEqual(self.doc("ana@a.com")["sessao"], 1)
+        # Outro usuário não é afetado.
+        self.assertEqual(self.chamar(EU, "GET", "/api/eu", email="bia@a.com")[0], 200)
+
+    def test_sair_usa_patch_e_operador_pode(self):
+        status, _ = self.chamar(SAIR, "POST", "/api/sair", email="bia@a.com")
+        self.assertEqual(status, 204)
+        (tipo, item, ops), = self.containers["usuarios"].escritas
+        self.assertEqual((tipo, item, ops),
+                         ("patch", "bia@a.com", [{"op": "incr", "path": "/sessao", "value": 1}]))
+
+    def test_sair_sem_token(self):
+        self.assertEqual(self.chamar(SAIR, "POST", "/api/sair")[0], 401)
+        self.assertEqual(self.containers["usuarios"].escritas, [])
+
+    def test_trocar_senha_com_patch(self):
+        antigo = self.token("ana@a.com")
+        status, corpo = self.com_token(SENHA_ROTA, "POST", "/api/senha", antigo,
+                                       {"atual": SENHA, "nova": "nova-senha-456"})
+        self.assertEqual(status, 200)
+        doc = self.doc("ana@a.com")
+        self.assertEqual(doc["sessao"], 1)
+        self.assertNotEqual(doc["senhaHash"], HASH)
+        self.assertEqual(ler_token(corpo["token"], SEGREDO)["ver"], 1)
+        self.assertEqual(self.com_token(EU, "GET", "/api/eu", antigo)[0], 401)
+        self.assertEqual(self.com_token(EU, "GET", "/api/eu", corpo["token"])[0], 200)
+        self.assertEqual({t for t, _, _ in self.containers["usuarios"].escritas}, {"patch"})
+
+    def test_gestor_nao_redefine_a_propria_senha(self):
+        status, corpo = self.chamar(USUARIOS, "PUT", "/api/usuarios/ana@a.com",
+                                    {"senha": "tomada-123"}, email="ana@a.com",
+                                    id="ana@a.com")
+        self.assertEqual((status, corpo), (400, {"erros": [
+            "para trocar a própria senha use Configurações → Trocar senha"]}))
+        self.assertEqual(self.doc("ana@a.com")["senhaHash"], HASH)
+        self.assertEqual(self.containers["usuarios"].escritas, [])
+
+    def test_gestor_redefine_senha_de_outro_com_patch(self):
+        self.containers["usuarios"]._achar("bia@a.com").update(
+            {"falhas": 7, "bloqueadoAte": int(self.agora + 600), "telefone": "guardado"})
+        status, corpo = self.chamar(USUARIOS, "PUT", "/api/usuarios/bia@a.com",
+                                    {"senha": "nova-senha-789"}, email="ana@a.com",
+                                    id="bia@a.com")
+        self.assertEqual(status, 200)
+        self.assertEqual(corpo, {"id": "bia@a.com", "nome": "Bia", "perfil": "operador",
+                                 "empresaId": "E-A"})
+        doc = self.doc("bia@a.com")
+        self.assertEqual((doc["falhas"], doc["bloqueadoAte"], doc["sessao"]), (0, 0, 1))
+        self.assertEqual(doc["telefone"], "guardado")
+        self.assertEqual({t for t, _, _ in self.containers["usuarios"].escritas}, {"patch"})
+
+    def test_gestor_nao_redefine_de_outra_empresa(self):
+        status, _ = self.chamar(USUARIOS, "PUT", "/api/usuarios/caio@b.com",
+                                {"senha": "nova-senha-789"}, email="ana@a.com",
+                                id="caio@b.com")
+        self.assertEqual(status, 404)
+
+    def test_cadastro_sem_perfil_nega(self):
+        token = self.token("ana@a.com")
+        del self.containers["usuarios"]._achar("ana@a.com")["perfil"]
+        self.assertEqual(self.com_token(EU, "GET", "/api/eu", token),
+                         (403, {"erros": ["seu perfil não tem acesso a esta ação"]}))
+        status, _ = self.com_token(USUARIOS, "GET", "/api/usuarios", token)
+        self.assertEqual(status, 403)
 
 
 if __name__ == "__main__":
