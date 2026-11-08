@@ -11,6 +11,7 @@ Público:
 
 Painel (token do login no header `Authorization: Bearer <token>`):
   GET  /api/eu                  dados do usuário logado
+  POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
   POST /api/senha               troca a própria senha                   (operador, gestor)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/dispositivos        sensores da empresa                     (operador, gestor)
@@ -36,6 +37,7 @@ from datetime import datetime, timezone
 import azure.functions as func
 from azure.cosmos import CosmosClient, exceptions
 
+import assistente
 import chat
 from cadastros import (
     SENHA_MIN,
@@ -81,6 +83,8 @@ SEP = "~"
 
 # Por instância: 10 perguntas por minuto por IP.
 LIMITE_CHAT = chat.LimiteDeUso(maximo=10, janela_s=60)
+# Assistente do painel: 15 perguntas por minuto por usuário logado.
+LIMITE_ASSISTENTE = chat.LimiteDeUso(maximo=15, janela_s=60)
 
 _banco = None
 _containers = {}
@@ -362,6 +366,69 @@ def chat_site(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"erros": ["chat indisponível"]}, 503)
     logging.info("chat: pergunta de %d caracteres, %d fontes, %.1f s",
                  len(doc["pergunta"]), len(corpo["fontes"]), time.monotonic() - inicio)
+    return resposta(corpo)
+
+
+# ------------------------------------------------------------ assistente do painel
+
+class DadosDaEmpresa:
+    """Consultas de leitura presas a uma empresa, para o retrato do assistente.
+
+    São as mesmas das rotas GET do painel (lista, ler, consultar_leituras), com
+    a empresa do token: o assistente não tem como pedir dados de outra.
+    """
+
+    def __init__(self, empresa):
+        self._empresa = empresa
+
+    def empresa(self):
+        return ler("empresas", self._empresa)
+
+    def veiculos(self):
+        return [id_externo(d) for d in lista("veiculos", self._empresa)]
+
+    def dispositivos(self):
+        return lista("dispositivos", self._empresa, "c.id, c.descricao, c.criadoEm")
+
+    def viagens(self):
+        return [id_externo(d) for d in lista("viagens", self._empresa)]
+
+    def usuarios(self):
+        return lista("usuarios", self._empresa, "c.id, c.nome, c.perfil")
+
+    def leituras(self, device, limite, desde=None):
+        return consultar_leituras(device, self._empresa, limite, desde)
+
+
+@app.route(route="assistente", methods=["POST"])
+def assistente_painel(req: func.HttpRequest) -> func.HttpResponse:
+    usuario, erro = autorizar(req, TODOS)
+    if erro:
+        return erro
+    if not chat.configurado():
+        return resposta({"erros": ["assistente indisponível"]}, 503)
+    if not LIMITE_ASSISTENTE.permitir(usuario["id"]):
+        return resposta({"erros": ["muitas perguntas seguidas. Tente de novo em 1 min."]}, 429)
+
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    erros, doc = chat.validar_chat(dados)
+    if erros:
+        return resposta({"erros": erros}, 400)
+
+    inicio = time.monotonic()
+    try:
+        retrato = assistente.montar_dados(usuario, DadosDaEmpresa(usuario["empresaId"]))
+        corpo = assistente.responder(doc["pergunta"], doc["historico"], retrato)
+    except Exception as e:  # banco ou IA fora do ar: 503, o painel avisa
+        # Nem a pergunta nem os dados vão para o log: só o tamanho.
+        logging.warning("assistente: falha (%s) com pergunta de %d caracteres",
+                        type(e).__name__, len(doc["pergunta"]))
+        return resposta({"erros": ["assistente indisponível"]}, 503)
+    logging.info("assistente: %s perguntou (%d caracteres), %d fontes, %.1f s",
+                 usuario["id"], len(doc["pergunta"]), len(corpo["fontes"]),
+                 time.monotonic() - inicio)
     return resposta(corpo)
 
 
