@@ -1,5 +1,6 @@
 # Credenciais (Wi-Fi, chaves de API) — usar secrets.example.h como modelo
 secrets.h
+firmware/coldtrack/secrets.h
 
 # Python
 __pycache__/

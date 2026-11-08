@@ -36,7 +36,7 @@ Repositórios:
 
 | Repositório | Conteúdo |
 |---|---|
-| `projeto-integrador-4-periodo` | Firmware (`sketch.ino`), API (`cloud/function/`), análise (`analise/`), documentação (`docs/`) |
+| `projeto-integrador-4-periodo` | Firmware (`firmware/coldtrack/coldtrack.ino`), API (`cloud/function/`), análise (`analise/`), documentação (`docs/`) |
 | `Front-End-pi` | Painel web |
 
 ## 3. Borda (IoT)
