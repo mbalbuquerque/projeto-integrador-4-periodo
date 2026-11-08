@@ -167,7 +167,8 @@ O gestor do cliente:
 | Serial: `FILA: sem relogio sincronizado` | Horário ainda não obtido pela internet | Aguardar alguns segundos após conectar |
 | Painel: veículo **SEM SINAL** | Sem leitura há mais de 1 minuto | Conferir alimentação e conexão do dispositivo |
 | Painel pede login de novo | Sessão venceu (8 horas) ou a senha foi trocada | Entrar novamente |
-| Login: `muitas tentativas erradas` | 5 senhas erradas seguidas | Esperar 15 minutos ou pedir ao gestor para **Redefinir senha** |
+| Login: `e-mail ou senha incorretos` mesmo com a senha certa | Conta em espera depois de 5 ou mais senhas erradas seguidas (1 a 15 min) | Esperar alguns minutos ou pedir ao gestor para **Redefinir senha** |
+| Login: `muitas tentativas de login erradas` | 20 senhas erradas do mesmo endereço de internet em 15 min | Esperar até 15 minutos |
 | Veículos: `Nenhum sensor livre` | Todos os sensores já estão em veículos | Conectar outro sensor em Sensores |
 
 ## 5. Encerrar um cliente ou trocar um dispositivo

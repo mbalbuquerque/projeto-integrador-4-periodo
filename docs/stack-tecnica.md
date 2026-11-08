@@ -199,7 +199,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 
 Respostas de erro: **400** (dado inválido, com a lista de erros), **401** (sem login ou token
 inválido), **403** (perfil sem permissão), **404** (não encontrado ou de outra empresa),
-**409** (cadastro repetido), **429** (login bloqueado por tentativas erradas).
+**409** (cadastro repetido), **429** (limite de uso: login errado demais do mesmo IP, perguntas demais ao chat ou ao assistente).
 
 Organização do código (`cloud/function/`):
 
@@ -208,7 +208,8 @@ Organização do código (`cloud/function/`):
 | `function_app.py` | Rotas da API e acesso ao banco |
 | `contrato.py` | Validação e classificação das leituras |
 | `contrato.py` (perfis) | Perfis de carga e faixas de temperatura |
-| `seguranca.py` | Hash de senha, token de acesso, bloqueio do login, chave de sensor |
+| `seguranca.py` | Hash de senha, token de acesso, espera do login, chave de sensor |
+| `limites.py` | Limites de uso compartilhados entre instâncias (container `limites` do Cosmos) |
 | `cadastros.py` | Validação de empresas, usuários, sensores, veículos e viagens |
 | `scripts/criar_usuario.py`, `scripts/migrar_multiempresa.py` | Suporte: criar usuário direto no banco; migração única dos dados do piloto para o modelo com empresas |
 | `test_contrato.py`, `test_seguranca.py`, `test_pacote.py` | 61 testes automatizados (o último confere a lista de arquivos publicados, `pacote.txt`) |
@@ -249,9 +250,9 @@ computador e celular.
 | Empresas | Cada empresa só lê e altera os próprios dados; sensor de outra empresa responde como inexistente |
 | Senhas | Guardadas apenas como hash scrypt com sal aleatório; a senha nunca é armazenada |
 | Permissões | Perfis Operador Logístico e Gestor, conferidos pela API em cada chamada |
-| Login | Mesma resposta e mesmo tempo para e-mail inexistente e senha errada; 5 senhas erradas seguidas bloqueiam a conta por 15 minutos |
+| Login | Mesma resposta e mesmo tempo para e-mail inexistente, senha errada e conta em espera; a partir da 5ª senha errada seguida a conta espera de 1 a 15 minutos; limite de falhas por IP |
 | Segredos | Fora do código: configurações da Function no Azure e `secrets.h` fora do Git |
-| Navegador | CORS da API aceita somente o endereço publicado do painel e o servidor local de desenvolvimento |
+| Navegador | CORS da API aceita somente o endereço publicado do painel; a API só aceita HTTPS |
 | Dados | Leituras inválidas (NaN, fora da faixa física, horário impossível) são recusadas |
 
 ## 9. Publicação e testes

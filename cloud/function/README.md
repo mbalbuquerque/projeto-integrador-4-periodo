@@ -32,9 +32,9 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `POST /empresas` | pessoa | aberta: cria a empresa e o primeiro gestor |
 | `POST /login` | pessoa | e-mail e senha → token (8 h) |
 | `GET /perfis` | painel | aberta |
-| `POST /chat` | site | aberta: pergunta ao assistente (10 por minuto por IP) |
-| `GET /eu`, `POST /senha` | operador, gestor | `Authorization: Bearer <token>` |
-| `POST /assistente` | operador, gestor | token: assistente do painel (15 por minuto por usuário) |
+| `POST /chat` | site | aberta: pergunta ao assistente (10 por minuto por IP, 2000 por dia no total) |
+| `GET /eu`, `POST /senha`, `POST /sair` | operador, gestor | `Authorization: Bearer <token>` |
+| `POST /assistente` | operador, gestor | token: assistente do painel (15 por minuto por usuário, 300 por dia por empresa) |
 | `GET /leituras`, `GET /dispositivos`, `GET /veiculos`, `GET /viagens` | operador, gestor | token |
 | `POST /dispositivos`, `PUT/DELETE /dispositivos/{id}` | gestor | token |
 | `POST /veiculos`, `PUT/DELETE /veiculos/{id}` | gestor | token |
@@ -42,16 +42,20 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `GET/POST /usuarios`, `PUT/DELETE /usuarios/{id}` | gestor | token |
 
 Sem token ou sessão derrubada: 401. Perfil sem permissão: 403. Dado de outra empresa: 404.
-Login bloqueado: 429. O acesso é conferido pela API em cada chamada; a tela só esconde o que o
+Muitas falhas de login do mesmo IP: 429. O acesso é conferido pela API em cada chamada; a tela só esconde o que o
 perfil não pode fazer.
 
 ### Acesso
 
 - Senhas com scrypt e sal por usuário; o hash nunca sai da API.
-- Token JWT HS256 com a empresa e a versão da sessão. Trocar ou redefinir a senha, ou remover
-  o usuário, derruba os tokens antigos na hora (a API confere o usuário no banco a cada chamada).
-- Mesma mensagem e mesmo tempo para e-mail inexistente e senha errada; 5 senhas erradas
-  seguidas bloqueiam a conta por 15 minutos (o gestor libera redefinindo a senha).
+- Token JWT HS256 com a empresa e a versão da sessão. Trocar ou redefinir a senha, sair
+  (`POST /sair`) ou remover o usuário derruba os tokens antigos na hora (a API confere o
+  usuário no banco a cada chamada).
+- Mesma resposta (401) e mesmo tempo para e-mail inexistente, senha errada e conta em espera.
+  A partir da 5ª senha errada seguida a conta espera 1 min, dobrando até 15 min (o gestor
+  libera redefinindo a senha); cada IP tem até 20 falhas a cada 15 min.
+- Limites de uso contados no container `limites` do Cosmos, somando todas as instâncias
+  (`limites.py`). Detalhes e limitações conhecidas: [`docs/seguranca.md`](../../docs/seguranca.md).
 - Chave de sensor: 32 bytes aleatórios, mostrada uma vez no registro; o banco guarda o SHA-256.
 
 ### `POST /telemetria`

@@ -63,7 +63,8 @@ Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas
 ├── cloud/function/          API (Azure Function em Python)
 │   ├── function_app.py      rotas
 │   ├── contrato.py          contrato da telemetria, perfis de carga e classificação
-│   ├── seguranca.py         senha, token, bloqueio de login, chave de sensor
+│   ├── seguranca.py         senha, token, espera do login, chave de sensor
+│   ├── limites.py           limites de uso compartilhados (container limites)
 │   ├── cadastros.py         validação dos cadastros
 │   ├── chat.py              chat do site (Azure OpenAI + busca na base_chat.json)
 │   ├── assistente.py        assistente do painel (dados da empresa + base do chat)
@@ -144,9 +145,11 @@ Fluxo de branches e convenção de commits: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 - Credenciais de Wi-Fi e a chave do sensor não ficam no código. Cada sensor tem chave própria,
   gerada no painel; o banco guarda só o hash.
-- Senhas com scrypt e sal por usuário; tokens JWT de 8 horas; 5 senhas erradas bloqueiam a
-  conta por 15 minutos.
+- Senhas com scrypt e sal por usuário; tokens JWT de 8 horas, derrubados ao sair
+  (`POST /sair`) ou trocar a senha. A partir da 5ª senha errada a conta entra em espera
+  crescente (1 a 15 min), e cada IP tem limite de tentativas.
 - Cada empresa só enxerga os próprios dados; o acesso é conferido pela API em toda chamada.
+- Controles, correções da revisão e limitações conhecidas: [`docs/seguranca.md`](docs/seguranca.md).
 
 ## Status
 
