@@ -42,6 +42,21 @@ param cosmosDatabaseName string = 'coldtrack'
 @description('Vazao compartilhada do banco (1000 RU/s cabe no free tier).')
 param cosmosThroughput int = 1000
 
+@description('Conta do Azure OpenAI usada pelo chat do site.')
+param openAiAccountName string = 'aoai-coldtrack-7319'
+
+@description('Deploy do modelo que responde o chat.')
+param openAiChatDeployment string = 'gpt-4.1-mini'
+
+@description('Deploy do modelo de embeddings (busca na base do chat).')
+param openAiEmbedDeployment string = 'text-embedding-3-small'
+
+@description('Capacidade dos deploys, em milhares de tokens por minuto.')
+param openAiCapacity int = 20
+
+@description('Versao da API do Azure OpenAI usada pelo codigo.')
+param openAiApiVersion string = '2024-10-21'
+
 @description('Segredo de assinatura dos tokens do painel. Vem de Key Vault ou de parametro seguro.')
 @secure()
 param jwtSecret string
@@ -164,6 +179,43 @@ resource sqlContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/conta
   }
 ]
 
+// ---------------------------------------------------------------- Azure OpenAI (chat do site)
+
+// Acesso so por Entra ID (identidade gerenciada da Function): sem chave de API.
+resource openAi 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+  name: openAiAccountName
+  location: location
+  kind: 'OpenAI'
+  sku: { name: 'S0' }
+  properties: {
+    customSubDomainName: openAiAccountName
+    publicNetworkAccess: 'Enabled'
+    disableLocalAuth: true
+  }
+}
+
+resource openAiChat 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: openAi
+  name: openAiChatDeployment
+  sku: { name: 'GlobalStandard', capacity: openAiCapacity }
+  properties: {
+    model: { format: 'OpenAI', name: 'gpt-4.1-mini', version: '2025-04-14' }
+    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
+  }
+}
+
+// Deploys da mesma conta sao criados um de cada vez.
+resource openAiEmbed 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: openAi
+  name: openAiEmbedDeployment
+  sku: { name: 'GlobalStandard', capacity: openAiCapacity }
+  properties: {
+    model: { format: 'OpenAI', name: 'text-embedding-3-small', version: '1' }
+    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
+  }
+  dependsOn: [ openAiChat ]
+}
+
 // ---------------------------------------------------------------- Function App
 
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
@@ -180,6 +232,8 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
   name: functionAppName
   location: location
   kind: 'functionapp,linux'
+  // Identidade gerenciada: e com ela que a API entra no Azure OpenAI.
+  identity: { type: 'SystemAssigned' }
   properties: {
     serverFarmId: plan.id
     httpsOnly: httpsOnly
@@ -221,12 +275,32 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'TEMP_NORMAL_MAX', value: '15' }
         { name: 'TEMP_ATENCAO_MAX', value: '20' }
         { name: 'JWT_SECRET', value: jwtSecret }
+        { name: 'AOAI_ENDPOINT', value: openAi.properties.endpoint }
+        { name: 'AOAI_DEPLOY_CHAT', value: openAiChat.name }
+        { name: 'AOAI_DEPLOY_EMBED', value: openAiEmbed.name }
+        { name: 'AOAI_API_VERSION', value: openAiApiVersion }
       ]
     }
   }
   dependsOn: [ deploymentContainer ]
 }
 
+// Papel "Cognitive Services OpenAI User" da identidade da Function na conta do Azure OpenAI
+// (so chamar os modelos; nao gerencia o recurso).
+var openAiUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions',
+  '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+
+resource functionOpenAiUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(openAi.id, functionApp.id, openAiUserRole)
+  scope: openAi
+  properties: {
+    roleDefinitionId: openAiUserRole
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output apiBaseUrl string = 'https://${functionApp.properties.defaultHostName}/api'
 output webEndpoint string = webStorage.properties.primaryEndpoints.web
 output cosmosEndpoint string = cosmos.properties.documentEndpoint
+output openAiEndpoint string = openAi.properties.endpoint

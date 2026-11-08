@@ -20,6 +20,7 @@ Assinatura *Azure for Students*, grupo `rg-coldtrack`, região Brazil South.
 | Storage da função | `stcoldtrack7319` | StorageV2, Standard_LRS, TLS 1.2; guarda `AzureWebJobsStorage` e o pacote publicado (container `app-package-funccoldtrack7319-8454393`) |
 | Application Insights | `func-coldtrack-7319` | baseado em workspace (Log Analytics no grupo padrão da assinatura), retenção de 90 dias |
 | Cosmos DB for NoSQL | `cosmos-coldtrack-7319` | free tier, consistência Session, uma região, 1000 RU/s compartilhadas no banco |
+| Azure OpenAI | `aoai-coldtrack-7319` | S0, acesso só por Entra ID (chave de API desligada); deploys `gpt-4.1-mini` (versão 2025-04-14) e `text-embedding-3-small` (versão 1), GlobalStandard, 20 mil tokens por minuto cada |
 | Storage do painel | `stcoldtrackweb7319` | site estático (`$web`) em `https://stcoldtrackweb7319.z15.web.core.windows.net` |
 
 ### Banco `coldtrack`
@@ -50,6 +51,30 @@ Só os nomes ficam no repositório. Os valores ficam no Azure.
 | `COSMOS_CONTAINER` | `leituras` | container padrão das leituras |
 | `TEMP_NORMAL_MAX`, `TEMP_ATENCAO_MAX` | `15`, `20` | legado: o código atual não lê; as faixas vêm de `PERFIS_CARGA` em `contrato.py` |
 | `JWT_SECRET` | parâmetro `@secure()` | assinatura dos tokens do painel |
+| `AOAI_ENDPOINT` | endpoint da `aoai-coldtrack-7319` | chat do site |
+| `AOAI_DEPLOY_CHAT` | `gpt-4.1-mini` | deploy que responde o chat |
+| `AOAI_DEPLOY_EMBED` | `text-embedding-3-small` | deploy da busca na base do chat |
+| `AOAI_API_VERSION` | `2024-10-21` | versão da API do Azure OpenAI |
+
+`AOAI_KEY` não existe em produção: o código só usa chave se ela estiver definida, e o recurso
+recusa chave. Sem ela, a API entra no Azure OpenAI com a identidade gerenciada.
+
+### Identidade e papéis
+
+A Function App tem identidade gerenciada atribuída pelo sistema, com o papel
+**Cognitive Services OpenAI User** na conta `aoai-coldtrack-7319` (só chama os modelos, não
+altera o recurso). Atribuir papel exige permissão de *Owner* ou *User Access Administrator*:
+o aplicativo do GitHub Actions (Contributor) não consegue, então o papel foi atribuído à mão:
+
+```bash
+az functionapp identity assign -g rg-coldtrack -n func-coldtrack-7319
+az role assignment create --role "Cognitive Services OpenAI User" \
+  --assignee-object-id <principalId da Function> --assignee-principal-type ServicePrincipal \
+  --scope $(az cognitiveservices account show -g rg-coldtrack -n aoai-coldtrack-7319 --query id -o tsv)
+```
+
+Quem roda `scripts/gerar_base_chat.py` na própria máquina precisa do mesmo papel para a
+conta do `az login`.
 
 ### CORS da API
 
@@ -58,6 +83,9 @@ Só os nomes ficam no repositório. Os valores ficam no Azure.
 
 ### Pontos de atenção
 
+- O chat público tem custo por uso no Azure OpenAI (sai do crédito da assinatura). A rota
+  limita 10 perguntas por minuto por IP e respostas curtas; a cota dos deploys (20 mil tokens
+  por minuto) é o teto. Cota esgotada vira `503` e o site cai no FAQ.
 - `httpsOnly` está `false` na Function App. Os sensores e o painel já usam HTTPS; ligar
   exige confirmar antes que nenhuma placa grava a URL com `http://`.
 - O site estático não é uma propriedade do ARM; foi ligado pela CLI
