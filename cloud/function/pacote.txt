@@ -10,5 +10,6 @@ chat.py
 assistente.py
 limites.py
 base_chat.json
+openapi.json
 host.json
 requirements.txt

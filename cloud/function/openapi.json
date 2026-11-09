@@ -1,0 +1,3114 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ColdTrack API",
+    "version": "1.0.0",
+    "description": "API do **ColdTrack Edge**: recebe a telemetria dos sensores de temperatura e umidade das cargas refrigeradas, classifica cada leitura pela faixa da carga e atende o painel web (login, cadastros, consultas, assistente).\n\n## Autenticação\n- **Painel**: `POST /login` devolve um token JWT (8 horas). Envie em `Authorization: Bearer <token>` (botão **Authorize**, esquema `bearerAuth`). A cada chamada a API confere o usuário no banco: usuário removido, senha trocada, `POST /sair` ou empresa diferente derrubam o token, e vale o perfil atual.\n- **Sensor**: `POST /telemetria` usa a chave do próprio sensor no header `x-device-key` (esquema `dispositivo`), gerada em `POST /dispositivos`.\n- **Público**: `POST /empresas`, `POST /login`, `GET /perfis`, `POST /chat`.\n\nPerfis: `operador` (consulta) e `gestor` (consulta e cadastra).\n\n## Multiempresa\nO token leva a empresa e toda consulta filtra por ela: cada empresa só enxerga os próprios dados. Item de outra empresa responde igual a item inexistente (`404`).\n\n## Erros\nSempre `{\"erros\": [\"mensagem\", ...]}`. Erros de campo vêm prefixados com o nome do campo (`email: formato inválido`). `204` não tem corpo.\n\n## Limites de uso\n| rota | limite |\n|---|---|\n| `POST /login` | 20 tentativas erradas por IP a cada 15 min (`429`); por conta, espera de 1 a 15 min a partir da 5ª senha errada seguida |\n| `POST /chat` | 10 perguntas por minuto por IP; 2000 por dia no site todo (`429`) |\n| `POST /assistente` | 15 perguntas por minuto por usuário; 300 por dia por empresa (`429`) |\n"
+  },
+  "servers": [
+    {
+      "url": "https://func-coldtrack-7319.azurewebsites.net/api",
+      "description": "Produção (Azure Functions)"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Autenticação",
+      "description": "Login, sessão e senha."
+    },
+    {
+      "name": "Telemetria",
+      "description": "Envio de leituras pelo sensor (ESP32)."
+    },
+    {
+      "name": "Leituras",
+      "description": "Consulta das leituras gravadas."
+    },
+    {
+      "name": "Veículos",
+      "description": "Frota da empresa."
+    },
+    {
+      "name": "Sensores",
+      "description": "Dispositivos (sensores) e suas chaves."
+    },
+    {
+      "name": "Viagens",
+      "description": "Viagens da frota."
+    },
+    {
+      "name": "Usuários",
+      "description": "Usuários da empresa (só gestor)."
+    },
+    {
+      "name": "Empresas",
+      "description": "Cadastro de empresa nova."
+    },
+    {
+      "name": "Perfis",
+      "description": "Perfis de carga e faixas de temperatura."
+    },
+    {
+      "name": "Chat e assistente",
+      "description": "Chat do site e assistente do painel."
+    },
+    {
+      "name": "Documentação",
+      "description": "Esta documentação."
+    }
+  ],
+  "paths": {
+    "/telemetria": {
+      "post": {
+        "tags": [
+          "Telemetria"
+        ],
+        "operationId": "enviarTelemetria",
+        "summary": "Envia uma leitura do sensor",
+        "description": "**Quem pode chamar:** dispositivo (chave própria no header `x-device-key`). A chave vale só para o próprio `deviceId`.\n\nValida, classifica pela faixa do perfil de carga do veículo que usa o sensor (sem veículo: `demonstrativo`) e grava. A leitura nunca é sobrescrita; um reenvio com os mesmos valores devolve `200` com `duplicada: true`.",
+        "security": [
+          {
+            "dispositivo": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Telemetria"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reenvio de leitura já gravada com os mesmos valores.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelemetriaDuplicada"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Leitura gravada; a faixa volta para o sensor acender o LED certo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelemetriaGravada"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "temperatura: fora da faixa [-40.0, 80.0]",
+                    "value": {
+                      "erros": [
+                        "temperatura: fora da faixa [-40.0, 80.0]"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "medidoEm: mais antigo que 7 dias",
+                    "value": {
+                      "erros": [
+                        "medidoEm: mais antigo que 7 dias"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "campos não previstos: extra",
+                    "value": {
+                      "erros": [
+                        "campos não previstos: extra"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sensor não registrado ou chave errada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "dispositivo não registrado ou chave inválida"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Já existe leitura deste sensor neste segundo com outros valores.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "já existe leitura deste sensor neste horário, com outros valores"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/perfis": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "operationId": "listarPerfis",
+        "summary": "Lista os perfis de carga e as faixas de temperatura",
+        "description": "**Quem pode chamar:** público (sem autenticação).",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Perfis de carga.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "perfis"
+                  ],
+                  "properties": {
+                    "perfis": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Perfil"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "perfis": [
+                    {
+                      "id": "demonstrativo",
+                      "nome": "Demonstrativo (protótipo)",
+                      "min": null,
+                      "max": 15.0,
+                      "margem": 5.0
+                    },
+                    {
+                      "id": "manga",
+                      "nome": "Manga",
+                      "min": 10.0,
+                      "max": 13.0,
+                      "margem": 3.0
+                    },
+                    {
+                      "id": "uva",
+                      "nome": "Uva de mesa",
+                      "min": -1.0,
+                      "max": 0.0,
+                      "margem": 2.0
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/empresas": {
+      "post": {
+        "tags": [
+          "Empresas"
+        ],
+        "operationId": "criarEmpresa",
+        "summary": "Cadastra uma empresa nova e o primeiro gestor",
+        "description": "**Quem pode chamar:** público (sem autenticação). Cria a empresa (id `E-` + 8 caracteres hexadecimais) e o primeiro usuário, com perfil `gestor`, e já devolve o token.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmpresaNova"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Empresa criada e gestor logado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResposta"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "empresa: obrigatório",
+                    "value": {
+                      "erros": [
+                        "empresa: obrigatório"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "email: formato inválido",
+                    "value": {
+                      "erros": [
+                        "email: formato inválido"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "senha: no mínimo 8 caracteres",
+                    "value": {
+                      "erros": [
+                        "senha: no mínimo 8 caracteres"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "E-mail já usado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "já existe uma conta com esse e-mail"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/login": {
+      "post": {
+        "tags": [
+          "Autenticação"
+        ],
+        "operationId": "login",
+        "summary": "Entra com e-mail e senha",
+        "description": "**Quem pode chamar:** público (sem autenticação). Devolve um token JWT válido por 8 horas.\n\nO `401` é igual, na mensagem e no tempo, para e-mail inexistente, senha errada e conta em espera. A partir da 5ª senha errada seguida a conta fica em espera (1, 2, 4, 8 e no máximo 15 min). Um mesmo IP com 20 tentativas erradas em 15 min recebe `429`.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginPedido"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login feito.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResposta"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Corpo não é JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "corpo não é JSON válido"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "E-mail ou senha incorretos (ou conta em espera).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "e-mail ou senha incorretos. Se errou várias vezes, aguarde alguns minutos."
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "IP com tentativas erradas demais.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "muitas tentativas de login erradas. Aguarde alguns minutos."
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/eu": {
+      "get": {
+        "tags": [
+          "Autenticação"
+        ],
+        "operationId": "eu",
+        "summary": "Dados do usuário logado",
+        "description": "**Quem pode chamar:** operador ou gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usuário logado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsuarioComEmpresa"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      }
+    },
+    "/senha": {
+      "post": {
+        "tags": [
+          "Autenticação"
+        ],
+        "operationId": "trocarSenha",
+        "summary": "Troca a própria senha",
+        "description": "**Quem pode chamar:** operador ou gestor (token do login). Devolve um token novo; os tokens anteriores (outros aparelhos) param de valer.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrocaSenha"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Senha trocada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResposta"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação ou senha atual incorreta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "atual: senha atual incorreta",
+                    "value": {
+                      "erros": [
+                        "atual: senha atual incorreta"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "nova: no mínimo 8 caracteres",
+                    "value": {
+                      "erros": [
+                        "nova: no mínimo 8 caracteres"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "nova: deve ser diferente da atual",
+                    "value": {
+                      "erros": [
+                        "nova: deve ser diferente da atual"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      }
+    },
+    "/sair": {
+      "post": {
+        "tags": [
+          "Autenticação"
+        ],
+        "operationId": "sair",
+        "summary": "Encerra todas as sessões do usuário",
+        "description": "**Quem pode chamar:** operador ou gestor (token do login). Sem corpo. Sobe a versão da sessão: todo token já emitido (todos os aparelhos) passa a receber `401`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Feito. Sem corpo."
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "tags": [
+          "Chat e assistente"
+        ],
+        "operationId": "chatSite",
+        "summary": "Pergunta ao chat do site",
+        "description": "**Quem pode chamar:** público (sem autenticação). Responde sobre o ColdTrack com Azure OpenAI, usando os trechos mais parecidos da documentação como contexto. Nada da conversa é gravado. Limites: 10 perguntas por minuto por IP e 2000 por dia no site todo (`429`). Links que não sejam do site saem como `[link removido]`.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatPergunta"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resposta da IA.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResposta"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "pergunta: obrigatória",
+                    "value": {
+                      "erros": [
+                        "pergunta: obrigatória"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "pergunta: no máximo 500 caracteres",
+                    "value": {
+                      "erros": [
+                        "pergunta: no máximo 500 caracteres"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "historico[0].papel: use usuario ou assistente",
+                    "value": {
+                      "erros": [
+                        "historico[0].papel: use usuario ou assistente"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "corpo não é JSON válido",
+                    "value": {
+                      "erros": [
+                        "corpo não é JSON válido"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Limite de uso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "muitas perguntas seguidas. Tente de novo em 1 min.",
+                    "value": {
+                      "erros": [
+                        "muitas perguntas seguidas. Tente de novo em 1 min."
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "o chat atingiu o limite de perguntas de hoje. Tente de novo amanhã.",
+                    "value": {
+                      "erros": [
+                        "o chat atingiu o limite de perguntas de hoje. Tente de novo amanhã."
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "IA não configurada, fora do ar ou sem resposta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "chat indisponível"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/assistente": {
+      "post": {
+        "tags": [
+          "Chat e assistente"
+        ],
+        "operationId": "assistentePainel",
+        "summary": "Pergunta ao assistente do painel",
+        "description": "**Quem pode chamar:** operador ou gestor (token do login). Tira dúvidas de uso e responde sobre os dados da própria empresa (retrato somente leitura montado a cada pergunta). Não executa ações. Limites: 15 perguntas por minuto por usuário e 300 por dia por empresa (`429`). `fontes` começa com `dados da empresa`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatPergunta"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resposta da IA.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResposta"
+                },
+                "example": {
+                  "resposta": "O CT-001 está com 12,4 °C, dentro da faixa da manga.",
+                  "fontes": [
+                    "dados da empresa"
+                  ],
+                  "origem": "ia"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "pergunta: obrigatória",
+                    "value": {
+                      "erros": [
+                        "pergunta: obrigatória"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "pergunta: no máximo 500 caracteres",
+                    "value": {
+                      "erros": [
+                        "pergunta: no máximo 500 caracteres"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "historico[0].papel: use usuario ou assistente",
+                    "value": {
+                      "erros": [
+                        "historico[0].papel: use usuario ou assistente"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "corpo não é JSON válido",
+                    "value": {
+                      "erros": [
+                        "corpo não é JSON válido"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          },
+          "429": {
+            "description": "Limite de uso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "muitas perguntas seguidas. Tente de novo em 1 min.",
+                    "value": {
+                      "erros": [
+                        "muitas perguntas seguidas. Tente de novo em 1 min."
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "sua empresa atingiu o limite de perguntas de hoje ao assistente. Tente de novo amanhã.",
+                    "value": {
+                      "erros": [
+                        "sua empresa atingiu o limite de perguntas de hoje ao assistente. Tente de novo amanhã."
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "IA ou banco fora do ar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "assistente indisponível"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/leituras": {
+      "get": {
+        "tags": [
+          "Leituras"
+        ],
+        "operationId": "listarLeituras",
+        "summary": "Últimas leituras de um sensor da empresa",
+        "description": "**Quem pode chamar:** operador ou gestor (token do login). Da medição mais recente para a mais antiga. Sensor de outra empresa responde igual a sensor inexistente (`404`).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "query",
+            "required": true,
+            "description": "Sensor da empresa do usuário.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "coldtrack-01"
+          },
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "description": "Quantidade máxima; fora de 1 a 500 é ajustado para o limite.",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "horas",
+            "in": "query",
+            "required": false,
+            "description": "Só leituras medidas nas últimas N horas.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 168
+            },
+            "example": 24
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Status aceitos, separados por vírgula (NORMAL, ATENCAO, CRITICO).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z, ]+$"
+            },
+            "example": "ATENCAO,CRITICO"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Leituras.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "deviceId",
+                    "leituras"
+                  ],
+                  "properties": {
+                    "deviceId": {
+                      "type": "string"
+                    },
+                    "leituras": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Leitura"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "deviceId": "coldtrack-01",
+                  "leituras": [
+                    {
+                      "deviceId": "coldtrack-01",
+                      "temperatura": 12.4,
+                      "umidade": 81.0,
+                      "rssi": -58,
+                      "perfil": "manga",
+                      "status": "NORMAL",
+                      "medidoEm": "2026-11-09T12:00:00+00:00",
+                      "recebidoEm": "2026-11-09T12:00:01.532000+00:00"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parâmetro inválido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "informe ?deviceId=",
+                    "value": {
+                      "erros": [
+                        "informe ?deviceId="
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "limite deve ser inteiro",
+                    "value": {
+                      "erros": [
+                        "limite deve ser inteiro"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "horas: inteiro de 1 a 168",
+                    "value": {
+                      "erros": [
+                        "horas: inteiro de 1 a 168"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "status: use NORMAL, ATENCAO, CRITICO separados por vírgula",
+                    "value": {
+                      "erros": [
+                        "status: use NORMAL, ATENCAO, CRITICO separados por vírgula"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          },
+          "404": {
+            "description": "Sensor inexistente ou de outra empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "dispositivo não encontrado"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dispositivos": {
+      "get": {
+        "tags": [
+          "Sensores"
+        ],
+        "operationId": "listarDispositivos",
+        "summary": "Lista os sensores da empresa",
+        "description": "**Quem pode chamar:** operador ou gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sensores.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "dispositivos"
+                  ],
+                  "properties": {
+                    "dispositivos": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Dispositivo"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "dispositivos": [
+                    {
+                      "id": "coldtrack-01",
+                      "descricao": "Baú do CT-001",
+                      "criadoEm": "2026-11-01T14:30:00+00:00"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Sensores"
+        ],
+        "operationId": "registrarDispositivo",
+        "summary": "Registra um sensor e gera a chave dele",
+        "description": "**Quem pode chamar:** gestor (token do login). A `chave` aparece só nesta resposta; o banco guarda apenas o SHA-256.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispositivoNovo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Sensor registrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispositivoCriado"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "id: obrigatório",
+                    "value": {
+                      "erros": [
+                        "id: obrigatório"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "id: letras, números, _ ou - (3 a 40)",
+                    "value": {
+                      "erros": [
+                        "id: letras, números, _ ou - (3 a 40)"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "409": {
+            "description": "Id em uso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "o ID coldtrack-01 já está em uso; escolha outro"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dispositivos/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Id do sensor (sem diferença entre maiúsculas e minúsculas).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{3,40}$"
+          },
+          "example": "coldtrack-01"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Sensores"
+        ],
+        "operationId": "trocarChaveDispositivo",
+        "summary": "Gera uma chave nova para o sensor",
+        "description": "**Quem pode chamar:** gestor (token do login). Sem corpo. A chave anterior para de valer na hora (sensor perdido ou chave vazada).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chave nova.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChaveNova"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "404": {
+            "description": "Sensor inexistente ou de outra empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "dispositivo não encontrado"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Sensores"
+        ],
+        "operationId": "removerDispositivo",
+        "summary": "Remove o sensor",
+        "description": "**Quem pode chamar:** gestor (token do login). Recusado (`409`) se algum veículo usa o sensor.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Feito. Sem corpo."
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "404": {
+            "description": "Sensor inexistente ou de outra empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "dispositivo não encontrado"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sensor em uso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "o veículo CT-001 usa este sensor; remova ou troque o veículo antes"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/veiculos": {
+      "get": {
+        "tags": [
+          "Veículos"
+        ],
+        "operationId": "listarVeiculos",
+        "summary": "Lista a frota da empresa",
+        "description": "**Quem pode chamar:** operador ou gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Veículos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "veiculos"
+                  ],
+                  "properties": {
+                    "veiculos": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Veiculo"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "veiculos": [
+                    {
+                      "id": "CT-001",
+                      "tipo": "Caminhão baú refrigerado",
+                      "deviceId": "coldtrack-01",
+                      "dispositivo": "ESP32-C3 + DHT22",
+                      "perfil": "manga"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Veículos"
+        ],
+        "operationId": "criarVeiculos",
+        "summary": "Cadastra um veículo",
+        "description": "**Quem pode chamar:** gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VeiculoEntrada"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Criado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Veiculo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "corpo não é JSON válido",
+                    "value": {
+                      "erros": [
+                        "corpo não é JSON válido"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "id: 3 a 20 letras, números ou hífen (ex.: CT-001)",
+                    "value": {
+                      "erros": [
+                        "id: 3 a 20 letras, números ou hífen (ex.: CT-001)"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "deviceId: o sensor coldtrack-01 não está registrado em Sensores",
+                    "value": {
+                      "erros": [
+                        "deviceId: o sensor coldtrack-01 não está registrado em Sensores"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "deviceId: o sensor já está no veículo CT-002",
+                    "value": {
+                      "erros": [
+                        "deviceId: o sensor já está no veículo CT-002"
+                      ]
+                    }
+                  },
+                  "caso5": {
+                    "summary": "perfil: use demonstrativo, manga, uva",
+                    "value": {
+                      "erros": [
+                        "perfil: use demonstrativo, manga, uva"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "409": {
+            "description": "Id repetido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "já existe um cadastro com id CT-001"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/veiculos/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Código do veículo (ex.: CT-001).",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{3,20}$"
+          },
+          "example": "CT-001"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Veículos"
+        ],
+        "operationId": "atualizarVeiculos",
+        "summary": "Atualiza um veículo",
+        "description": "**Quem pode chamar:** gestor (token do login). Substitui o cadastro inteiro; o id é o da rota.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VeiculoEntrada"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Atualizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Veiculo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "corpo não é JSON válido",
+                    "value": {
+                      "erros": [
+                        "corpo não é JSON válido"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "id: 3 a 20 letras, números ou hífen (ex.: CT-001)",
+                    "value": {
+                      "erros": [
+                        "id: 3 a 20 letras, números ou hífen (ex.: CT-001)"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "deviceId: o sensor coldtrack-01 não está registrado em Sensores",
+                    "value": {
+                      "erros": [
+                        "deviceId: o sensor coldtrack-01 não está registrado em Sensores"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "deviceId: o sensor já está no veículo CT-002",
+                    "value": {
+                      "erros": [
+                        "deviceId: o sensor já está no veículo CT-002"
+                      ]
+                    }
+                  },
+                  "caso5": {
+                    "summary": "perfil: use demonstrativo, manga, uva",
+                    "value": {
+                      "erros": [
+                        "perfil: use demonstrativo, manga, uva"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "404": {
+            "$ref": "#/components/responses/NaoEncontrado"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Veículos"
+        ],
+        "operationId": "removerVeiculos",
+        "summary": "Remove um veículo",
+        "description": "**Quem pode chamar:** gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Feito. Sem corpo."
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "404": {
+            "$ref": "#/components/responses/NaoEncontrado"
+          }
+        }
+      }
+    },
+    "/viagens": {
+      "get": {
+        "tags": [
+          "Viagens"
+        ],
+        "operationId": "listarViagens",
+        "summary": "Lista as viagens da empresa",
+        "description": "**Quem pode chamar:** operador ou gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Viagens.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "viagens"
+                  ],
+                  "properties": {
+                    "viagens": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Viagem"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "viagens": [
+                    {
+                      "id": "V-3F9A1C",
+                      "veiculo": "CT-001",
+                      "origem": "Petrolina - PE",
+                      "destino": "Recife - PE",
+                      "carga": "Manga Tommy, 12 paletes",
+                      "inicio": "2026-11-09T06:00:00-03:00",
+                      "fim": "2026-11-09T18:00:00-03:00"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Viagens"
+        ],
+        "operationId": "criarViagens",
+        "summary": "Cadastra uma viagem",
+        "description": "**Quem pode chamar:** gestor (token do login). O id é gerado (`V-` + 6 caracteres hexadecimais).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViagemEntrada"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Criado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Viagem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "corpo não é JSON válido",
+                    "value": {
+                      "erros": [
+                        "corpo não é JSON válido"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "veiculo: CT-009 não está cadastrado",
+                    "value": {
+                      "erros": [
+                        "veiculo: CT-009 não está cadastrado"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "inicio: informe o fuso horário",
+                    "value": {
+                      "erros": [
+                        "inicio: informe o fuso horário"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "fim: deve ser depois do início",
+                    "value": {
+                      "erros": [
+                        "fim: deve ser depois do início"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          }
+        }
+      }
+    },
+    "/viagens/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Id da viagem, gerado no cadastro (ex.: V-3F9A1C).",
+          "schema": {
+            "type": "string"
+          },
+          "example": "V-3F9A1C"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Viagens"
+        ],
+        "operationId": "atualizarViagens",
+        "summary": "Atualiza uma viagem",
+        "description": "**Quem pode chamar:** gestor (token do login). Substitui o cadastro inteiro; o id é o da rota.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViagemEntrada"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Atualizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Viagem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "corpo não é JSON válido",
+                    "value": {
+                      "erros": [
+                        "corpo não é JSON válido"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "veiculo: CT-009 não está cadastrado",
+                    "value": {
+                      "erros": [
+                        "veiculo: CT-009 não está cadastrado"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "inicio: informe o fuso horário",
+                    "value": {
+                      "erros": [
+                        "inicio: informe o fuso horário"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "fim: deve ser depois do início",
+                    "value": {
+                      "erros": [
+                        "fim: deve ser depois do início"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "404": {
+            "$ref": "#/components/responses/NaoEncontrado"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Viagens"
+        ],
+        "operationId": "removerViagens",
+        "summary": "Remove uma viagem",
+        "description": "**Quem pode chamar:** gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Feito. Sem corpo."
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "404": {
+            "$ref": "#/components/responses/NaoEncontrado"
+          }
+        }
+      }
+    },
+    "/usuarios": {
+      "get": {
+        "tags": [
+          "Usuários"
+        ],
+        "operationId": "listarUsuarios",
+        "summary": "Lista os usuários da empresa",
+        "description": "**Quem pode chamar:** gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usuários.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "usuarios"
+                  ],
+                  "properties": {
+                    "usuarios": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UsuarioResumo"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "usuarios": [
+                    {
+                      "id": "operador@empresa-exemplo.com.br",
+                      "nome": "João Exemplo",
+                      "perfil": "operador"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Usuários"
+        ],
+        "operationId": "criarUsuario",
+        "summary": "Cadastra um usuário na empresa",
+        "description": "**Quem pode chamar:** gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsuarioNovo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Usuário criado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usuario"
+                },
+                "example": {
+                  "id": "operador@empresa-exemplo.com.br",
+                  "nome": "João Exemplo",
+                  "perfil": "operador",
+                  "empresaId": "E-1A2B3C4D"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "email: formato inválido",
+                    "value": {
+                      "erros": [
+                        "email: formato inválido"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "perfil: use operador ou gestor",
+                    "value": {
+                      "erros": [
+                        "perfil: use operador ou gestor"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "senha: no mínimo 8 caracteres",
+                    "value": {
+                      "erros": [
+                        "senha: no mínimo 8 caracteres"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "409": {
+            "description": "E-mail já usado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "já existe um usuário com esse e-mail"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/usuarios/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "E-mail do usuário (é o id dele).",
+          "schema": {
+            "type": "string",
+            "format": "email"
+          },
+          "example": "operador@empresa-exemplo.com.br"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Usuários"
+        ],
+        "operationId": "redefinirSenhaUsuario",
+        "summary": "Redefine a senha de outro usuário",
+        "description": "**Quem pode chamar:** gestor (token do login). Derruba as sessões abertas do usuário e tira a conta da espera do login. A própria senha só muda em `POST /senha`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedefinirSenha"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Senha redefinida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usuario"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validação ou o próprio usuário.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "senha: no mínimo 8 caracteres",
+                    "value": {
+                      "erros": [
+                        "senha: no mínimo 8 caracteres"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "para trocar a própria senha use Configurações → Trocar senha",
+                    "value": {
+                      "erros": [
+                        "para trocar a própria senha use Configurações → Trocar senha"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "404": {
+            "$ref": "#/components/responses/NaoEncontrado"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Usuários"
+        ],
+        "operationId": "removerUsuario",
+        "summary": "Remove um usuário da empresa",
+        "description": "**Quem pode chamar:** gestor (token do login).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Feito. Sem corpo."
+          },
+          "400": {
+            "description": "O próprio usuário.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "você não pode remover o próprio usuário"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "404": {
+            "$ref": "#/components/responses/NaoEncontrado"
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "tags": [
+          "Documentação"
+        ],
+        "operationId": "docs",
+        "summary": "Esta documentação (Swagger UI)",
+        "description": "**Quem pode chamar:** público (sem autenticação).",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Página HTML.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "Documentação"
+        ],
+        "operationId": "openapi",
+        "summary": "Especificação OpenAPI desta API",
+        "description": "**Quem pode chamar:** público (sem autenticação).",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Especificação OpenAPI 3.0.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Token de `POST /login` (válido por 8 horas)."
+      },
+      "dispositivo": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-device-key",
+        "description": "Chave do sensor, gerada em `POST /dispositivos`."
+      }
+    },
+    "schemas": {
+      "Erro": {
+        "type": "object",
+        "required": [
+          "erros"
+        ],
+        "additionalProperties": false,
+        "description": "Formato único de erro. Erros de campo vêm prefixados com o nome do campo (`email: formato inválido`).",
+        "properties": {
+          "erros": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "example": {
+          "erros": [
+            "email: formato inválido"
+          ]
+        }
+      },
+      "Faixa": {
+        "type": "object",
+        "required": [
+          "min",
+          "max",
+          "margem"
+        ],
+        "description": "Faixa normal de temperatura (°C). Até `margem` °C fora dela é ATENCAO; além disso, CRITICO. `min` nulo = sem limite inferior.",
+        "properties": {
+          "min": {
+            "type": "number",
+            "nullable": true
+          },
+          "max": {
+            "type": "number"
+          },
+          "margem": {
+            "type": "number"
+          }
+        },
+        "example": {
+          "min": 10.0,
+          "max": 13.0,
+          "margem": 3.0
+        }
+      },
+      "Perfil": {
+        "type": "object",
+        "required": [
+          "id",
+          "nome",
+          "min",
+          "max",
+          "margem"
+        ],
+        "description": "Perfil de carga e sua faixa de temperatura (°C).",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "demonstrativo",
+              "manga",
+              "uva"
+            ]
+          },
+          "nome": {
+            "type": "string"
+          },
+          "min": {
+            "type": "number",
+            "nullable": true
+          },
+          "max": {
+            "type": "number"
+          },
+          "margem": {
+            "type": "number"
+          }
+        },
+        "example": {
+          "id": "manga",
+          "nome": "Manga",
+          "min": 10.0,
+          "max": 13.0,
+          "margem": 3.0
+        }
+      },
+      "Usuario": {
+        "type": "object",
+        "required": [
+          "id",
+          "nome",
+          "perfil",
+          "empresaId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "email",
+            "description": "E-mail (minúsculas)."
+          },
+          "nome": {
+            "type": "string"
+          },
+          "perfil": {
+            "type": "string",
+            "enum": [
+              "operador",
+              "gestor"
+            ]
+          },
+          "empresaId": {
+            "type": "string",
+            "description": "`E-` + 8 caracteres hexadecimais."
+          }
+        },
+        "example": {
+          "id": "gestor@empresa-exemplo.com.br",
+          "nome": "Maria Exemplo",
+          "perfil": "gestor",
+          "empresaId": "E-1A2B3C4D"
+        }
+      },
+      "UsuarioComEmpresa": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Usuario"
+          },
+          {
+            "type": "object",
+            "required": [
+              "empresa"
+            ],
+            "properties": {
+              "empresa": {
+                "type": "string",
+                "description": "Nome da empresa."
+              }
+            }
+          }
+        ],
+        "example": {
+          "id": "gestor@empresa-exemplo.com.br",
+          "nome": "Maria Exemplo",
+          "perfil": "gestor",
+          "empresaId": "E-1A2B3C4D",
+          "empresa": "Transportes Exemplo"
+        }
+      },
+      "UsuarioResumo": {
+        "type": "object",
+        "required": [
+          "id",
+          "nome",
+          "perfil"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "email"
+          },
+          "nome": {
+            "type": "string"
+          },
+          "perfil": {
+            "type": "string",
+            "enum": [
+              "operador",
+              "gestor"
+            ]
+          }
+        },
+        "example": {
+          "id": "operador@empresa-exemplo.com.br",
+          "nome": "João Exemplo",
+          "perfil": "operador"
+        }
+      },
+      "LoginPedido": {
+        "type": "object",
+        "required": [
+          "email",
+          "senha"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Sem diferença entre maiúsculas e minúsculas."
+          },
+          "senha": {
+            "type": "string",
+            "format": "password"
+          }
+        },
+        "example": {
+          "email": "gestor@empresa-exemplo.com.br",
+          "senha": "senha-de-exemplo-123"
+        }
+      },
+      "LoginResposta": {
+        "type": "object",
+        "required": [
+          "token",
+          "usuario"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "JWT HS256 válido por 8 horas. Use em `Authorization: Bearer <token>`."
+          },
+          "usuario": {
+            "$ref": "#/components/schemas/UsuarioComEmpresa"
+          }
+        },
+        "example": {
+          "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJnZXN0b3JAZW1wcmVzYS1leGVtcGxvLmNvbS5iciJ9.exemplo-ficticio",
+          "usuario": {
+            "id": "gestor@empresa-exemplo.com.br",
+            "nome": "Maria Exemplo",
+            "perfil": "gestor",
+            "empresaId": "E-1A2B3C4D",
+            "empresa": "Transportes Exemplo"
+          }
+        }
+      },
+      "EmpresaNova": {
+        "type": "object",
+        "required": [
+          "empresa",
+          "nome",
+          "email",
+          "senha"
+        ],
+        "description": "Empresa nova e o primeiro usuário dela (perfil gestor).",
+        "properties": {
+          "empresa": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "Nome da empresa (espaços nas pontas são removidos)."
+          },
+          "nome": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 120,
+            "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+            "description": "Gravado em minúsculas; é o id do usuário."
+          },
+          "senha": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "example": {
+          "empresa": "Transportes Exemplo",
+          "nome": "Maria Exemplo",
+          "email": "gestor@empresa-exemplo.com.br",
+          "senha": "senha-de-exemplo-123"
+        }
+      },
+      "TrocaSenha": {
+        "type": "object",
+        "required": [
+          "atual",
+          "nova"
+        ],
+        "properties": {
+          "atual": {
+            "type": "string",
+            "format": "password",
+            "minLength": 1
+          },
+          "nova": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Diferente da atual."
+          }
+        },
+        "example": {
+          "atual": "senha-de-exemplo-123",
+          "nova": "outra-senha-de-exemplo-456"
+        }
+      },
+      "UsuarioNovo": {
+        "type": "object",
+        "required": [
+          "email",
+          "nome",
+          "perfil",
+          "senha"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 120,
+            "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+            "description": "Gravado em minúsculas; é o id do usuário."
+          },
+          "nome": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "perfil": {
+            "type": "string",
+            "enum": [
+              "operador",
+              "gestor"
+            ]
+          },
+          "senha": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "example": {
+          "email": "operador@empresa-exemplo.com.br",
+          "nome": "João Exemplo",
+          "perfil": "operador",
+          "senha": "senha-de-exemplo-123"
+        }
+      },
+      "RedefinirSenha": {
+        "type": "object",
+        "required": [
+          "senha"
+        ],
+        "properties": {
+          "senha": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "example": {
+          "senha": "senha-provisoria-789"
+        }
+      },
+      "Telemetria": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deviceId",
+          "temperatura",
+          "umidade",
+          "rssi"
+        ],
+        "description": "Leitura enviada pelo sensor. Booleanos não valem como número, NaN é rejeitado e campo não previsto é erro.",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{3,40}$",
+            "description": "Gravado em minúsculas."
+          },
+          "temperatura": {
+            "type": "number",
+            "minimum": -40,
+            "maximum": 80,
+            "description": "°C."
+          },
+          "umidade": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "%."
+          },
+          "rssi": {
+            "type": "number",
+            "minimum": -120,
+            "maximum": 0,
+            "nullable": true,
+            "description": "Sinal do Wi-Fi (dBm). A chave é obrigatória; `null` quando o rádio devolve valor impossível."
+          },
+          "medidoEm": {
+            "type": "number",
+            "description": "Opcional. Epoch UTC em segundos da medição: até 5 min no futuro e até 7 dias no passado. Sem ele, vale o horário do recebimento."
+          }
+        },
+        "example": {
+          "deviceId": "coldtrack-01",
+          "temperatura": 12.4,
+          "umidade": 81.0,
+          "rssi": -58,
+          "medidoEm": 1794240000
+        }
+      },
+      "TelemetriaGravada": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "perfil",
+          "faixa"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`<deviceId>~<medidoEm>` ou UUID (sem `medidoEm`)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "ATENCAO",
+              "CRITICO"
+            ]
+          },
+          "perfil": {
+            "type": "string",
+            "enum": [
+              "demonstrativo",
+              "manga",
+              "uva"
+            ]
+          },
+          "faixa": {
+            "$ref": "#/components/schemas/Faixa"
+          }
+        },
+        "example": {
+          "id": "coldtrack-01~1794240000",
+          "status": "NORMAL",
+          "perfil": "manga",
+          "faixa": {
+            "min": 10.0,
+            "max": 13.0,
+            "margem": 3.0
+          }
+        }
+      },
+      "TelemetriaDuplicada": {
+        "type": "object",
+        "required": [
+          "id",
+          "duplicada"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "duplicada": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "example": {
+          "id": "coldtrack-01~1794240000",
+          "duplicada": true
+        }
+      },
+      "Leitura": {
+        "type": "object",
+        "required": [
+          "deviceId",
+          "temperatura",
+          "umidade",
+          "rssi",
+          "perfil",
+          "status",
+          "medidoEm",
+          "recebidoEm"
+        ],
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "temperatura": {
+            "type": "number"
+          },
+          "umidade": {
+            "type": "number"
+          },
+          "rssi": {
+            "type": "integer",
+            "nullable": true
+          },
+          "perfil": {
+            "type": "string",
+            "enum": [
+              "demonstrativo",
+              "manga",
+              "uva"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "ATENCAO",
+              "CRITICO"
+            ]
+          },
+          "medidoEm": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "recebidoEm": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "example": {
+          "deviceId": "coldtrack-01",
+          "temperatura": 12.4,
+          "umidade": 81.0,
+          "rssi": -58,
+          "perfil": "manga",
+          "status": "NORMAL",
+          "medidoEm": "2026-11-09T12:00:00+00:00",
+          "recebidoEm": "2026-11-09T12:00:01.532000+00:00"
+        }
+      },
+      "Dispositivo": {
+        "type": "object",
+        "required": [
+          "id",
+          "descricao",
+          "criadoEm"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "descricao": {
+            "type": "string"
+          },
+          "criadoEm": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "example": {
+          "id": "coldtrack-01",
+          "descricao": "Baú do CT-001",
+          "criadoEm": "2026-11-01T14:30:00+00:00"
+        }
+      },
+      "DispositivoNovo": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{3,40}$",
+            "description": "Gravado em minúsculas."
+          },
+          "descricao": {
+            "type": "string",
+            "maxLength": 60,
+            "description": "Opcional."
+          }
+        },
+        "example": {
+          "id": "coldtrack-01",
+          "descricao": "Baú do CT-001"
+        }
+      },
+      "DispositivoCriado": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Dispositivo"
+          },
+          {
+            "type": "object",
+            "required": [
+              "chave"
+            ],
+            "properties": {
+              "chave": {
+                "type": "string",
+                "description": "Chave do sensor, mostrada só agora (o banco guarda o SHA-256). Vai no header `x-device-key`."
+              }
+            }
+          }
+        ],
+        "example": {
+          "id": "coldtrack-01",
+          "descricao": "Baú do CT-001",
+          "criadoEm": "2026-11-01T14:30:00+00:00",
+          "chave": "chave-ficticia-de-exemplo"
+        }
+      },
+      "ChaveNova": {
+        "type": "object",
+        "required": [
+          "id",
+          "chave"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "chave": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "id": "coldtrack-01",
+          "chave": "chave-ficticia-de-exemplo"
+        }
+      },
+      "Veiculo": {
+        "type": "object",
+        "required": [
+          "id",
+          "tipo",
+          "deviceId",
+          "dispositivo",
+          "perfil"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Código em maiúsculas."
+          },
+          "tipo": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "dispositivo": {
+            "type": "string"
+          },
+          "perfil": {
+            "type": "string",
+            "enum": [
+              "demonstrativo",
+              "manga",
+              "uva"
+            ]
+          }
+        },
+        "example": {
+          "id": "CT-001",
+          "tipo": "Caminhão baú refrigerado",
+          "deviceId": "coldtrack-01",
+          "dispositivo": "ESP32-C3 + DHT22",
+          "perfil": "manga"
+        }
+      },
+      "VeiculoEntrada": {
+        "type": "object",
+        "required": [
+          "id",
+          "tipo",
+          "deviceId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{3,20}$",
+            "description": "Código de 3 a 20 letras, números ou hífen (convertido para maiúsculas). No PUT vale o id da rota."
+          },
+          "tipo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "deviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{3,40}$",
+            "description": "Sensor registrado na empresa e não usado por outro veículo."
+          },
+          "dispositivo": {
+            "type": "string",
+            "maxLength": 60,
+            "description": "Opcional, descrição livre."
+          },
+          "perfil": {
+            "type": "string",
+            "enum": [
+              "demonstrativo",
+              "manga",
+              "uva"
+            ],
+            "default": "demonstrativo"
+          }
+        },
+        "example": {
+          "id": "CT-001",
+          "tipo": "Caminhão baú refrigerado",
+          "deviceId": "coldtrack-01",
+          "dispositivo": "ESP32-C3 + DHT22",
+          "perfil": "manga"
+        }
+      },
+      "Viagem": {
+        "type": "object",
+        "required": [
+          "id",
+          "veiculo",
+          "origem",
+          "destino",
+          "carga",
+          "inicio",
+          "fim"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "veiculo": {
+            "type": "string"
+          },
+          "origem": {
+            "type": "string"
+          },
+          "destino": {
+            "type": "string"
+          },
+          "carga": {
+            "type": "string"
+          },
+          "inicio": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fim": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "example": {
+          "id": "V-3F9A1C",
+          "veiculo": "CT-001",
+          "origem": "Petrolina - PE",
+          "destino": "Recife - PE",
+          "carga": "Manga Tommy, 12 paletes",
+          "inicio": "2026-11-09T06:00:00-03:00",
+          "fim": "2026-11-09T18:00:00-03:00"
+        }
+      },
+      "ViagemEntrada": {
+        "type": "object",
+        "required": [
+          "veiculo",
+          "origem",
+          "destino",
+          "carga",
+          "inicio"
+        ],
+        "description": "No POST o id é gerado (`V-` + 6 caracteres); no PUT vale o da rota.",
+        "properties": {
+          "veiculo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20,
+            "description": "Código de veículo cadastrado na empresa."
+          },
+          "origem": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "destino": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "carga": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "inicio": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 com fuso horário."
+          },
+          "fim": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Opcional; ISO 8601 com fuso, depois de `inicio`."
+          }
+        },
+        "example": {
+          "veiculo": "CT-001",
+          "origem": "Petrolina - PE",
+          "destino": "Recife - PE",
+          "carga": "Manga Tommy, 12 paletes",
+          "inicio": "2026-11-09T06:00:00-03:00",
+          "fim": "2026-11-09T18:00:00-03:00"
+        }
+      },
+      "MensagemHistorico": {
+        "type": "object",
+        "required": [
+          "papel",
+          "texto"
+        ],
+        "properties": {
+          "papel": {
+            "type": "string",
+            "enum": [
+              "usuario",
+              "assistente"
+            ]
+          },
+          "texto": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      },
+      "ChatPergunta": {
+        "type": "object",
+        "required": [
+          "pergunta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "pergunta": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "historico": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "$ref": "#/components/schemas/MensagemHistorico"
+            },
+            "description": "Opcional: mensagens anteriores da conversa."
+          }
+        },
+        "example": {
+          "pergunta": "Como a manga é classificada?",
+          "historico": [
+            {
+              "papel": "usuario",
+              "texto": "oi"
+            },
+            {
+              "papel": "assistente",
+              "texto": "Olá!"
+            }
+          ]
+        }
+      },
+      "ChatResposta": {
+        "type": "object",
+        "required": [
+          "resposta",
+          "fontes",
+          "origem"
+        ],
+        "properties": {
+          "resposta": {
+            "type": "string"
+          },
+          "fontes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Documentos usados como contexto, sem repetir."
+          },
+          "origem": {
+            "type": "string",
+            "enum": [
+              "ia"
+            ]
+          }
+        },
+        "example": {
+          "resposta": "A manga fica normal entre 10 °C e 13 °C...",
+          "fontes": [
+            "docs/api.md"
+          ],
+          "origem": "ia"
+        }
+      }
+    },
+    "responses": {
+      "NaoAutenticado": {
+        "description": "Sem token, token inválido ou vencido, ou sessão encerrada.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Erro"
+            },
+            "example": {
+              "erros": [
+                "faça login para continuar"
+              ]
+            }
+          }
+        }
+      },
+      "SemPerfil": {
+        "description": "Cadastro sem perfil ou sem empresa.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Erro"
+            },
+            "example": {
+              "erros": [
+                "seu perfil não tem acesso a esta ação"
+              ]
+            }
+          }
+        }
+      },
+      "SemPermissao": {
+        "description": "O perfil do usuário (operador) não pode fazer esta ação.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Erro"
+            },
+            "example": {
+              "erros": [
+                "seu perfil não tem acesso a esta ação"
+              ]
+            }
+          }
+        }
+      },
+      "CorpoInvalido": {
+        "description": "Corpo inválido ou campo fora da regra.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Erro"
+            },
+            "examples": {
+              "caso1": {
+                "summary": "corpo não é JSON válido",
+                "value": {
+                  "erros": [
+                    "corpo não é JSON válido"
+                  ]
+                }
+              },
+              "caso2": {
+                "summary": "corpo deve ser um objeto JSON",
+                "value": {
+                  "erros": [
+                    "corpo deve ser um objeto JSON"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "NaoEncontrado": {
+        "description": "Não existe ou é de outra empresa (as duas respondem igual).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Erro"
+            },
+            "example": {
+              "erros": [
+                "não encontrado"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

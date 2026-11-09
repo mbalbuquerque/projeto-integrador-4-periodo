@@ -33,9 +33,13 @@ class TestPacote(unittest.TestCase):
         # chat.py le a base do disco: sem ela no pacote, a rota /chat quebra na nuvem.
         self.assertIn("base_chat.json", set(ler_pacote()))
 
+    def test_spec_openapi_publicada(self):
+        # /openapi.json e /docs leem o arquivo do disco: sem ele no pacote, as rotas dao 503.
+        self.assertIn("openapi.json", set(ler_pacote()))
+
     def test_nada_de_teste_ou_script_publicado(self):
         for nome in ler_pacote():
-            self.assertFalse(nome.startswith(("test_", "scripts/")), nome)
+            self.assertFalse(nome.startswith(("test_", "scripts/", "requirements-dev")), nome)
 
 
 if __name__ == "__main__":

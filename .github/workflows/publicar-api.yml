@@ -32,11 +32,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: cloud/function/requirements.txt
+          cache-dependency-path: |
+            cloud/function/requirements.txt
+            cloud/function/requirements-dev.txt
 
       - name: Testes (a publicação só acontece se passarem)
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
           python -m unittest
 
       # Mesma lista do publicar.sh (pacote.txt); o test_pacote.py a confere.
