@@ -194,6 +194,8 @@ Detalhes e convenção de commits em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 | documento | conteúdo |
 |---|---|
+| [`docs/funcionalidades.md`](docs/funcionalidades.md) | mapeamento de funcionalidades: tudo o que a plataforma faz, por camada |
+| [`docs/apresentacao.md`](docs/apresentacao.md) | apresentação do projeto em slides, com roteiro da demonstração ([versão .pptx](docs/apresentacao.pptx)) |
 | [`docs/stack-tecnica.md`](docs/stack-tecnica.md) | arquitetura, componentes, modelo de dados, publicação |
 | [`docs/api.md`](docs/api.md) | referência das rotas da API |
 | [`docs/seguranca.md`](docs/seguranca.md) | controles de segurança e limitações conhecidas |
