@@ -1,0 +1,2 @@
+# Dependencias so de teste (nao vao para a Azure Function). Instalar junto com requirements.txt.
+openapi-spec-validator==0.9.0

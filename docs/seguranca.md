@@ -2,7 +2,7 @@
 
 O que protege a API, o painel e a infraestrutura hoje, o que foi corrigido depois da
 revisão de segurança e o que ficou de fora de propósito, por ser um protótipo acadêmico.
-Detalhe das rotas em [`api.md`](api.md); da infraestrutura em
+Detalhe das rotas no [Swagger](https://func-coldtrack-7319.azurewebsites.net/api/docs) e em [`api.md`](api.md); da infraestrutura em
 [`../infra/README.md`](../infra/README.md).
 
 ## Controles em vigor

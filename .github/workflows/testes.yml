@@ -23,10 +23,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: cloud/function/requirements.txt
+          cache-dependency-path: |
+            cloud/function/requirements.txt
+            cloud/function/requirements-dev.txt
 
+      # requirements-dev.txt: só de teste (validador da spec OpenAPI), não vai para a nuvem.
       - name: Instalar dependências
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Lint (ruff, regras em pyproject.toml)
         run: |

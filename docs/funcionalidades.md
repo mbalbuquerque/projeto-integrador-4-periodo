@@ -2,7 +2,7 @@
 
 Mapa do que a plataforma faz hoje, camada por camada, com o arquivo onde cada
 funcionalidade está implementada. Os detalhes de cada parte ficam nos documentos de
-referência: [`stack-tecnica.md`](stack-tecnica.md) (arquitetura), [`api.md`](api.md) (rotas),
+referência: [`stack-tecnica.md`](stack-tecnica.md) (arquitetura), [Swagger da API](https://func-coldtrack-7319.azurewebsites.net/api/docs) e [`api.md`](api.md) (rotas),
 [`seguranca.md`](seguranca.md) (segurança) e [`implantacao.md`](implantacao.md) (implantação).
 O painel web está no repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi).
 
@@ -20,6 +20,7 @@ veículo, os alertas, as viagens e os relatórios de cada empresa cliente.
 | | endereço |
 |---|---|
 | Painel publicado | <https://stcoldtrackweb7319.z15.web.core.windows.net> |
+| API (documentação interativa, Swagger) | <https://func-coldtrack-7319.azurewebsites.net/api/docs> |
 | API (base) | `https://func-coldtrack-7319.azurewebsites.net/api` |
 | Canal ThingSpeak (MQTT da placa) | <https://thingspeak.mathworks.com/channels/3515173> |
 | Simulação no Wokwi | <https://wokwi.com/projects/475352296477619201> |
@@ -74,8 +75,8 @@ simulação em `firmware/wokwi/`.
 
 ## 3. Nuvem e API
 
-API em Python 3.11 numa Azure Function (`cloud/function/`). Referência completa em
-[`api.md`](api.md).
+API em Python 3.11 numa Azure Function (`cloud/function/`). Referência completa no
+[Swagger](https://func-coldtrack-7319.azurewebsites.net/api/docs) (OpenAPI 3.0, `cloud/function/openapi.json`) e em [`api.md`](api.md).
 
 ### 3.1 Rotas
 
@@ -227,7 +228,7 @@ Resumo de [`seguranca.md`](seguranca.md):
 
 | suíte | o que cobre | resultado |
 |---|---|---|
-| API (`unittest`, `cloud/function/test_*.py`) | Contrato da telemetria, horário, filtros, faixas por perfil, senha, token, bloqueio, chave de sensor, cadastros, separação entre empresas, limites de uso, chat e assistente | 155 testes, todos passando no GitHub Actions |
+| API (`unittest`, `cloud/function/test_*.py`) | Contrato da telemetria, horário, filtros, faixas por perfil, senha, token, bloqueio, chave de sensor, cadastros, separação entre empresas, limites de uso, chat e assistente | 165 testes, todos passando no GitHub Actions |
 | Lint da API | `ruff check` | sem avisos |
 | Firmware | Compilação para ESP32-C3 nas variantes DHT22 (simulador) e DHT11 (placa) | no GitHub Actions |
 | Simulação Wokwi | Firmware real enviando ao Azure, queda de conexão com fila, excursão térmica, faixa da manga e LED de frio demais | executada com `wokwi-cli` |

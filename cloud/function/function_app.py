@@ -23,11 +23,17 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   POST/PUT/DELETE /api/viagens[/{id}]                                    (gestor)
   GET/POST/PUT/DELETE /api/usuarios[/{id}]                               (gestor)
 
+Documentação (pública):
+  GET  /api/docs                Swagger UI da API
+  GET  /api/openapi.json        especificação OpenAPI 3.0 (openapi.json, ao lado deste arquivo)
+
 Cada empresa só enxerga os próprios dados: o token leva a empresa, e toda
 consulta filtra por ela. Veículos e viagens são gravados com id
 "<empresa>~<código>", para duas empresas poderem usar o mesmo código.
 """
 
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -798,3 +804,91 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("%s criou o usuário %s (%s)", mascarar_email(gestor["id"]),
                  mascarar_email(doc["id"]), doc["perfil"])
     return resposta(publico(doc), 201)
+
+
+# ------------------------------------------------------------ documentação
+
+PASTA = os.path.dirname(os.path.abspath(__file__))
+API_HOST = "https://func-coldtrack-7319.azurewebsites.net"
+SWAGGER_CDN = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14"
+# SRI dos arquivos do pacote npm swagger-ui-dist@5.17.14 (conferidos com o tarball do npm).
+SWAGGER_JS_SRI = "sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep"
+SWAGGER_CSS_SRI = "sha384-wxLW6kwyHktdDGr6Pv1zgm/VGJh99lfUbzSn6HNHBENZlCN7W602k9VkGdxuFvPn"
+
+SWAGGER_INIT = """
+window.ui = SwaggerUIBundle({
+  url: "openapi.json",
+  dom_id: "#swagger-ui",
+  persistAuthorization: true,
+  tryItOutEnabled: true,
+  deepLinking: true
+});
+"""
+
+DOCS_HTML = f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ColdTrack API — documentação</title>
+<link rel="stylesheet" href="{SWAGGER_CDN}/swagger-ui.css"
+      integrity="{SWAGGER_CSS_SRI}" crossorigin="anonymous">
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="{SWAGGER_CDN}/swagger-ui-bundle.js"
+        integrity="{SWAGGER_JS_SRI}" crossorigin="anonymous"></script>
+<script>{SWAGGER_INIT}</script>
+</body>
+</html>
+"""
+
+# O script de inicialização entra na CSP pelo hash: nenhum outro script inline roda.
+_HASH_INIT = base64.b64encode(hashlib.sha256(SWAGGER_INIT.encode()).digest()).decode()
+DOCS_CSP = "; ".join([
+    "default-src 'none'",
+    f"script-src https://cdn.jsdelivr.net 'sha256-{_HASH_INIT}'",
+    # O Swagger UI usa atributos style inline (React); folha de estilo só do CDN.
+    "style-src https://cdn.jsdelivr.net 'unsafe-inline'",
+    "img-src 'self' data:",
+    f"connect-src 'self' {API_HOST}",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+])
+DOCS_HEADERS = {
+    "Content-Security-Policy": DOCS_CSP,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+}
+
+_openapi = None
+
+
+def openapi_texto():
+    """openapi.json do disco, lido uma vez por instância."""
+    global _openapi
+    if _openapi is None:
+        with open(os.path.join(PASTA, "openapi.json"), encoding="utf-8") as f:
+            _openapi = f.read()
+    return _openapi
+
+
+@app.route(route="docs", methods=["GET"])
+def docs(req: func.HttpRequest) -> func.HttpResponse:
+    return func.HttpResponse(DOCS_HTML, status_code=200, mimetype="text/html",
+                             charset="utf-8", headers=DOCS_HEADERS)
+
+
+@app.route(route="openapi.json", methods=["GET"])
+def openapi(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        corpo = openapi_texto()
+    except OSError:
+        logging.error("openapi.json ausente no pacote publicado")
+        return resposta({"erros": ["documentação indisponível"]}, 503)
+    return func.HttpResponse(corpo, status_code=200, mimetype="application/json",
+                             charset="utf-8",
+                             headers={"Cache-Control": "public, max-age=300",
+                                      "X-Content-Type-Options": "nosniff"})
