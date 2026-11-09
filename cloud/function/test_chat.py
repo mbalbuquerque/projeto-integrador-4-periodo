@@ -46,6 +46,12 @@ class ClienteFalso:
 
 
 class TestValidacao(unittest.TestCase):
+    def test_carregar_base_real_do_disco(self):
+        chat.reiniciar()
+        base = chat.carregar_base()
+        self.assertTrue(len(base) > 0)
+        self.assertTrue(isinstance(base[0], dict))
+
     def test_pergunta_valida(self):
         erros, doc = chat.validar_chat({"pergunta": "  o que é o ColdTrack?  "})
         self.assertEqual(erros, [])
