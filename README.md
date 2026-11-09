@@ -19,7 +19,8 @@ Os dois são publicados pela branch `everson` (ver [Publicação](#publicação)
 | | endereço |
 |---|---|
 | Painel publicado | <https://stcoldtrackweb7319.z15.web.core.windows.net> |
-| API (base) | `https://func-coldtrack-7319.azurewebsites.net/api`; exemplo público: <https://func-coldtrack-7319.azurewebsites.net/api/perfis> |
+| API (documentação interativa, Swagger) | <https://func-coldtrack-7319.azurewebsites.net/api/docs> |
+| API (base) | `https://func-coldtrack-7319.azurewebsites.net/api` |
 | Simulação no Wokwi | <https://wokwi.com/projects/475352296477619201> |
 | Canal no ThingSpeak (placa física via MQTT) | <https://thingspeak.mathworks.com/channels/3515173> |
 
@@ -59,8 +60,8 @@ embeddings); se a IA não responder, o site usa o FAQ. Dentro do painel, o assis
 sobre o uso das telas e sobre os dados da própria empresa (sensores, leituras, veículos e
 viagens), sem executar ações.
 
-Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas da API:
-[`docs/api.md`](docs/api.md). Recursos do Azure: [`infra/README.md`](infra/README.md).
+Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas da API: [Swagger](https://func-coldtrack-7319.azurewebsites.net/api/docs) (interativo,
+spec em [`cloud/function/openapi.json`](cloud/function/openapi.json)) e [`docs/api.md`](docs/api.md) (texto). Recursos do Azure: [`infra/README.md`](infra/README.md).
 
 ## Estrutura do repositório
 
@@ -197,7 +198,8 @@ Detalhes e convenção de commits em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | [`docs/funcionalidades.md`](docs/funcionalidades.md) | mapeamento de funcionalidades: tudo o que a plataforma faz, por camada |
 | [`docs/apresentacao.md`](docs/apresentacao.md) | apresentação do projeto em slides, com roteiro da demonstração ([versão .pptx](docs/apresentacao.pptx)) |
 | [`docs/stack-tecnica.md`](docs/stack-tecnica.md) | arquitetura, componentes, modelo de dados, publicação |
-| [`docs/api.md`](docs/api.md) | referência das rotas da API |
+| [Swagger da API](https://func-coldtrack-7319.azurewebsites.net/api/docs) | documentação interativa das rotas (OpenAPI 3.0, `cloud/function/openapi.json`) |
+| [`docs/api.md`](docs/api.md) | referência das rotas da API em texto, com as regras em detalhe |
 | [`docs/seguranca.md`](docs/seguranca.md) | controles de segurança e limitações conhecidas |
 | [`docs/implantacao.md`](docs/implantacao.md) | passo a passo para pôr uma transportadora em operação |
 | [`docs/memorial-descritivo.md`](docs/memorial-descritivo.md) | memorial descritivo do protótipo |

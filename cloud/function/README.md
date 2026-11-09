@@ -6,7 +6,8 @@ Cada empresa só enxerga os próprios dados.
 
 Visão do projeto e do painel web: [README da raiz](../../README.md) e [repositório do painel](https://github.com/mbalbuquerque/Front-End-pi).
 Visão completa (modelo de dados, segurança, publicação): [`docs/stack-tecnica.md`](../../docs/stack-tecnica.md).
-Referência de todas as rotas: [`docs/api.md`](../../docs/api.md). Infraestrutura em Bicep:
+Referência de todas as rotas: [Swagger](https://func-coldtrack-7319.azurewebsites.net/api/docs) (gerado de
+[`openapi.json`](openapi.json)) e, em texto, [`docs/api.md`](../../docs/api.md). Infraestrutura em Bicep:
 [`infra/`](../../infra/README.md).
 
 ## Recursos no Azure (região Brazil South, resource group `rg-coldtrack`)
@@ -25,7 +26,8 @@ no Azure OpenAI pela identidade gerenciada da Function, sem chave guardada.
 
 ## Endpoints
 
-Base: `https://func-coldtrack-7319.azurewebsites.net/api`
+Base: `https://func-coldtrack-7319.azurewebsites.net/api`. Documentação interativa (Swagger):
+<https://func-coldtrack-7319.azurewebsites.net/api/docs>.
 
 | rota | quem | acesso |
 |---|---|---|
@@ -33,6 +35,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `POST /empresas` | pessoa | aberta: cria a empresa e o primeiro gestor |
 | `POST /login` | pessoa | e-mail e senha → token (8 h) |
 | `GET /perfis` | painel | aberta |
+| `GET /docs`, `GET /openapi.json` | quem integra | aberta: Swagger UI e especificação OpenAPI 3.0 |
 | `POST /chat` | site | aberta: pergunta ao chat do site (10 por minuto por IP, 2000 por dia no total) |
 | `GET /eu`, `POST /senha`, `POST /sair` | operador, gestor | `Authorization: Bearer <token>` |
 | `POST /assistente` | operador, gestor | token: assistente do painel (15 por minuto por usuário, 300 por dia por empresa) |

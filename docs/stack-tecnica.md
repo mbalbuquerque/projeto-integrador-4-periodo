@@ -3,7 +3,7 @@
 Documento de referência da arquitetura do ColdTrack: o que cada parte faz, em que tecnologia
 foi feita, onde roda, como os dados circulam e como o sistema é publicado.
 Para colocar um cliente novo em operação, ver [`implantacao.md`](implantacao.md); para as rotas,
-[`api.md`](api.md); para os controles de segurança, [`seguranca.md`](seguranca.md).
+o [Swagger](https://func-coldtrack-7319.azurewebsites.net/api/docs) e [`api.md`](api.md); para os controles de segurança, [`seguranca.md`](seguranca.md).
 
 ## 1. Visão geral
 
@@ -183,7 +183,8 @@ mede abaixo de 0 °C: para uva, usar DHT22 ou sonda DS18B20.
 
 ## 6. API
 
-Base: `https://func-coldtrack-7319.azurewebsites.net/api`
+Base: `https://func-coldtrack-7319.azurewebsites.net/api`. Documentação interativa (Swagger):
+<https://func-coldtrack-7319.azurewebsites.net/api/docs>.
 
 | Método e rota | Quem usa | Permissão | Função |
 |---|---|---|---|
@@ -192,6 +193,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 | `POST /login` | Pessoa | Aberta | Troca e-mail e senha por um token de acesso |
 | `POST /sair` | Painel | Operador ou gestor | Encerra a sessão (derruba os tokens do usuário) |
 | `GET /perfis` | Painel | Aberta | Perfis de carga e faixas |
+| `GET /docs`, `GET /openapi.json` | Quem integra | Aberta | Swagger UI e especificação OpenAPI 3.0 |
 | `POST /chat` | Site | Aberta | Chat público sobre o projeto (Azure OpenAI), com limite por IP |
 | `POST /assistente` | Painel | Operador ou gestor | Assistente do painel: uso das telas e dados da própria empresa, somente leitura |
 | `GET /eu` | Painel | Operador ou gestor | Dados do usuário logado e da empresa |

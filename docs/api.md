@@ -1,5 +1,9 @@
 # API do ColdTrack
 
+> Documentação interativa (Swagger UI, com "Try it out"): <https://func-coldtrack-7319.azurewebsites.net/api/docs>.
+> Especificação OpenAPI 3.0: [`cloud/function/openapi.json`](../cloud/function/openapi.json)
+> (publicada em `/api/openapi.json`). Este arquivo é a referência em texto, com as regras em detalhe.
+
 Referência das rotas da Azure Function (`cloud/function/function_app.py`). As regras de
 validação estão em `cadastros.py` (cadastros do painel) e `contrato.py` (telemetria e
 filtros).
@@ -22,7 +26,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 |---|---|---|
 | chave do sensor | header `x-device-key: <chave>` | `POST /telemetria` |
 | token do painel | header `Authorization: Bearer <token>` | rotas do painel, `POST /assistente` e `POST /sair` |
-| nenhuma | — | `POST /empresas`, `POST /login`, `GET /perfis`, `POST /chat` |
+| nenhuma | — | `POST /empresas`, `POST /login`, `GET /perfis`, `POST /chat`, `GET /docs`, `GET /openapi.json` |
 
 O token é um JWT HS256 válido por 8 horas, emitido por `POST /login`, `POST /empresas` e
 `POST /senha`. A cada chamada a API confere o usuário no banco: usuário removido, senha

@@ -72,5 +72,7 @@ produção sem `az deployment group what-if`.
   físicas guardam a URL da API na memória, e a chave de partição não muda depois de criada.
 - Módulo `.py` novo na API precisa entrar em `cloud/function/pacote.txt` (o `test_pacote.py`
   avisa).
+- Rota nova ou mudada na API entra também em `cloud/function/openapi.json` (o Swagger em
+  <https://func-coldtrack-7319.azurewebsites.net/api/docs>); o `test_openapi.py` confere rota a rota.
 - Versões das dependências fixadas em `requirements.txt`; subir versão é um commit próprio,
   com os testes passando.

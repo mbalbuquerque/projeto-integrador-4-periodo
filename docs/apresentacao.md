@@ -85,6 +85,7 @@ flowchart LR
 - Cosmos DB com sete containers: empresas, usuários, sensores, veículos, viagens, leituras e limites
 - Rota do sensor: POST /telemetria valida, classifica, grava e devolve a faixa
 - Rotas do painel: login, cadastros, leituras, sensores, veículos, viagens e usuários
+- Documentação interativa (Swagger): https://func-coldtrack-7319.azurewebsites.net/api/docs
 - Perfis de carga: manga normal de 10 a 13 °C, uva de -1 a 0 °C, margem de atenção
 - Perfis de usuário: gestor cadastra, operador consulta
 
@@ -125,7 +126,7 @@ flowchart LR
 
 ## 11. Testes e qualidade
 
-- API: 155 testes automatizados passando, mais lint
+- API: 165 testes automatizados passando, mais lint
 - Firmware compilado no CI nas variantes DHT11 e DHT22
 - Simulação no Wokwi: queda de conexão, excursão térmica e faixa da manga
 - Painel: 158 testes unitários e 206 testes e2e com a API simulada
