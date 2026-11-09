@@ -21,7 +21,7 @@ Os dois são publicados pela branch `everson` (ver [Publicação](#publicação)
 | Painel publicado | <https://stcoldtrackweb7319.z15.web.core.windows.net> |
 | API (base) | `https://func-coldtrack-7319.azurewebsites.net/api`; exemplo público: <https://func-coldtrack-7319.azurewebsites.net/api/perfis> |
 | Simulação no Wokwi | <https://wokwi.com/projects/475352296477619201> |
-| Canal no ThingSpeak (só demonstração e experimento MQTT) | <https://thingspeak.mathworks.com/channels/3496439> |
+| Canal no ThingSpeak (placa física via MQTT) | <https://thingspeak.mathworks.com/channels/3515173> |
 
 ## Arquitetura
 
