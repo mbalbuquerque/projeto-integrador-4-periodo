@@ -21,7 +21,7 @@ Os dois são publicados pela branch `everson` (ver [Publicação](#publicação)
 | Painel publicado | <https://stcoldtrackweb7319.z15.web.core.windows.net> |
 | API (base) | `https://func-coldtrack-7319.azurewebsites.net/api`; exemplo público: <https://func-coldtrack-7319.azurewebsites.net/api/perfis> |
 | Simulação no Wokwi | <https://wokwi.com/projects/475352296477619201> |
-| Canal no ThingSpeak (só demonstração e experimento MQTT) | <https://thingspeak.mathworks.com/channels/3496439> |
+| Canal no ThingSpeak (placa física via MQTT) | <https://thingspeak.mathworks.com/channels/3515173> |
 
 ## Arquitetura
 
@@ -194,6 +194,8 @@ Detalhes e convenção de commits em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 | documento | conteúdo |
 |---|---|
+| [`docs/funcionalidades.md`](docs/funcionalidades.md) | mapeamento de funcionalidades: tudo o que a plataforma faz, por camada |
+| [`docs/apresentacao.md`](docs/apresentacao.md) | apresentação do projeto em slides, com roteiro da demonstração ([versão .pptx](docs/apresentacao.pptx)) |
 | [`docs/stack-tecnica.md`](docs/stack-tecnica.md) | arquitetura, componentes, modelo de dados, publicação |
 | [`docs/api.md`](docs/api.md) | referência das rotas da API |
 | [`docs/seguranca.md`](docs/seguranca.md) | controles de segurança e limitações conhecidas |
