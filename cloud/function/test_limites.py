@@ -150,6 +150,50 @@ class TestCotaDoChat(unittest.TestCase):
 
 
 class TestCotaDoAssistente(BaseRota):
+    def test_janela_memoria_limpeza_e_total(self):
+        memoria = limites.JanelaEmMemoria()
+        agora = 1000
+        for i in range(5002):
+            memoria._contas[f"k{i}"] = (1, agora - 10)
+        memoria.contar("nova", agora + 60, 1, agora)
+        self.assertEqual(memoria.total("nova"), 1)
+        self.assertEqual(memoria.total("inexistente"), 0)
+
+    def test_total_falha_no_banco_cai_para_memoria(self):
+        banco_falho = mock.Mock()
+        banco_falho.read.return_value = {"id": "falso"}
+        banco_falho.read_item.side_effect = RuntimeError("falha no cosmos")
+        lim = limites.Limites(lambda: banco_falho)
+        self.assertEqual(lim.total("chave", 60), 0)
+
+    def test_total_le_do_banco_quando_existe(self):
+        banco = mock.Mock()
+        banco.read.return_value = {"id": "falso"}
+        banco.read_item.return_value = {"id": "doc", "n": 7}
+        lim = limites.Limites(lambda: banco)
+        self.assertEqual(lim.total("chave", 60), 7)
+
+    def test_banco_ja_carregado(self):
+        lim = limites.Limites(lambda: mock.Mock(read=lambda: {"id": "falso"}))
+        lim._container = mock.Mock()
+        self.assertIsNotNone(lim._banco())
+
+    def test_total_sem_container_vai_para_memoria(self):
+        lim = limites.Limites(lambda: None)
+        lim._sem_container = True
+        self.assertEqual(lim.total("chave", 60), 0)
+
+    def test_duplo_check_concorrente(self):
+        lim = limites.Limites(lambda: None)
+        class TravaFalsa:
+            def __enter__(self_trava):
+                lim._container = mock.Mock()
+            def __exit__(self_trava, *a):
+                pass
+        lim._trava = TravaFalsa()
+        c = lim._banco()
+        self.assertIsNotNone(c)
+
     def test_teto_diario_por_empresa(self):
         with mock.patch.object(function_app, "ASSISTENTE_POR_DIA", 2):
             self.assertEqual(self.chamar({"pergunta": "oi"})[0], 200)

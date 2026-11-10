@@ -9,3 +9,16 @@ select = ["E", "F", "W", "I"]
 [tool.ruff.lint.isort]
 known-first-party = ["assistente", "cadastros", "chat", "contrato", "function_app", "limites",
                      "seguranca"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["."]
+python_files = ["test_*.py"]
+
+[tool.coverage.run]
+branch = true
+source = ["assistente", "cadastros", "chat", "contrato", "function_app", "limites", "seguranca"]
+omit = ["test_*.py", "scripts/*"]
+
+[tool.coverage.report]
+show_missing = true
