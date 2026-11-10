@@ -58,6 +58,8 @@ def banco():
             {"id": "E-A~V-0", "empresaId": "E-A", "veiculo": "CT-001", "origem": "Juazeiro",
              "destino": "Salvador", "carga": "Manga", "inicio": iso(days=3),
              "fim": iso(days=2)},
+            {"id": "E-A~V-3", "empresaId": "E-A", "veiculo": "CT-001", "origem": "Petrolina",
+             "destino": "Fortaleza", "carga": "Manga", "inicio": iso(days=-2), "fim": None},
             {"id": "E-B~V-9", "empresaId": "E-B", "veiculo": "CT-001",
              "origem": "SEGREDO-B origem", "destino": "x", "carga": "Uva",
              "inicio": iso(hours=1), "fim": None},
@@ -332,6 +334,15 @@ class TestRetrato(BaseRota):
         self.assertIsNone(sensor["ultimaLeitura"]["rssi"])
         self.assertEqual(sensor["ultimas24h"], {"leituras": 0})
 
+    def test_resumo_com_maximo_de_leituras(self):
+        leituras = [
+            {"temperatura": 12.0, "umidade": 80.0, "status": "NORMAL", "medidoEm": iso(minutes=i)}
+            for i in range(assistente.LEITURAS_MAX)
+        ]
+        res = assistente._resumo(leituras)
+        self.assertIn("observacao", res)
+        self.assertEqual(res["leituras"], assistente.LEITURAS_MAX)
+
     def test_viagens_e_perfis(self):
         self.chamar({"pergunta": "oi"})
         dados = self.retrato()
@@ -400,6 +411,17 @@ class TestLimites(unittest.TestCase):
         self.assertTrue(dados["listasCortadas"])
         self.assertEqual(dados["totalVeiculos"], 50)
         self.assertGreaterEqual(len(dados["sensores"]), 1)
+
+    def test_encolher_com_listas_unitarias_nao_corta_mais(self):
+        dados = {
+            "usuarios": [{"id": "u1"}],
+            "veiculos": [{"id": "v1"}],
+            "viagens": {"ultimasFinalizadas": [], "agendadas": [], "emAndamento": []},
+            "sensores": [],
+            "texto_longo": "a" * 10000,
+        }
+        res = assistente.encolher(dados, maximo=100)
+        self.assertFalse(res.get("listasCortadas", False))
 
 
 class TestHorario(unittest.TestCase):

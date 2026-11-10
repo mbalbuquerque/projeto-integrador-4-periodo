@@ -6,6 +6,11 @@ firmware/coldtrack/secrets.h
 __pycache__/
 *.pyc
 .venv/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.hypothesis/
 local.settings.json
 
 # Dados da analise (baixados e gerados pelos scripts)

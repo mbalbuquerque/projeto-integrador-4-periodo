@@ -36,14 +36,22 @@ jobs:
           pip install ruff==0.17.4
           ruff check .
 
-      - name: Rodar testes
-        run: python -m unittest -v
+      - name: Rodar testes da API (com cobertura)
+        run: pytest --cov=. --cov-branch --cov-report=term-missing --cov-fail-under=98
+
+      - name: Rodar testes da analise climatica
+        run: pytest ../../analise -v
 
   firmware:
-    name: Firmware (compila para ESP32-C3)
+    name: Firmware (testes unitários C++ e compilação ESP32-C3)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Rodar testes unitários do firmware (C++)
+        run: |
+          g++ -O2 -Wall firmware/tests/test_firmware.cpp -o run_tests_firmware
+          ./run_tests_firmware
 
       - uses: arduino/setup-arduino-cli@v2
 
@@ -60,7 +68,7 @@ jobs:
       - name: Preparar sketch
         run: |
           mkdir -p build/coldtrack
-          cp firmware/coldtrack/coldtrack.ino firmware/coldtrack/azure_ca.h build/coldtrack/
+          cp firmware/coldtrack/coldtrack.ino firmware/coldtrack/azure_ca.h firmware/coldtrack/payload_core.h build/coldtrack/
           cp firmware/coldtrack/secrets.example.h build/coldtrack/secrets.h
 
       - name: Compilar (DHT22, simulação)
