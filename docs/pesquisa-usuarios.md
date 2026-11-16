@@ -3,6 +3,21 @@
 Meta da prévia: ≥ 5 entrevistas ou ≥ 20 respostas. Esta página traz o roteiro e o formulário;
 as respostas e a persona só entram aqui depois de coletadas. Nada abaixo é resultado.
 
+## Material preliminar (sem usuários reais)
+
+Enquanto a coleta com pessoas não acontece, a equipe preparou material **baseado em fontes
+públicas**, que não conta para a meta acima:
+
+- [`ux/pesquisa-secundaria.md`](ux/pesquisa-secundaria.md): achados com fontes sobre temperatura,
+  exportação, rastreabilidade, logística e rotina de motorista e gestor de frota.
+- [`ux/entrevistas-simuladas.md`](ux/entrevistas-simuladas.md): cinco entrevistas **simuladas**
+  (não são participantes reais), seguindo o roteiro abaixo, cada resposta com sua fonte.
+- [`ux/persona-jornada-proposta.md`](ux/persona-jornada-proposta.md): persona, jornada, proposta
+  de valor e indicadores do painel ligados a decisões; provisório até a validação.
+
+A validação com usuários reais (≥ 5 entrevistas ou ≥ 20 respostas) segue pendente para a
+entrega final.
+
 ## Público
 
 Quem decide ou opera o transporte refrigerado de frutas: donos e gestores de transportadora,
