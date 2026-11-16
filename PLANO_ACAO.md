@@ -17,7 +17,7 @@ em branco = ainda não definido pela equipe.
 | Sem pesquisa com usuários | Consumidor | ≥ 5 entrevistas ou ≥ 20 respostas; persona e jornada | | 25/11 | Registro da pesquisa (#38) |
 | Sem alertas push e estado offline no app | UE Mobile (final) | Push por limiar e faixa "sem conexão" no PWA | | 28/11 | Demonstração no celular (Front #13) |
 | Sem teste de usabilidade | UE Mobile / Consumidor (final) | Teste com 5 usuários e SUS | | 28/11 | Relatório SUS ≥ 68 (#38) |
-| OpenAPI, README e slides em inglês | Tech English | OpenAPI em inglês, README `.md`, slides e vídeo (roteiro em `docs/pitch-en.md`) | | 25/11 | Itens publicados (#33) |
+| README `.md` e vídeo em inglês | Tech English | OpenAPI e slides do pitch já em inglês (`docs/slides/`); falta README `.md` em inglês e vídeo de até 5 min (roteiro em `docs/pitch-en.md`) | | 25/11 | Itens publicados (#33) |
 | Base de ≥ 48 h e segundo sensor | IoT / Dados | Exportar coleta, estatística descritiva, campo de origem; confirmar sensores | | 25/11 | CSV e relatório (#39) |
 | Cobertura do painel e PRs revisados | Qualidade (final) | Cobertura do painel no CI; revisão de PRs por outro membro | | 28/11 | CI com mínimo; PRs com aprovação (Front #12) |
 | Deploy ainda parte da `everson` | Cloud / Qualidade | Publicar a partir da `main` e proteger a branch | | 28/11 | Workflow na `main` (#40) |
