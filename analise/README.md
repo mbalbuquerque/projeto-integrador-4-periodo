@@ -14,6 +14,7 @@ pip install -r requirements.txt
 python baixar_inmet.py 2020 2021 2022 2023 2024 2025   # ~600 MB de download, salva só a rota
 python limpar.py                                        # gera dados/inmet_rota_horario.csv
 python explorar.py                                      # gera figuras/ e relatorio.md
+python exportar_modelo.py                               # gera ../cloud/function/modelo_risco.json (rota /api/predict)
 ```
 
 A pasta `dados/` não vai para o Git: os scripts baixam e regeneram tudo.
@@ -31,6 +32,7 @@ A370 Salgueiro, A350 Serra Talhada, A309 Arcoverde, A341 Caruaru e A301 Recife.
 | `baixar_inmet.py` | baixa o pacote anual do INMET e guarda só as estações da rota |
 | `limpar.py` | padroniza as colunas, converte para o horário de Brasília e descarta valores ausentes ou impossíveis |
 | `explorar.py` | calcula os indicadores, gera as figuras, treina e avalia o modelo preliminar, escreve o relatório |
+| `exportar_modelo.py` | exporta a tabela do modelo (treino 2019–2022) e as métricas para `cloud/function/modelo_risco.json`, lido pela rota `/api/predict` |
 
 ## Base da placa física (`sensor/`)
 

@@ -9,6 +9,8 @@ cadastros.py
 chat.py
 assistente.py
 limites.py
+predicao.py
+modelo_risco.json
 base_chat.json
 openapi.json
 host.json

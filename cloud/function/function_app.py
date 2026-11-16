@@ -16,6 +16,7 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   POST /api/senha               troca a própria senha                   (operador, gestor)
   POST /api/sair                encerra todas as sessões do usuário     (operador, gestor)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
+  GET  /api/predict             risco de passar de 30 °C por mês e hora (operador, gestor)
   GET  /api/dispositivos        sensores da empresa, com último contato e online (operador, gestor)
   POST/PUT/DELETE /api/dispositivos[/{id}]  registra, troca a chave, remove (gestor)
   GET  /api/veiculos            frota                                   (operador, gestor)
@@ -48,6 +49,7 @@ from azure.cosmos import CosmosClient, exceptions
 import assistente
 import chat
 import limites
+import predicao
 from cadastros import (
     SENHA_MIN,
     validar_dispositivo,
@@ -614,6 +616,29 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
     itens = consultar_leituras(device, usuario["empresaId"], limite,
                                filtros["desde"], filtros["status"])
     return resposta({"deviceId": device, "leituras": itens})
+
+
+# ------------------------------------------------------------ risco térmico (modelo)
+
+@app.route(route="predict", methods=["GET"])
+def predict(req: func.HttpRequest) -> func.HttpResponse:
+    """Chance de a temperatura externa passar de 30 °C no mês e na hora da saída.
+
+    Modelo climatológico da estação INMET A307 (Petrolina), exportado por
+    analise/exportar_modelo.py; não usa as leituras do sensor do baú.
+    """
+    _, erro = autorizar(req, TODOS)
+    if erro:
+        return erro
+    erros, mes, hora = predicao.validar(req.params)
+    if erros:
+        return resposta({"erros": erros}, 400)
+    try:
+        modelo = predicao.carregar()
+    except (OSError, ValueError):
+        logging.exception("predict: modelo_risco.json ausente ou inválido no pacote")
+        return resposta({"erros": ["modelo indisponível"]}, 503)
+    return resposta(predicao.prever(modelo, mes, hora))
 
 
 # ------------------------------------------------------------ dispositivos

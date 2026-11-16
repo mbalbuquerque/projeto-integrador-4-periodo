@@ -15,4 +15,4 @@ COPY requirements.txt /
 RUN pip install --no-cache-dir -r /requirements.txt
 
 COPY function_app.py contrato.py seguranca.py cadastros.py chat.py assistente.py limites.py \
-     base_chat.json openapi.json host.json /home/site/wwwroot/
+     predicao.py modelo_risco.json base_chat.json openapi.json host.json /home/site/wwwroot/
