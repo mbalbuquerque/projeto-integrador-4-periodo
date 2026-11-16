@@ -50,3 +50,12 @@ class TestOnline(BaseRotas):
 
     def test_sensor_de_outra_empresa_nao_aparece(self):
         self.assertNotIn("dev-b", self.listar())
+
+
+class TestCabecalhosDaDocumentacao(BaseRotas):
+    def test_docs_com_hsts_permissions_policy_e_cache(self):
+        r = function_app.docs.build().get_user_function()(
+            function_app.func.HttpRequest(method="GET", url="/api/docs", body=b""))
+        self.assertIn("max-age=", r.headers["Strict-Transport-Security"])
+        self.assertIn("camera=()", r.headers["Permissions-Policy"])
+        self.assertEqual(r.headers["Cache-Control"], "no-cache")
