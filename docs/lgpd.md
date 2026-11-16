@@ -39,7 +39,9 @@ legítimo interesse para os registros de segurança (limite de tentativas e logs
 
 ## Pontos em aberto
 
-- Política de privacidade e termo de uso no site.
-- Fluxo de exclusão da empresa inteira (hoje só é possível por usuário).
+- Termo de uso e publicação da política de privacidade no site (a política está em
+  [`politica-de-privacidade.md`](politica-de-privacidade.md)).
+- Rota de exclusão da empresa inteira (hoje só por usuário; o procedimento manual está na
+  política de privacidade).
 - Confirmação de e-mail no cadastro, que evita cadastrar o e-mail de outra pessoa.
 - Definir quem é o encarregado (DPO) caso o sistema vá para uso real.
