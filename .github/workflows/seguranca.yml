@@ -35,13 +35,18 @@ jobs:
   zap:
     name: Varredura ZAP (baseline, passiva)
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
-      - name: ZAP baseline na documentação da API
-        uses: zaproxy/action-baseline@v0.12.0
+      - name: Rodar o ZAP baseline na documentação da API
+        run: |
+          mkdir -p zap && chmod 777 zap
+          # -I: avisos não derrubam o job; só falha se o ZAP não conseguir rodar.
+          docker run --rm -v "$PWD/zap:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t https://func-coldtrack-7319.azurewebsites.net/api/docs \
+            -r relatorio-zap.html -w relatorio-zap.md -I
+
+      - name: Guardar o relatório
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          target: "https://func-coldtrack-7319.azurewebsites.net/api/docs"
-          allow_issue_writing: false
-          fail_action: false
-          artifact_name: relatorio-zap-api
+          name: relatorio-zap-api
+          path: zap/

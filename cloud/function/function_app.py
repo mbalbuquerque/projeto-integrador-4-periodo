@@ -135,11 +135,22 @@ def ler(nome, item_id):
         return None
 
 
+# Cabeçalhos de segurança de toda resposta JSON da API (apontados pela varredura do ZAP):
+# sem sniffing de tipo, sem cache de dado de usuário e HTTPS sempre.
+CABECALHOS_SEGURANCA = {
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Referrer-Policy": "no-referrer",
+}
+
+
 def resposta(corpo, status=200):
     return func.HttpResponse(
         json.dumps(corpo, ensure_ascii=False),
         status_code=status,
         mimetype="application/json",
+        headers=CABECALHOS_SEGURANCA,
     )
 
 
