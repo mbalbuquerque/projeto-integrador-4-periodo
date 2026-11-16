@@ -997,7 +997,9 @@
                     {
                       "id": "coldtrack-01",
                       "descricao": "Baú do CT-001",
-                      "criadoEm": "2026-11-01T14:30:00+00:00"
+                      "criadoEm": "2026-11-01T14:30:00+00:00",
+                      "ultimoContato": "2026-11-16T19:40:12+00:00",
+                      "online": true
                     }
                   ]
                 }
@@ -2767,12 +2769,24 @@
           "criadoEm": {
             "type": "string",
             "format": "date-time"
+          },
+          "ultimoContato": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Quando chegou a última leitura do sensor; nulo se nunca enviou."
+          },
+          "online": {
+            "type": "boolean",
+            "description": "Verdadeiro se a última leitura chegou há no máximo 120 s."
           }
         },
         "example": {
           "id": "coldtrack-01",
           "descricao": "Baú do CT-001",
-          "criadoEm": "2026-11-01T14:30:00+00:00"
+          "criadoEm": "2026-11-01T14:30:00+00:00",
+          "ultimoContato": "2026-11-16T19:40:12+00:00",
+          "online": true
         }
       },
       "DispositivoNovo": {
