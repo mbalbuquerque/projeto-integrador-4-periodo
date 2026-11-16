@@ -899,7 +899,7 @@ DOCS_HEADERS = {
     "X-Frame-Options": "DENY",
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-    "Cache-Control": "no-cache",
+    "Cache-Control": "no-store",
 }
 
 _openapi = None

@@ -42,7 +42,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | SEG-04 | Modelo de ameaças (STRIDE) do fluxo principal | `docs/stride.md` | Tabela por categoria, com controle e risco residual | Atendido |
 | SEG-05 | Limite de requisições | `limites.py` | Login, chat e assistente | Parcial |
 | SEG-06 | LGPD | `docs/lgpd.md` | Inventário de dados, retenção e direitos do titular; faltam política de privacidade e exclusão da empresa | Parcial |
-| SEG-07 | Dependências verificadas e varredura ZAP | `.github/workflows/seguranca.yml` | pip-audit e ZAP baseline com relatório como artefato; resultado a registrar depois da primeira execução | Parcial |
+| SEG-07 | Dependências verificadas e varredura ZAP | `.github/workflows/seguranca.yml`, `docs/relatorio-seguranca.md` | pip-audit e npm audit sem achados; ZAP baseline com 0 alertas altos e 12 avisos triados | Atendido |
 
 ## Qualidade de Software
 
