@@ -197,6 +197,7 @@ Detalhes e convenção de commits em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 | documento | conteúdo |
 |---|---|
+| [`docs/como-funciona.md`](docs/como-funciona.md) | guia único de estudo: como cada camada funciona, do firmware à IA, com respostas para o banco de perguntas da banca |
 | [`docs/funcionalidades.md`](docs/funcionalidades.md) | mapeamento de funcionalidades: tudo o que a plataforma faz, por camada |
 | [`docs/apresentacao.md`](docs/apresentacao.md) | apresentação do projeto em slides, com roteiro da demonstração ([versão .pptx](docs/apresentacao.pptx)) |
 | [`docs/stack-tecnica.md`](docs/stack-tecnica.md) | arquitetura, componentes, modelo de dados, publicação |
