@@ -78,3 +78,12 @@ jobs:
         run: |
           echo '#define DHT_TYPE DHT11' >> build/coldtrack/secrets.h
           arduino-cli compile --fqbn esp32:esp32:esp32c3 build/coldtrack
+
+  docker:
+    name: Imagem Docker da API (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir a imagem
+        run: docker build -f infra/Dockerfile -t coldtrack-api cloud/function

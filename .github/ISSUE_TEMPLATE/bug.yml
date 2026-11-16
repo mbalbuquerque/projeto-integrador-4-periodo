@@ -1,0 +1,49 @@
+name: Bug
+description: Registrar um defeito com severidade e ambiente
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: severidade
+    attributes:
+      label: Severidade
+      description: Alta = dado errado, segurança ou sistema fora; média = função quebrada com contorno; baixa = detalhe visual ou de texto.
+      options:
+        - Alta
+        - Média
+        - Baixa
+    validations:
+      required: true
+  - type: dropdown
+    id: ambiente
+    attributes:
+      label: Ambiente em que apareceu
+      options:
+        - Desenvolvimento
+        - Teste
+        - Produção
+    validations:
+      required: true
+  - type: textarea
+    id: passos
+    attributes:
+      label: Passos para reproduzir
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: Resultado esperado
+    validations:
+      required: true
+  - type: textarea
+    id: obtido
+    attributes:
+      label: Resultado obtido
+    validations:
+      required: true
+  - type: input
+    id: versao
+    attributes:
+      label: Commit ou versão
+      description: Hash do commit ou tag em que o defeito foi visto.

@@ -55,6 +55,10 @@
     {
       "name": "Documentação",
       "description": "Esta documentação."
+    },
+    {
+      "name": "Saúde",
+      "description": "Verificação de saúde do serviço."
     }
   ],
   "paths": {
@@ -2099,6 +2103,99 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Saúde"
+        ],
+        "operationId": "verificarSaude",
+        "summary": "Verifica se a API e o banco estão respondendo",
+        "description": "**Quem pode chamar:** público (sem autenticação).\n\nDevolve `200` quando o banco responde e `503` quando não responde. A resposta não traz detalhes internos.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Serviço e banco funcionando.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "banco",
+                    "horario"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "degradado"
+                      ]
+                    },
+                    "banco": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "indisponivel"
+                      ]
+                    },
+                    "horario": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                },
+                "example": {
+                  "status": "ok",
+                  "banco": "ok",
+                  "horario": "2026-11-16T21:00:00+00:00"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Banco indisponível.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "banco",
+                    "horario"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "degradado"
+                      ]
+                    },
+                    "banco": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "indisponivel"
+                      ]
+                    },
+                    "horario": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                },
+                "example": {
+                  "status": "degradado",
+                  "banco": "indisponivel",
+                  "horario": "2026-11-16T21:00:00+00:00"
                 }
               }
             }
