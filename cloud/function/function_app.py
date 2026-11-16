@@ -16,7 +16,7 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   POST /api/senha               troca a própria senha                   (operador, gestor)
   POST /api/sair                encerra todas as sessões do usuário     (operador, gestor)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
-  GET  /api/dispositivos        sensores da empresa                     (operador, gestor)
+  GET  /api/dispositivos        sensores da empresa, com último contato e online (operador, gestor)
   POST/PUT/DELETE /api/dispositivos[/{id}]  registra, troca a chave, remove (gestor)
   GET  /api/veiculos            frota                                   (operador, gestor)
   POST/PUT/DELETE /api/veiculos[/{id}]                                   (gestor)
@@ -93,6 +93,9 @@ HASH_FALSO = gerar_hash(uuid.uuid4().hex)
 TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
 SEP = "~"
+
+# Sensor sem leitura recebida há mais que isso aparece como offline (6 ciclos de 20 s).
+LIMITE_ONLINE_S = 120
 
 # Limites de uso (contados no Cosmos, valem somando todas as instâncias):
 # chat do site: 10 perguntas por minuto por IP e 2000 por dia no total;
@@ -204,6 +207,23 @@ def lista(nome, empresa, campos="*"):
 
 def id_interno(empresa, codigo):
     return f"{empresa}{SEP}{codigo}"
+
+
+def contato_do_dispositivo(device_id):
+    """Quando chegou a última leitura do sensor e se ele conta como online."""
+    itens = list(container().query_items(
+        "SELECT TOP 1 c.recebidoEm FROM c WHERE c.deviceId = @d ORDER BY c.medidoEm DESC",
+        parameters=[{"name": "@d", "value": device_id}],
+        partition_key=device_id))
+    ultimo = itens[0].get("recebidoEm") if itens else None
+    online = False
+    if ultimo:
+        try:
+            atraso = datetime.now(timezone.utc) - datetime.fromisoformat(ultimo)
+            online = atraso.total_seconds() <= LIMITE_ONLINE_S
+        except ValueError:
+            online = False
+    return {"ultimoContato": ultimo, "online": online}
 
 
 def id_externo(doc):
@@ -605,8 +625,12 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
 
     if metodo == "GET":
         usuario, erro = autorizar(req, TODOS)
-        return erro or resposta(
-            {"dispositivos": lista("dispositivos", usuario["empresaId"], campos)})
+        if erro:
+            return erro
+        itens = lista("dispositivos", usuario["empresaId"], campos)
+        for item in itens:
+            item.update(contato_do_dispositivo(item["id"]))
+        return resposta({"dispositivos": itens})
 
     gestor, erro = autorizar(req, GESTOR)
     if erro:
