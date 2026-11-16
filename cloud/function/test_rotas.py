@@ -470,6 +470,19 @@ class TestVeiculosEViagens(BaseRotas):
 
 
 class TestBordasUsuariosESenha(BaseRotas):
+    def test_login_e_cadastro_com_caractere_proibido_no_id(self):
+        # Achado do ZAP ativo: e-mail com "/" virava erro 500 no SDK do Cosmos.
+        LOGIN = function_app.login.build().get_user_function()
+        barra_invertida = chr(92)
+        for email in ("http://www.google.com/", "a/b@c.com", "a@b.com?x", "a@b#.com",
+                      "a" + barra_invertida + "b@c.com"):
+            status, _ = self.chamar(LOGIN, "POST", "/api/login",
+                                    {"email": email, "senha": "qualquer-123"})
+            self.assertEqual(status, 401, email)
+            status, _ = self.chamar(EMPRESAS, "POST", "/api/empresas", {
+                "empresa": "X", "nome": "Y", "email": email, "senha": "senha-forte-123"})
+            self.assertEqual(status, 400, email)
+
     def test_login_corpo_invalido(self):
         LOGIN = function_app.login.build().get_user_function()
         status, corpo = self.chamar(LOGIN, "POST", "/api/login", corpo_raw=b"nao-json")

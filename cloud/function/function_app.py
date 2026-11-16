@@ -51,6 +51,7 @@ import chat
 import limites
 import predicao
 from cadastros import (
+    EMAIL,
     SENHA_MIN,
     validar_dispositivo,
     validar_empresa,
@@ -376,7 +377,9 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
         logging.warning("login recusado: IP com %d falhas ou mais", LOGIN_FALHAS_POR_IP)
         return resposta({"erros": [MSG_IP_EM_ESPERA]}, 429)
 
-    usuario = ler("usuarios", email) if email else None
+    # E-mail com / \ ? # nunca existe (o cadastro recusa): não vai ao banco,
+    # que o rejeitaria com erro 500.
+    usuario = ler("usuarios", email) if email and EMAIL.match(email) else None
 
     # Mesmo custo para e-mail inexistente e senha errada: sem o hash de mentira,
     # a resposta mais rápida revelaria quem tem conta.

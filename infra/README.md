@@ -229,6 +229,36 @@ Leitura do resultado:
 - O crédito do Azure for Students cobre o piloto. Para uso real por uma transportadora é
   necessária assinatura paga, e os valores acima passam a ser cobrados.
 
+## Contêiner e compose (testado no CI)
+
+`infra/Dockerfile` empacota a API (imagem oficial de Azure Functions, Python 3.11) e
+`infra/docker-compose.yml` sobe a API junto com o emulador oficial do Cosmos DB para Linux
+(`mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview`, em HTTP). Para
+desenvolvimento: `cp .env.example .env` (os valores de exemplo já apontam para o emulador),
+`docker compose -f infra/docker-compose.yml up --build` e, uma vez, `python infra/ci/preparar_banco.py`
+(cria o banco, os containers e um usuário de teste). A API fica em `http://localhost:7071/api`.
+
+O workflow `Compose e ZAP` (`.github/workflows/compose-zap.yml`) executa esse mesmo compose no
+runner do GitHub Actions, sem segredo real (a chave do emulador é pública e a senha do usuário
+de teste é fictícia). Sem o emulador, `/api/health` responde `503` com `"banco": "indisponivel"`,
+porque a sonda consulta o Cosmos; com ele, responde `200`. Os tempos ficam no artefato
+`compose-e-zap` (`resultados/reinicio.txt`, `resultados/saude.txt`).
+
+Medição de 16/11/2026 (execução do PR, runner `ubuntu-latest`; valores de uma execução, não média):
+
+| verificação | resultado |
+|---|---|
+| `docker compose up -d --build` até `/api/health` responder 200 | 60,6 s (imagem e emulador baixados do zero) |
+| `healthcheck` do contêiner da API | `healthy` logo depois da subida |
+| Queda do processo (SIGKILL no PID 1 do contêiner, como o OOM killer) com `restart: unless-stopped` | volta a responder 200 em **4,4 s**; contagem de reinícios 0 para 1; `healthy` 2,1 s depois |
+| `docker kill` | **não reinicia**: o Docker trata como parada pedida pelo operador (estado `exited` 30 s depois, 0 reinícios novos) |
+| `docker stop` | não reinicia, como esperado em `unless-stopped`; `docker start` volta em 3,9 s |
+
+Conclusão: a política `unless-stopped` recupera a API de uma queda do processo em poucos
+segundos, mas não de uma parada manual. A primeira medição desse CI usou `docker kill` e ficou 180 s
+sem reinício, o que revelou essa diferença. Em produção (Function App), a recuperação é da plataforma
+Azure; o compose vale para desenvolvimento e para a demonstração em contêiner.
+
 ## Validar e conferir
 
 ```bash

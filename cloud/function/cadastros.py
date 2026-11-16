@@ -11,7 +11,8 @@ from datetime import datetime
 from contrato import PERFIS_CARGA
 from seguranca import PERFIS
 
-EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Sem / \ ? # : o e-mail é o id do documento no Cosmos, e o SDK recusa esses caracteres em id.
+EMAIL = re.compile(r"^[^@\s/\\?#]+@[^@\s/\\?#]+\.[^@\s/\\?#]+$")
 CODIGO = re.compile(r"^[A-Z0-9-]{3,20}$")
 DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{3,40}$")
 SENHA_MIN = 8
