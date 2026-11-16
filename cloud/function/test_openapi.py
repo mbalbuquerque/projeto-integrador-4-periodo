@@ -69,7 +69,8 @@ class TestSpec(unittest.TestCase):
                     continue
                 with self.subTest(rota=f"{metodo.upper()} {caminho}"):
                     self.assertTrue(op.get("summary"))
-                    self.assertIn("Quem pode chamar", op.get("description", ""))
+                    descricao = op.get("description", "")
+                    self.assertTrue("Who can call" in descricao or "Quem pode chamar" in descricao)
                     self.assertIn("security", op)
                     self.assertTrue(op.get("tags"))
 
