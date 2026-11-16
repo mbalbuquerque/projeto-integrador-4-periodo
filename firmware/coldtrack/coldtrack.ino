@@ -208,6 +208,50 @@ int esperarNivel(int nivel, int limiteUs) {
 }
 
 
+// DHT22 (simulador Wokwi): a leitura dos 40 bits roda sem interrupcoes.
+// No simulador, as tarefas do Wi-Fi interrompem o laco no meio dos pulsos:
+// o pulso medido estica (bit 0 vira 1) ou passa do limite, e nenhuma
+// leitura fecha o checksum. Com os limites de cada pulso, o trecho sem
+// interrupcoes dura no maximo ~10 ms, bem abaixo do watchdog. O DHT11 da
+// placa fisica segue lendo com as interrupcoes ligadas, como antes.
+#if DHT_TYPE == DHT22
+portMUX_TYPE dhtTrava = portMUX_INITIALIZER_UNLOCKED;
+#define DHT_TRAVAR()  portENTER_CRITICAL(&dhtTrava)
+#define DHT_LIBERAR() portEXIT_CRITICAL(&dhtTrava)
+#else
+#define DHT_TRAVAR()
+#define DHT_LIBERAR()
+#endif
+
+
+// Resposta do sensor e os 40 bits. false = sensor mudo ou pulso fora do tempo.
+bool lerBitsDht(uint8_t d[5]) {
+
+  // Resposta: sobe, cai ~80 us, sobe ~80 us.
+  if (esperarNivel(1, 200) < 0 || esperarNivel(0, 200) < 0 || esperarNivel(1, 200) < 0) {
+    return false;
+  }
+
+  // 40 bits: ~50 us em baixo + alto de ~27 us (0) ou ~70 us (1).
+  for (int i = 0; i < 40; i++) {
+
+    if (esperarNivel(0, 120) < 0) {
+      return false;
+    }
+
+    int alto = esperarNivel(1, 120);
+
+    if (alto < 0) {
+      return false;
+    }
+
+    d[i / 8] = (d[i / 8] << 1) | (alto > 45 ? 1 : 0);
+  }
+
+  return true;
+}
+
+
 bool lerDhtUmaVez(float *temperatura, float *umidade) {
 
   static bool preparado = false;
@@ -228,29 +272,15 @@ bool lerDhtUmaVez(float *temperatura, float *umidade) {
   } else {
     delayMicroseconds(1100);
   }
-  gpio_set_level((gpio_num_t)DHT_PIN, 1);
-
-  // Resposta: sobe, cai ~80 us, sobe ~80 us.
-  if (esperarNivel(1, 200) < 0 || esperarNivel(0, 200) < 0 || esperarNivel(1, 200) < 0) {
-    return false;
-  }
-
-  // 40 bits: ~50 us em baixo + alto de ~27 us (0) ou ~70 us (1).
   uint8_t d[5] = {0, 0, 0, 0, 0};
 
-  for (int i = 0; i < 40; i++) {
+  DHT_TRAVAR();
+  gpio_set_level((gpio_num_t)DHT_PIN, 1);
+  bool recebido = lerBitsDht(d);
+  DHT_LIBERAR();
 
-    if (esperarNivel(0, 120) < 0) {
-      return false;
-    }
-
-    int alto = esperarNivel(1, 120);
-
-    if (alto < 0) {
-      return false;
-    }
-
-    d[i / 8] = (d[i / 8] << 1) | (alto > 45 ? 1 : 0);
+  if (!recebido) {
+    return false;
   }
 
   return decodificarDht(d, DHT_TYPE, temperatura, umidade);

@@ -55,7 +55,7 @@
     }
   ],
   "connections": [
-    [ "esp:3V3", "dht1:VCC", "red", [] ],
+    [ "esp:3V3.1", "dht1:VCC", "red", [] ],
     [ "esp:GND.1", "dht1:GND", "black", [] ],
     [ "esp:4", "dht1:SDA", "green", [] ],
     [ "esp:5", "rGreen:1", "green", [] ],
