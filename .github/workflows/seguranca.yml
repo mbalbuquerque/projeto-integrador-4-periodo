@@ -1,0 +1,47 @@
+name: Segurança
+
+# Verificação de dependências e varredura passiva do ZAP contra a API publicada.
+# Roda sob demanda, toda segunda-feira e quando as dependências mudam na main.
+# O relatório do ZAP fica como artefato da execução.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "cloud/function/requirements.txt"
+      - ".github/workflows/seguranca.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  dependencias:
+    name: Dependências da API (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Procurar vulnerabilidades conhecidas
+        run: |
+          pip install pip-audit==2.7.3
+          pip-audit -r cloud/function/requirements.txt
+
+  zap:
+    name: Varredura ZAP (baseline, passiva)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: ZAP baseline na documentação da API
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: "https://func-coldtrack-7319.azurewebsites.net/api/docs"
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: relatorio-zap-api

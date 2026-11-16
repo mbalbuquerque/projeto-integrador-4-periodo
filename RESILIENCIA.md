@@ -15,7 +15,7 @@ resultado foi observado e registrado aqui.
 | R5 | Falha de sensor | Implementado | Checksum do DHT validado, duas tentativas; leitura inválida não é enviada como válida. O RSSI inválido segue como `null` |
 | R6 | Degradação controlada | Pendente | O painel não mostra "sem dados desde HH:MM" |
 | R7 | Observabilidade | Parcial | `GET /api/health` (200/503) e RSSI e horário da leitura em cada envio; falta heartbeat com status online/offline por sensor |
-| R8 | Recuperação na nuvem | Pendente | Sem backup do Cosmos DB com restauração testada |
+| R8 | Recuperação na nuvem | Parcial | Cosmos DB com backup periódico (`backupPolicy: Periodic` no Bicep); falta testar e documentar uma restauração. Contêiner com reinício automático e verificação de saúde em `infra/docker-compose.yml` (não testado ainda) |
 
 ## Testes de falha
 

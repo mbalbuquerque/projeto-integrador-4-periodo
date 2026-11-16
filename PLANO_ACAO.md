@@ -10,9 +10,9 @@ em branco = ainda não definido pela equipe.
 | Sem número de sequência | IoT / R3 | Incluir sequência no payload e no contrato da API | | 25/11 | Teste automático de lacuna na sequência (#35) |
 | Sem watchdog | IoT / R4 | Ativar watchdog de tarefa e testar reinício | | 25/11 | F2 aprovado (#35) |
 | Sem heartbeat e status online/offline | IoT, Cloud / R6, R7 | Heartbeat do sensor e status no painel (`/api/health` já publicada) | | 27/11 | Rota no OpenAPI; painel com "sem dados desde HH:MM" (#36, Front #13) |
-| Sem backup do banco | Cloud / R8 | Configurar backup do Cosmos DB e testar restauração | | 27/11 | Procedimento documentado (#36) |
-| Sem compose, logs centralizados e custo mensal | Cloud (final) | Compose com API e emulador; registrar logs e custo | | 28/11 | `docker-compose.yml`; estimativa em `infra/README.md` (#31) |
-| Sem ZAP, dependências e LGPD | Segurança | Varredura ZAP; verificação de dependências; seção de LGPD (STRIDE já em `docs/stride.md`) | | 25/11 | Relatório ZAP (#32) |
+| Backup do banco sem restauração testada | Cloud / R8 | Testar e documentar a restauração do backup periódico do Cosmos DB | | 27/11 | Procedimento documentado (#36) |
+| Compose não testado e sem custo mensal | Cloud (final) | Validar `infra/docker-compose.yml` na máquina da equipe; registrar a estimativa de custo | | 28/11 | `docker-compose.yml`; estimativa em `infra/README.md` (#31) |
+| ZAP e dependências sem resultado registrado; LGPD incompleta | Segurança | Rodar o workflow Segurança, registrar e corrigir os achados; política de privacidade (STRIDE e `docs/lgpd.md` já existem) | | 25/11 | Relatório ZAP (#32) |
 | Modelo de IA ainda não usa o sensor, sem `/predict` | IA | Cruzar leituras do sensor com o modelo, publicar `/predict` e mostrar no painel (modelo, baseline e model card já existem) | | 28/11 | Rota `/predict` e card no painel (#37) |
 | Sem pesquisa com usuários | Consumidor | ≥ 5 entrevistas ou ≥ 20 respostas; persona e jornada | | 25/11 | Registro da pesquisa (#38) |
 | Sem alertas push e estado offline no app | UE Mobile (final) | Push por limiar e faixa "sem conexão" no PWA | | 28/11 | Demonstração no celular (Front #13) |
