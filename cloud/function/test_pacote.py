@@ -37,6 +37,10 @@ class TestPacote(unittest.TestCase):
         # /openapi.json e /docs leem o arquivo do disco: sem ele no pacote, as rotas dao 503.
         self.assertIn("openapi.json", set(ler_pacote()))
 
+    def test_modelo_de_risco_publicado(self):
+        # predicao.py le o modelo do disco: sem ele no pacote, a rota /predict da 503.
+        self.assertIn("modelo_risco.json", set(ler_pacote()))
+
     def test_nada_de_teste_ou_script_publicado(self):
         for nome in ler_pacote():
             self.assertFalse(nome.startswith(("test_", "scripts/", "requirements-dev")), nome)
