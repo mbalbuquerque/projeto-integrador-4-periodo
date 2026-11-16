@@ -7,6 +7,7 @@ Público:
   POST /api/empresas            cadastro de empresa nova + primeiro gestor
   POST /api/login               e-mail e senha -> token de 8 h
   GET  /api/perfis              perfis de carga e faixas de temperatura
+  GET  /api/health              estado do serviço e do banco (200 ou 503)
   POST /api/chat                pergunta ao assistente do site (Azure OpenAI)
 
 Painel (token do login no header `Authorization: Bearer <token>`):
@@ -873,6 +874,28 @@ def openapi_texto():
         with open(os.path.join(PASTA, "openapi.json"), encoding="utf-8") as f:
             _openapi = f.read()
     return _openapi
+
+
+@app.route(route="health", methods=["GET"])
+def health(req: func.HttpRequest) -> func.HttpResponse:
+    """Verificação de saúde: 200 se o banco responde, 503 se não.
+
+    Pública e sem detalhes internos (nenhum nome de recurso, endereço ou erro),
+    para servir de sonda do Azure e de checagem na apresentação.
+    """
+    try:
+        list(container().query_items("SELECT TOP 1 c.id FROM c",
+                                     enable_cross_partition_query=True))
+        banco_ok = True
+    except Exception:
+        logging.exception("health: banco indisponível")
+        banco_ok = False
+    corpo = {
+        "status": "ok" if banco_ok else "degradado",
+        "banco": "ok" if banco_ok else "indisponivel",
+        "horario": datetime.now(timezone.utc).isoformat(),
+    }
+    return resposta(corpo, 200 if banco_ok else 503)
 
 
 @app.route(route="docs", methods=["GET"])
