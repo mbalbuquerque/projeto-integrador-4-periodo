@@ -28,7 +28,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | CLD-03 | Dockerfile | `infra/Dockerfile` | Imagem oficial de Azure Functions; build executado no CI a cada push | Atendido |
 | CLD-04 | Deploy automático pelo CI | `.github/workflows/publicar-api.yml` | Login OIDC, publica a branch `everson` | Atendido |
 | CLD-06 | Logs centralizados | `infra/main.bicep` | Application Insights ligado a um workspace do Log Analytics, retenção de 90 dias | Atendido |
-| CLD-07 | Contêiner com reinício automático e verificação de saúde | `infra/docker-compose.yml` | `restart: unless-stopped` e healthcheck em `/api/health`; ainda não testado na máquina da equipe | Parcial |
+| CLD-07 | Contêiner com reinício automático e verificação de saúde | `infra/docker-compose.yml`, `.github/workflows/compose-zap.yml` | Compose com a API e o emulador do Cosmos sobe no CI; healthcheck `healthy`; queda do processo volta a responder em 4,4 s (medido no CI, detalhes em `infra/README.md`) | Atendido |
 | CLD-08 | `.env.example` na raiz | `.env.example` | Nomes das variáveis, sem valores reais | Atendido |
 | CLD-05 | Rota de saúde | `GET /api/health` | 200 com o banco no ar, 503 sem; testes automatizados | Atendido |
 
@@ -61,7 +61,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | IA-02 | Baseline calculado | `analise/relatorio.md` | Modelo ingênuo (média geral), Brier 0,202 | Atendido |
 | IA-03 | Divisão temporal e métrica melhor que o baseline | `analise/explorar.py` | Treino 2019–2022, teste 2023–2025; Brier 0,091 (55% menos erro) | Atendido |
 | IA-04 | Model card | `docs/model-card.md` | Uso, dados, métricas e limitações | Atendido |
-| IA-05 | `/predict` e resultado no painel | — | Não existe | Pendente |
+| IA-05 | `/predict` e resultado no painel | `cloud/function/predicao.py`, `GET /api/predict`; card "Risco térmico da saída" no painel | Rota autenticada com o modelo exportado (`modelo_risco.json`) e card no dashboard; modelo ainda baseado na estação do INMET | Atendido |
 
 ## UE Mobile
 
