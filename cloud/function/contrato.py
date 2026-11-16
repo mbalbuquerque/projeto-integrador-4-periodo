@@ -9,7 +9,8 @@ Payload esperado (POST /api/telemetria):
   "temperatura": 12.4,
   "umidade": 81.0,
   "rssi": -58,
-  "medidoEm": 1790000000      (opcional: epoch UTC em segundos da medição)
+  "medidoEm": 1790000000,     (opcional: epoch UTC em segundos da medição)
+  "seq": 42                   (opcional: número de sequência da leitura no sensor)
 }
 """
 
@@ -22,6 +23,9 @@ DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{3,40}$")
 TEMP_MIN, TEMP_MAX = -40.0, 80.0
 UMID_MIN, UMID_MAX = 0.0, 100.0
 RSSI_MIN, RSSI_MAX = -120, 0
+
+# Número de sequência: contador do sensor, gravado na flash (uint32 no ESP32).
+SEQ_MIN, SEQ_MAX = 1, 2**32 - 1
 
 # Janela aceita para o horário da medição.
 MEDIDO_FUTURO_MAX_S = 5 * 60
@@ -50,6 +54,7 @@ def mesma_leitura(gravada, nova):
         round(float(gravada["temperatura"]), 1) == round(float(nova["temperatura"]), 1)
         and round(float(gravada["umidade"]), 1) == round(float(nova["umidade"]), 1)
         and gravada.get("rssi") == nova.get("rssi")
+        and gravada.get("seq") == nova.get("seq")
     )
 
 
@@ -92,11 +97,39 @@ def validar(dados, agora=None):
         elif medido < referencia - MEDIDO_PASSADO_MAX_S:
             erros.append("medidoEm: mais antigo que 7 dias")
 
-    extras = set(dados) - {"deviceId", "temperatura", "umidade", "rssi", "medidoEm"}
+    # seq: número de sequência da leitura, opcional (placa sem seq continua aceita).
+    # Cresce 1 a cada leitura e sobrevive a reinício: buraco na sequência é
+    # leitura perdida entre o sensor e o banco.
+    if "seq" in dados:
+        seq = dados["seq"]
+        if not isinstance(seq, int) or isinstance(seq, bool) or not SEQ_MIN <= seq <= SEQ_MAX:
+            erros.append(f"seq: inteiro de {SEQ_MIN} a {SEQ_MAX}")
+
+    extras = set(dados) - {"deviceId", "temperatura", "umidade", "rssi", "medidoEm", "seq"}
     if extras:
         erros.append("campos não previstos: " + ", ".join(sorted(extras)))
 
     return erros
+
+
+def lacunas_de_sequencia(leituras):
+    """Leituras que faltam entre as recebidas, pelo número de sequência.
+
+    `leituras` em qualquer ordem; vale a ordem do horário da medição. Leitura
+    sem `seq` (placa antiga) não entra na conta. Sequência que volta para trás
+    é contador zerado (flash apagada), não perda: recomeça a contagem dali.
+    Retorna [{"de": n, "ate": m, "faltam": m - n + 1}], da mais antiga para a mais nova.
+    """
+    com_seq = sorted(
+        (item for item in leituras if isinstance(item.get("seq"), int)),
+        key=lambda item: item["medidoEm"],
+    )
+    lacunas = []
+    for anterior, atual in zip(com_seq, com_seq[1:]):
+        if atual["seq"] > anterior["seq"] + 1:
+            de, ate = anterior["seq"] + 1, atual["seq"] - 1
+            lacunas.append({"de": de, "ate": ate, "faltam": ate - de + 1})
+    return lacunas
 
 
 STATUS_VALIDOS = ("NORMAL", "ATENCAO", "CRITICO")

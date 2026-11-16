@@ -67,6 +67,7 @@ from contrato import (
     faixa,
     filtros_de_leitura,
     id_leitura,
+    lacunas_de_sequencia,
     mesma_leitura,
     validar,
 )
@@ -283,6 +284,8 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         "medidoEm": medido.isoformat(),
         "recebidoEm": recebido.isoformat(),
     }
+    if "seq" in dados:
+        leitura["seq"] = dados["seq"]
     try:
         # create, nunca upsert: leitura gravada não se altera.
         container().create_item(leitura)
@@ -584,7 +587,7 @@ def consultar_leituras(device, empresa, limite, desde=None, status=None):
         container().query_items(
             query=(
                 "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
-                "c.perfil, c.status, c.medidoEm, c.recebidoEm FROM c WHERE "
+                "c.perfil, c.status, c.medidoEm, c.recebidoEm, c.seq FROM c WHERE "
                 + " AND ".join(condicoes)
                 + " ORDER BY c.medidoEm DESC"
             ),
@@ -618,7 +621,11 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
 
     itens = consultar_leituras(device, usuario["empresaId"], limite,
                                filtros["desde"], filtros["status"])
-    return resposta({"deviceId": device, "leituras": itens})
+    corpo = {"deviceId": device, "leituras": itens}
+    # Lacuna só faz sentido sem filtro de status (o filtro tira leituras de propósito).
+    if filtros["status"] is None:
+        corpo["lacunas"] = lacunas_de_sequencia(itens)
+    return resposta(corpo)
 
 
 # ------------------------------------------------------------ risco térmico (modelo)
