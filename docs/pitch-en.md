@@ -24,6 +24,10 @@ request goes through HTTPS and a signed token.
 
 ## Slides (6)
 
+PDF used in the technical preview (16/11): [`slides/previa-tecnica.pdf`](slides/previa-tecnica.pdf)
+(slides 1-6 are the English pitch).
+
+
 1. Problem: cold chain in fruit transport.
 2. Solution: ColdTrack in one sentence and one photo of the device.
 3. Architecture: device → HTTPS → Azure Functions → Cosmos DB → dashboard (diagram).

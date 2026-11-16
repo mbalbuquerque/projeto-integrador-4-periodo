@@ -81,6 +81,6 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
 | ENG-01 | README em inglês | `Readme_English` (raiz de cada repositório) | Arquivo adicionado na `main`; README principal aponta para ele | Atendido |
-| ENG-02 | Documentação da API em inglês | `cloud/function/openapi.json` | Resumo em inglês no início da documentação; as descrições de cada rota seguem em português | Parcial |
-| ENG-03 | Pitch de 2 min em inglês | `docs/pitch-en.md` | Roteiro e esqueleto de 6 slides | Parcial |
+| ENG-02 | Documentação da API em inglês | `cloud/function/openapi.json`, `/api/docs` | Resumo, títulos e descrições de todas as rotas em inglês; teste no CI (`test_openapi.py`) | Atendido |
+| ENG-03 | Pitch de 2 min em inglês | `docs/pitch-en.md`, `docs/slides/previa-tecnica.pdf` | Roteiro e 6 slides em inglês (parte 1 dos slides da prévia) | Atendido |
 | ENG-04 | Model card em inglês | `docs/model-card.md` | Escrito em inglês | Atendido |
