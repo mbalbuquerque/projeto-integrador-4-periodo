@@ -203,6 +203,7 @@ Detalhes e convenção de commits em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | [Swagger da API](https://func-coldtrack-7319.azurewebsites.net/api/docs) | documentação interativa das rotas (OpenAPI 3.0, `cloud/function/openapi.json`) |
 | [`docs/api.md`](docs/api.md) | referência das rotas da API em texto, com as regras em detalhe |
 | [`docs/seguranca.md`](docs/seguranca.md) | controles de segurança e limitações conhecidas |
+| [`docs/ux/`](docs/ux/) | pesquisa de usuários preliminar: [pesquisa secundária](docs/ux/pesquisa-secundaria.md), [entrevistas simuladas](docs/ux/entrevistas-simuladas.md) e [persona, jornada e proposta de valor](docs/ux/persona-jornada-proposta.md); roteiro em [`docs/pesquisa-usuarios.md`](docs/pesquisa-usuarios.md) |
 | [`docs/slides/previa-tecnica.pdf`](docs/slides/previa-tecnica.pdf) | slides da prévia técnica (pitch em inglês e blocos da apresentação) |
 | [`docs/implantacao.md`](docs/implantacao.md) | passo a passo para pôr uma transportadora em operação |
 | [`docs/memorial-descritivo.md`](docs/memorial-descritivo.md) | memorial descritivo do protótipo |
