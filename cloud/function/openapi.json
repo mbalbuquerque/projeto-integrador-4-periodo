@@ -73,7 +73,7 @@
         ],
         "operationId": "enviarTelemetria",
         "summary": "Sends a sensor reading",
-        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values returns `200` with `duplicada: true`.",
+        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values (including `seq`) returns `200` with `duplicada: true`.",
         "security": [
           {
             "dispositivo": []
@@ -802,7 +802,7 @@
         ],
         "operationId": "listarLeituras",
         "summary": "Latest readings of a company sensor",
-        "description": "**Who can call:** operator or manager (token from the login). From the most recent measurement to the oldest. A sensor of another company answers exactly like a missing sensor (`404`).",
+        "description": "**Who can call:** operator or manager (token from the login). From the most recent measurement to the oldest. A sensor of another company answers exactly like a missing sensor (`404`). Without the `status` filter, `lacunas` lists the gaps in the sequence numbers of the returned readings (lost readings); a sequence that goes back is a counter reset, not a gap.",
         "security": [
           {
             "bearerAuth": []
@@ -875,6 +875,13 @@
                       "items": {
                         "$ref": "#/components/schemas/Leitura"
                       }
+                    },
+                    "lacunas": {
+                      "type": "array",
+                      "description": "Present only without the `status` filter.",
+                      "items": {
+                        "$ref": "#/components/schemas/LacunaSequencia"
+                      }
                     }
                   }
                 },
@@ -889,7 +896,15 @@
                       "perfil": "manga",
                       "status": "NORMAL",
                       "medidoEm": "2026-11-09T12:00:00+00:00",
-                      "recebidoEm": "2026-11-09T12:00:01.532000+00:00"
+                      "recebidoEm": "2026-11-09T12:00:01.532000+00:00",
+                      "seq": 42
+                    }
+                  ],
+                  "lacunas": [
+                    {
+                      "de": 38,
+                      "ate": 39,
+                      "faltam": 2
                     }
                   ]
                 }
@@ -2750,6 +2765,12 @@
           "medidoEm": {
             "type": "number",
             "description": "Optional. UTC epoch in seconds of the measurement: up to 5 min in the future and up to 7 days in the past. Without it, the time of receipt is used."
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295,
+            "description": "Optional. Sequence number of the reading, kept by the sensor in flash: it grows by 1 per reading and survives a reboot, so a gap means a lost reading. Older firmware without it is still accepted. A resend must repeat the same `seq`."
           }
         },
         "example": {
@@ -2757,7 +2778,8 @@
           "temperatura": 12.4,
           "umidade": 81.0,
           "rssi": -58,
-          "medidoEm": 1794240000
+          "medidoEm": 1794240000,
+          "seq": 42
         }
       },
       "TelemetriaGravada": {
@@ -2875,6 +2897,10 @@
           "recebidoEm": {
             "type": "string",
             "format": "date-time"
+          },
+          "seq": {
+            "type": "integer",
+            "description": "Sequence number sent by the sensor. Absent for readings of firmware without it."
           }
         },
         "example": {
@@ -2885,7 +2911,8 @@
           "perfil": "manga",
           "status": "NORMAL",
           "medidoEm": "2026-11-09T12:00:00+00:00",
-          "recebidoEm": "2026-11-09T12:00:01.532000+00:00"
+          "recebidoEm": "2026-11-09T12:00:01.532000+00:00",
+          "seq": 42
         }
       },
       "Dispositivo": {
@@ -3382,6 +3409,29 @@
                 "description": "Always false: the model uses public weather station data, not the cargo sensor readings."
               }
             }
+          }
+        }
+      },
+      "LacunaSequencia": {
+        "type": "object",
+        "required": [
+          "de",
+          "ate",
+          "faltam"
+        ],
+        "description": "Readings missing between two received ones, by sequence number.",
+        "properties": {
+          "de": {
+            "type": "integer",
+            "description": "First missing sequence number."
+          },
+          "ate": {
+            "type": "integer",
+            "description": "Last missing sequence number."
+          },
+          "faltam": {
+            "type": "integer",
+            "description": "How many readings are missing."
           }
         }
       }

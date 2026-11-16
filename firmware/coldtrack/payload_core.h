@@ -1,19 +1,27 @@
 #ifndef PAYLOAD_CORE_H
 #define PAYLOAD_CORE_H
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <math.h>
 #include <string>
 
+// seq: numero de sequencia da leitura (1, 2, 3...); 0 = sem seq (campo omitido).
 inline void montarPayloadCore(char *destino, size_t tamanho, const char *deviceId,
-                              float temperatura, float umidade, long rssi, time_t medidoEm) {
+                              float temperatura, float umidade, long rssi, time_t medidoEm,
+                              uint32_t seq = 0) {
     char rssiJson[16];
     if (rssi < 0) {
         snprintf(rssiJson, sizeof(rssiJson), "%ld", rssi);
     } else {
         snprintf(rssiJson, sizeof(rssiJson), "null");
+    }
+
+    char seqJson[24] = "";
+    if (seq > 0) {
+        snprintf(seqJson, sizeof(seqJson), ",\"seq\":%lu", (unsigned long)seq);
     }
 
     char medidoJson[32] = "";
@@ -22,8 +30,8 @@ inline void montarPayloadCore(char *destino, size_t tamanho, const char *deviceI
     }
 
     snprintf(destino, tamanho,
-             "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s%s}",
-             deviceId ? deviceId : "", temperatura, umidade, rssiJson, medidoJson);
+             "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s%s%s}",
+             deviceId ? deviceId : "", temperatura, umidade, rssiJson, seqJson, medidoJson);
 }
 
 inline float extrairNumeroJson(const std::string &json, const std::string &chave) {
