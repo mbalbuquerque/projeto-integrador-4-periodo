@@ -116,10 +116,26 @@ void test_extrair_numero_com_espaco_e_texto_invalido() {
     PASS();
 }
 
+void test_payload_com_seq() {
+    TEST("montarPayloadCore com numero de sequencia");
+    char buffer[256];
+    montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 1790000000, 4294967295u);
+    std::string s(buffer);
+
+    ASSERT(s == "{\"deviceId\":\"coldtrack-01\",\"temperatura\":12.4,\"umidade\":81.0,"
+                "\"rssi\":-58,\"seq\":4294967295,\"medidoEm\":1790000000}");
+
+    // seq 0 = firmware sem sequencia: o campo nao vai.
+    montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 0, 0);
+    ASSERT(std::string(buffer).find("seq") == std::string::npos);
+    PASS();
+}
+
 int main() {
     std::cout << "=== Executando Testes Unitarios do Firmware (C++) ===\n";
     test_payload_com_rssi_negativo_e_medido_em();
     test_payload_com_rssi_positivo_vira_null();
+    test_payload_com_seq();
     test_extrair_numero_do_json();
     test_classificacao_de_faixa_termica();
     test_classificacao_sem_limite_inferior();
