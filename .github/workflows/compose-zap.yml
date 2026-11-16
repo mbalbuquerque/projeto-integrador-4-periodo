@@ -1,0 +1,130 @@
+name: Compose e ZAP
+
+# Sobe a API em contêiner (compose) com o emulador do Cosmos DB, mede saúde e reinício
+# automático e roda o ZAP em varredura ativa contra ESSE contêiner (nunca contra produção).
+# Só dados de teste: a chave do emulador é pública e a senha do usuário de teste é fictícia.
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - "cloud/function/**"
+      - ".github/workflows/compose-zap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    name: Compose, reinício e ZAP ativo
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Variáveis de teste (.env)
+        run: |
+          {
+            echo "COSMOS_CONNECTION=AccountEndpoint=http://cosmos:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==;"
+            echo "COSMOS_DATABASE=coldtrack"
+            echo "COSMOS_CONTAINER=leituras"
+            echo "JWT_SECRET=segredo-de-teste-do-ci-com-mais-de-32-bytes-0000"
+            echo "AOAI_ENDPOINT=https://exemplo.invalido/"
+            echo "AOAI_DEPLOY_CHAT=gpt-4.1-mini"
+            echo "AOAI_DEPLOY_EMBED=text-embedding-3-small"
+            echo "AOAI_API_VERSION=2024-10-21"
+          } > .env
+
+      - name: Subir o compose
+        run: |
+          mkdir -p resultados
+          date +%s.%N > resultados/t_subida
+          docker compose -f infra/docker-compose.yml up -d --build
+          docker compose -f infra/docker-compose.yml ps
+
+      - name: Preparar o banco no emulador
+        run: |
+          pip install azure-cosmos==4.17.1 PyJWT==2.15.1
+          python infra/ci/preparar_banco.py http://localhost:8081
+
+      - name: Saúde da API e do contêiner
+        run: |
+          t0=$(cat resultados/t_subida)
+          code=000
+          for i in $(seq 1 120); do
+            code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' http://localhost:7071/api/health || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          agora=$(date +%s.%N)
+          {
+            echo "subida (up --build até /api/health 200): $(echo "$agora - $t0" | bc) s, último HTTP $code"
+            curl -s -m 5 http://localhost:7071/api/health || true; echo
+          } | tee resultados/saude.txt
+          ID=$(docker compose -f infra/docker-compose.yml ps -q api)
+          s=starting
+          for i in $(seq 1 60); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' "$ID"); [ "$s" = healthy ] && break; sleep 5
+          done
+          echo "healthcheck do Docker: $s" | tee -a resultados/saude.txt
+          docker compose -f infra/docker-compose.yml logs --no-color --tail 60 | tee resultados/logs-subida.txt > /dev/null
+          [ "$code" = "200" ] && [ "$s" = healthy ]
+
+      - name: Medir reinício automático
+        run: bash infra/ci/medir_reinicio.sh resultados/reinicio.txt
+
+      - name: Obter token do usuário de teste
+        run: |
+          curl -s -X POST http://localhost:7071/api/login -H 'Content-Type: application/json' \
+            -d '{"email":"gestor.teste@exemplo.com","senha":"SenhaDeTeste-123"}' > login.json
+          python -c 'import json; open("token.txt","w").write(json.load(open("login.json"))["token"])'
+          echo "token obtido: $(wc -c < token.txt) caracteres"
+
+      - name: ZAP API scan (ativo) contra o contêiner
+        run: |
+          mkdir -p zap && chmod 777 zap
+          cp cloud/function/openapi.json zap/openapi.json
+          # -O troca o endereço de produção da spec pelo contêiner local.
+          # -I: alertas não derrubam o scan; o passo seguinte falha só se houver alerta alto.
+          # ZAP_AUTH_HEADER*: o ZAP envia o token do usuário de teste em todas as requisições.
+          docker run --rm --network host \
+            -e ZAP_AUTH_HEADER=Authorization -e "ZAP_AUTH_HEADER_VALUE=Bearer $(cat token.txt)" \
+            -v "$PWD/zap:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py -t /zap/wrk/openapi.json -f openapi -O http://localhost:7071 \
+            -r relatorio-zap-ativo.html -J relatorio-zap-ativo.json -w relatorio-zap-ativo.md -I \
+            2>&1 | tee zap/saida.txt
+
+      - name: Contar alertas por risco e falhar se houver alto
+        run: |
+          python - <<'EOF' | tee resultados/zap-contagem.txt
+          import json, sys
+          d = json.load(open("zap/relatorio-zap-ativo.json"))
+          nomes = {"3": "alto", "2": "médio", "1": "baixo", "0": "informativo"}
+          cont = {n: 0 for n in nomes.values()}
+          linhas = []
+          for site in d["site"]:
+              for a in site["alerts"]:
+                  r = nomes[a["riskcode"]]
+                  cont[r] += 1
+                  linhas.append(f'{r:12} {a["name"]} ({a["count"]} ocorrências)')
+          print("alertas por risco:", cont)
+          print("\n".join(sorted(linhas)))
+          sys.exit(1 if cont["alto"] else 0)
+          EOF
+
+      - name: Logs do contêiner
+        if: always()
+        run: docker compose -f infra/docker-compose.yml logs --no-color --tail 300 > resultados/logs-compose.txt || true
+
+      - name: Guardar resultados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-e-zap
+          path: |
+            resultados/
+            zap/
