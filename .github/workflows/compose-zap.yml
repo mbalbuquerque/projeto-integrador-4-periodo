@@ -62,7 +62,7 @@ jobs:
           done
           agora=$(date +%s.%N)
           {
-            echo "subida (up --build até /api/health 200): $(echo "$agora - $t0" | bc) s, último HTTP $code"
+            echo "subida (up --build até /api/health 200): $(awk -v a="$agora" -v b="$t0" 'BEGIN{printf "%.1f", a-b}') s, último HTTP $code"
             curl -s -m 5 http://localhost:7071/api/health || true; echo
           } | tee resultados/saude.txt
           ID=$(docker compose -f infra/docker-compose.yml ps -q api)
@@ -75,6 +75,7 @@ jobs:
           [ "$code" = "200" ] && [ "$s" = healthy ]
 
       - name: Medir reinício automático
+        timeout-minutes: 12
         run: bash infra/ci/medir_reinicio.sh resultados/reinicio.txt
 
       - name: Obter token do usuário de teste
