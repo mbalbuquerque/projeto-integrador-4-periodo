@@ -14,7 +14,7 @@ resultado foi observado e registrado aqui.
 | R4 | Watchdog e reinício | Pendente | Sem watchdog de tarefa configurado no firmware |
 | R5 | Falha de sensor | Implementado | Checksum do DHT validado, duas tentativas; leitura inválida não é enviada como válida. O RSSI inválido segue como `null` |
 | R6 | Degradação controlada | Pendente | O painel não mostra "sem dados desde HH:MM" |
-| R7 | Observabilidade | Parcial | Há RSSI e horário da leitura; faltam rota `/health` e heartbeat com status online/offline |
+| R7 | Observabilidade | Parcial | `GET /api/health` (200/503) e RSSI e horário da leitura em cada envio; falta heartbeat com status online/offline por sensor |
 | R8 | Recuperação na nuvem | Pendente | Sem backup do Cosmos DB com restauração testada |
 
 ## Testes de falha
