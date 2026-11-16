@@ -119,7 +119,7 @@ jobs:
 
       - name: Logs do contêiner
         if: always()
-        run: docker compose -f infra/docker-compose.yml logs --no-color --tail 300 > resultados/logs-compose.txt || true
+        run: docker compose -f infra/docker-compose.yml logs --no-color > resultados/logs-compose.txt || true
 
       - name: Guardar resultados
         if: always()
