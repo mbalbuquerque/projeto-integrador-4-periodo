@@ -1,0 +1,25 @@
+# API do ColdTrack em contêiner, com reinício automático e verificação de saúde.
+# Uso (da raiz do repositório):
+#   cp .env.example .env     # preencher com os valores de desenvolvimento
+#   docker compose -f infra/docker-compose.yml up --build
+# A API sobe em http://localhost:7071/api (ex.: /api/health, /api/docs).
+# Não testado localmente ainda: validar na máquina da equipe antes da entrega final.
+services:
+  api:
+    build:
+      context: ../cloud/function
+      dockerfile: ../../infra/Dockerfile
+    env_file: ../.env
+    ports:
+      - "7071:80"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:80/api/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

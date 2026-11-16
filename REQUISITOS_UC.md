@@ -27,6 +27,9 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | CLD-02 | Segredos fora do código | `secrets.example.h`, app settings | `secrets.h` fora do Git | Atendido |
 | CLD-03 | Dockerfile | `infra/Dockerfile` | Imagem oficial de Azure Functions; build executado no CI a cada push | Atendido |
 | CLD-04 | Deploy automático pelo CI | `.github/workflows/publicar-api.yml` | Login OIDC, publica a branch `everson` | Atendido |
+| CLD-06 | Logs centralizados | `infra/main.bicep` | Application Insights ligado a um workspace do Log Analytics, retenção de 90 dias | Atendido |
+| CLD-07 | Contêiner com reinício automático e verificação de saúde | `infra/docker-compose.yml` | `restart: unless-stopped` e healthcheck em `/api/health`; ainda não testado na máquina da equipe | Parcial |
+| CLD-08 | `.env.example` na raiz | `.env.example` | Nomes das variáveis, sem valores reais | Atendido |
 | CLD-05 | Rota de saúde | `GET /api/health` | 200 com o banco no ar, 503 sem; testes automatizados | Atendido |
 
 ## Segurança de Sistemas de Informação
@@ -38,6 +41,8 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | SEG-03 | Usuário só acessa dados da própria empresa | filtro por `empresaId` em toda consulta | Item de outra empresa responde 404 | Atendido |
 | SEG-04 | Modelo de ameaças (STRIDE) do fluxo principal | `docs/stride.md` | Tabela por categoria, com controle e risco residual | Atendido |
 | SEG-05 | Limite de requisições | `limites.py` | Login, chat e assistente | Parcial |
+| SEG-06 | LGPD | `docs/lgpd.md` | Inventário de dados, retenção e direitos do titular; faltam política de privacidade e exclusão da empresa | Parcial |
+| SEG-07 | Dependências verificadas e varredura ZAP | `.github/workflows/seguranca.yml` | pip-audit e ZAP baseline com relatório como artefato; resultado a registrar depois da primeira execução | Parcial |
 
 ## Qualidade de Software
 
@@ -76,6 +81,6 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
 | ENG-01 | README em inglês | `Readme_English` (raiz de cada repositório) | Arquivo adicionado na `main`; README principal aponta para ele | Atendido |
-| ENG-02 | Documentação da API em inglês | `cloud/function/openapi.json` | Está em português | Pendente |
+| ENG-02 | Documentação da API em inglês | `cloud/function/openapi.json` | Resumo em inglês no início da documentação; as descrições de cada rota seguem em português | Parcial |
 | ENG-03 | Pitch de 2 min em inglês | `docs/pitch-en.md` | Roteiro e esqueleto de 6 slides | Parcial |
 | ENG-04 | Model card em inglês | `docs/model-card.md` | Escrito em inglês | Atendido |
