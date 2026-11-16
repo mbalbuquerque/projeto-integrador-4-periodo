@@ -13,8 +13,8 @@ resultado foi observado e registrado aqui.
 | R3 | Identidade da mensagem | Parcial | Cada leitura leva `deviceId` e `medidoEm` (UTC por NTP). A API grava com id derivado dos dois e responde `duplicada: true` num reenvio idêntico; valores diferentes no mesmo horário dão 409. Não há número de sequência |
 | R4 | Watchdog e reinício | Pendente | Sem watchdog de tarefa configurado no firmware |
 | R5 | Falha de sensor | Implementado | Checksum do DHT validado, duas tentativas; leitura inválida não é enviada como válida. O RSSI inválido segue como `null` |
-| R6 | Degradação controlada | Pendente | O painel não mostra "sem dados desde HH:MM" |
-| R7 | Observabilidade | Parcial | `GET /api/health` (200/503) e RSSI e horário da leitura em cada envio; falta heartbeat com status online/offline por sensor |
+| R6 | Degradação controlada | Implementado | O dashboard mostra "Sem dados desde HH:MM" quando a última leitura tem mais de 2 min ou a API não responde, e avisa que os valores são os últimos recebidos. A validar em F4 e F6 na entrega final |
+| R7 | Observabilidade | Parcial | `GET /api/health` (200/503); `GET /api/dispositivos` devolve `ultimoContato` e `online` (última leitura há no máximo 120 s) por sensor. Falta mostrar o selo online/offline na tela de sensores e um heartbeat próprio do firmware (hoje a própria leitura faz esse papel) |
 | R8 | Recuperação na nuvem | Parcial | Cosmos DB com backup periódico (`backupPolicy: Periodic` no Bicep); falta testar e documentar uma restauração. Contêiner com reinício automático e verificação de saúde em `infra/docker-compose.yml` (não testado ainda) |
 
 ## Testes de falha
