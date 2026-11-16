@@ -1,0 +1,24 @@
+# ColdTrack Edge
+
+Cold chain monitoring for refrigerated fruit transport (mango and grape from the São Francisco Valley). An ESP32-C3 sensor node measures temperature and humidity inside the cargo container, classifies the reading according to the cargo range, signals alerts on the board, and sends telemetry to an Azure API. A web dashboard displays readings, alerts, and each company's records.
+
+4th-semester Integrative Project, Faculdade Senac PE, 2026.2.
+
+The project consists of two repositories:
+
+| repository | contents |
+|---|---|
+| [projeto-integrador-4-periodo](https://github.com/mbalbuquerque/projeto-integrador-4-periodo) (this one) | ESP32-C3 firmware, API (Azure Functions, Python), infrastructure, climate analysis, and documentation |
+| [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) | web dashboard (React + Vite) deployed on Azure Storage |
+
+Both are deployed from the `everson` branch (see [Deployment](#deployment)).
+
+| | address |
+|---|---|
+| Deployed dashboard | <https://stcoldtrackweb7319.z15.web.core.windows.net> |
+| API (interactive documentation, Swagger) | <https://func-coldtrack-7319.azurewebsites.net/api/docs> |
+| API (base) | `https://func-coldtrack-7319.azurewebsites.net/api` |
+| Wokwi simulation | <https://wokwi.com/projects/475352296477619201> |
+| ThingSpeak channel (physical board via MQTT) | <https://thingspeak.mathworks.com/channels/3515173> |
+
+## Architecture
