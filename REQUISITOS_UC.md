@@ -25,8 +25,9 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 |---|---|---|---|---|
 | CLD-01 | API publicada em HTTPS, configuração por variáveis de ambiente | `cloud/function`, `infra/main.bicep` | Function App com `httpsOnly`; `local.settings.example.json` | Atendido |
 | CLD-02 | Segredos fora do código | `secrets.example.h`, app settings | `secrets.h` fora do Git | Atendido |
-| CLD-03 | Dockerfile | — | Não existe; a API roda em Azure Functions | Pendente |
+| CLD-03 | Dockerfile | `infra/Dockerfile` | Imagem oficial de Azure Functions; build executado no CI a cada push | Atendido |
 | CLD-04 | Deploy automático pelo CI | `.github/workflows/publicar-api.yml` | Login OIDC, publica a branch `everson` | Atendido |
+| CLD-05 | Rota de saúde | `GET /api/health` | 200 com o banco no ar, 503 sem; testes automatizados | Atendido |
 
 ## Segurança de Sistemas de Informação
 
@@ -35,7 +36,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | SEG-01 | Autenticação JWT | `cloud/function/seguranca.py` | Token HS256, sessão revogável | Atendido |
 | SEG-02 | 401, 403 e 400 corretos | `function_app.py`, `test_acesso.py`, `test_seguranca.py` | Testes automatizados | Atendido |
 | SEG-03 | Usuário só acessa dados da própria empresa | filtro por `empresaId` em toda consulta | Item de outra empresa responde 404 | Atendido |
-| SEG-04 | Modelo de ameaças (STRIDE) do fluxo principal | `docs/seguranca.md` (controles) | Não há tabela STRIDE | Pendente |
+| SEG-04 | Modelo de ameaças (STRIDE) do fluxo principal | `docs/stride.md` | Tabela por categoria, com controle e risco residual | Atendido |
 | SEG-05 | Limite de requisições | `limites.py` | Login, chat e assistente | Parcial |
 
 ## Qualidade de Software
@@ -45,13 +46,17 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | QS-01 | Testes automatizados das rotas principais no CI | `.github/workflows/testes.yml` | Lint, testes e cobertura a cada push e PR | Atendido |
 | QS-02 | Cobertura | `pytest --cov-fail-under=98` | Exigência do CI no back-end | Atendido |
 | QS-03 | Plano de testes | `docs/qa/`, `docs/relatorio-de-testes.md` (front) | Métricas e relatório; falta um plano formal | Parcial |
+| QS-04 | Registro de defeitos com severidade e ambiente | `.github/ISSUE_TEMPLATE/bug.yml`, etiquetas `sev:*` e `amb:*` | Template nos dois repositórios | Atendido |
 
 ## Inteligência Artificial
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| IA-01 | Problema de IA definido sobre os dados do sensor | — | O projeto usa IA no chat e no assistente (Azure OpenAI), não sobre as leituras | Pendente |
-| IA-02 | Baseline calculado | — | Sem evidência | Pendente |
+| IA-01 | Problema de IA definido que apoia uma decisão | `analise/` | Risco térmico por mês e hora na rota Petrolina–Suape (dados do INMET, 2019–2025); apoia o horário de saída. Ainda não usa as leituras do sensor | Parcial |
+| IA-02 | Baseline calculado | `analise/relatorio.md` | Modelo ingênuo (média geral), Brier 0,202 | Atendido |
+| IA-03 | Divisão temporal e métrica melhor que o baseline | `analise/explorar.py` | Treino 2019–2022, teste 2023–2025; Brier 0,091 (55% menos erro) | Atendido |
+| IA-04 | Model card | `docs/model-card.md` | Uso, dados, métricas e limitações | Atendido |
+| IA-05 | `/predict` e resultado no painel | — | Não existe | Pendente |
 
 ## UE Mobile
 
@@ -64,12 +69,13 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| CC-01 | Persona, jornada e proposta de valor com pesquisa | — | Sem evidência de entrevistas ou respostas | Pendente |
+| CC-01 | Persona, jornada e proposta de valor com pesquisa | `docs/pesquisa-usuarios.md` | Roteiro e formulário prontos; respostas ainda não coletadas | Pendente |
 
 ## Tech English
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| ENG-01 | README em inglês | `Readme_English` (raiz de cada repositório) | Arquivo adicionado na `main` | Parcial |
+| ENG-01 | README em inglês | `Readme_English` (raiz de cada repositório) | Arquivo adicionado na `main`; README principal aponta para ele | Atendido |
 | ENG-02 | Documentação da API em inglês | `cloud/function/openapi.json` | Está em português | Pendente |
-| ENG-03 | Pitch de 2 min em inglês | — | Sem roteiro | Pendente |
+| ENG-03 | Pitch de 2 min em inglês | `docs/pitch-en.md` | Roteiro e esqueleto de 6 slides | Parcial |
+| ENG-04 | Model card em inglês | `docs/model-card.md` | Escrito em inglês | Atendido |
