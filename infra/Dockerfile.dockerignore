@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+test_*.py
+scripts/
+local.settings.json
+.venv/
+.pytest_cache/
+.coverage
