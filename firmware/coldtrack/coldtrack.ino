@@ -7,6 +7,9 @@
 #include <Preferences.h>
 #include "secrets.h"
 #include "azure_ca.h"
+// Montagem do payload, leitura de numero no JSON e classificacao da faixa:
+// as mesmas funcoes que o firmware/tests/test_firmware.cpp testa no CI.
+#include "payload_core.h"
 
 // MQTT (ThingSpeak) so entra com as credenciais no secrets.h; sem elas
 // (Wokwi) o firmware segue so com o HTTPS.
@@ -565,61 +568,9 @@ void conectarWiFi() {
 // ENVIO PARA AZURE (JSON via HTTPS)
 // ==========================================================
 
-void montarPayload(char *destino, size_t tamanho,
-                   float temperatura, float umidade, long rssi, time_t medidoEm) {
-
-  // RSSI de Wi-Fi e sempre negativo. Valor >= 0 (ex.: simulador) vai como null,
-  // em vez de mandar um numero falso para o banco.
-  char rssiJson[12];
-
-  if (rssi < 0) {
-    snprintf(rssiJson, sizeof(rssiJson), "%ld", rssi);
-  } else {
-    snprintf(rssiJson, sizeof(rssiJson), "null");
-  }
-
-  // Sem relogio sincronizado (medidoEm = 0) o campo e omitido
-  // e a nuvem usa o horario de recebimento.
-  char medidoJson[24] = "";
-
-  if (medidoEm > 0) {
-    snprintf(medidoJson, sizeof(medidoJson), ",\"medidoEm\":%lld", (long long)medidoEm);
-  }
-
-  snprintf(destino, tamanho,
-    "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s%s}",
-    cfgId.c_str(), temperatura, umidade, rssiJson, medidoJson);
-}
-
-
 // ==========================================================
 // FAIXA DA CARGA (vem da nuvem, fica na flash)
 // ==========================================================
-
-// Le o numero depois de "chave": no JSON. null ou ausente = NAN.
-float numeroDoJson(const String &json, const char *chave) {
-
-  String alvo = String("\"") + chave + "\":";
-  int inicio = json.indexOf(alvo);
-
-  if (inicio < 0) {
-    return NAN;
-  }
-
-  inicio += alvo.length();
-
-  // A nuvem responde com espaco depois dos dois-pontos ("min": null).
-  while (inicio < (int)json.length() && json[inicio] == ' ') {
-    inicio++;
-  }
-
-  if (json.startsWith("null", inicio)) {
-    return NAN;
-  }
-
-  return json.substring(inicio).toFloat();
-}
-
 
 void carregarFaixa() {
 
@@ -640,11 +591,11 @@ void atualizarFaixa(const String &resposta) {
     return;
   }
 
-  String trecho = resposta.substring(pos);
+  std::string trecho(resposta.c_str() + pos);
 
-  float novoMin = numeroDoJson(trecho, "min");
-  float novoMax = numeroDoJson(trecho, "max");
-  float novaMargem = numeroDoJson(trecho, "margem");
+  float novoMin = extrairNumeroJson(trecho, "min");
+  float novoMax = extrairNumeroJson(trecho, "max");
+  float novaMargem = extrairNumeroJson(trecho, "margem");
 
   if (isnan(novoMax) || isnan(novaMargem)) {
     return;
@@ -1726,28 +1677,24 @@ void loop() {
     // ======================================================
 
     // Mesma regra da nuvem (contrato.py): sem limite inferior quando faixaMin e NAN.
-    float minimo = isnan(faixaMin) ? -1000.0 : faixaMin;
-
     const char *statusTela;
 
-    if (temperatura >= minimo && temperatura <= faixaMax) {
+    switch (classificarFaixa(temperatura, faixaMin, faixaMax, faixaMargem)) {
 
-      statusNormal();
-      statusTela = "NORMAL";
+      case StatusTermico::NORMAL:
+        statusNormal();
+        statusTela = "NORMAL";
+        break;
 
-    }
+      case StatusTermico::ATENCAO:
+        statusAtencao();
+        statusTela = "ATENCAO";
+        break;
 
-    else if (temperatura >= minimo - faixaMargem && temperatura <= faixaMax + faixaMargem) {
-
-      statusAtencao();
-      statusTela = "ATENCAO";
-
-    }
-
-    else {
-
-      statusCritico();
-      statusTela = "CRITICO";
+      default:
+        statusCritico();
+        statusTela = "CRITICO";
+        break;
     }
 
 #ifdef TELA_OLED
@@ -1777,8 +1724,9 @@ void loop() {
 
     char payload[160];
 
-    montarPayload(payload, sizeof(payload),
-                  temperatura, umidade, rssi, medidoEm);
+    // RSSI >= 0 (simulador) vai como null; sem relogio, medidoEm e omitido.
+    montarPayloadCore(payload, sizeof(payload), cfgId.c_str(),
+                      temperatura, umidade, rssi, medidoEm);
 
     Serial.print("Payload JSON: ");
     Serial.println(payload);

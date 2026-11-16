@@ -92,12 +92,38 @@ void test_classificacao_de_faixa_termica() {
     PASS();
 }
 
+void test_classificacao_sem_limite_inferior() {
+    TEST("classificarFaixa sem limite inferior (perfil padrao do firmware)");
+    // Faixa padrao gravada na placa: sem minimo, normal ate 15, margem 5.
+    float min = NAN, max = 15.0f, margem = 5.0f;
+
+    ASSERT(classificarFaixa(-30.0f, min, max, margem) == StatusTermico::NORMAL);
+    ASSERT(classificarFaixa(15.0f, min, max, margem) == StatusTermico::NORMAL);
+    ASSERT(classificarFaixa(18.0f, min, max, margem) == StatusTermico::ATENCAO);
+    ASSERT(classificarFaixa(20.0f, min, max, margem) == StatusTermico::ATENCAO);
+    ASSERT(classificarFaixa(24.5f, min, max, margem) == StatusTermico::CRITICO);
+    PASS();
+}
+
+void test_extrair_numero_com_espaco_e_texto_invalido() {
+    TEST("extrairNumeroJson pula espaco e devolve NAN para texto invalido");
+    // A nuvem (json.dumps do Python) responde com espaco depois dos dois-pontos.
+    std::string json = "{\"faixa\": {\"min\": null, \"max\": 13.0, \"margem\": \"x\"}}";
+
+    ASSERT(std::isnan(extrairNumeroJson(json, "min")));
+    ASSERT(std::fabs(extrairNumeroJson(json, "max") - 13.0f) < 0.001f);
+    ASSERT(std::isnan(extrairNumeroJson(json, "margem")));
+    PASS();
+}
+
 int main() {
     std::cout << "=== Executando Testes Unitarios do Firmware (C++) ===\n";
     test_payload_com_rssi_negativo_e_medido_em();
     test_payload_com_rssi_positivo_vira_null();
     test_extrair_numero_do_json();
     test_classificacao_de_faixa_termica();
+    test_classificacao_sem_limite_inferior();
+    test_extrair_numero_com_espaco_e_texto_invalido();
 
     std::cout << "\nResultado: " << testes_passaram << "/" << total_testes << " testes passaram.\n";
     return (testes_passaram == total_testes) ? 0 : 1;
