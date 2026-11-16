@@ -7,6 +7,8 @@ API no Azure. Um painel web mostra as leituras, os alertas e os cadastros de cad
 
 Projeto Integrador do 4º período, Faculdade Senac PE, 2026.2.
 
+English version: [Readme_English](Readme_English).
+
 O projeto tem dois repositórios:
 
 | repositório | conteúdo |
