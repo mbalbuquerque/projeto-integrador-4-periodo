@@ -58,4 +58,4 @@ class TestCabecalhosDaDocumentacao(BaseRotas):
             function_app.func.HttpRequest(method="GET", url="/api/docs", body=b""))
         self.assertIn("max-age=", r.headers["Strict-Transport-Security"])
         self.assertIn("camera=()", r.headers["Permissions-Policy"])
-        self.assertEqual(r.headers["Cache-Control"], "no-cache")
+        self.assertEqual(r.headers["Cache-Control"], "no-store")
