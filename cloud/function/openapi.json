@@ -81,7 +81,7 @@
         ],
         "operationId": "enviarTelemetria",
         "summary": "Sends a sensor reading",
-        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values (including `seq`) returns `200` with `duplicada: true`. When the reading is worse than the previous one of the same sensor (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO), the API sends a Web Push to the subscribed users of the company (at most one per sensor and range every 10 minutes; readings measured more than 30 minutes ago do not notify). A push failure never changes the answer.",
+        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values (including `seq`) returns `200` with `duplicada: true`. When the reading is worse than the previous one of the same sensor (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO), the API sends a Web Push to the subscribed operators and managers of the company and to the drivers linked to the vehicle of that sensor (at most one per sensor and range every 10 minutes; readings measured more than 30 minutes ago do not notify). A push failure never changes the answer.",
         "security": [
           {
             "dispositivo": []
@@ -2529,7 +2529,7 @@
         ],
         "operationId": "inscreverPush",
         "summary": "Subscribes this device to push alerts",
-        "description": "**Who can call:** operator or manager (token from the login). Stores the subscription in the user's document (field `push`, at most 10 devices; the oldest leaves). The same endpoint is never duplicated, and if it belonged to another account (shared device) it is removed from there. The user then receives a push whenever a sensor of the company gets worse (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO).",
+        "description": "**Who can call:** operator, manager or driver (token from the login). Stores the subscription in the user's document (field `push`, at most 10 devices; the oldest leaves). The same endpoint is never duplicated, and if it belonged to another account (shared device) it is removed from there. The user then receives a push whenever a sensor gets worse (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO): operators and managers for every sensor of the company, with the tap opening `/alertas?veiculo=<id>`; a driver only for the sensor of the vehicle linked to them (field `veiculo` of the user, read again at each reading), with the tap opening `/motorista`. A driver without a linked vehicle receives nothing.",
         "security": [
           {
             "bearerAuth": []
@@ -2604,7 +2604,7 @@
         ],
         "operationId": "removerPush",
         "summary": "Removes this device from push alerts",
-        "description": "**Who can call:** operator or manager (token from the login). Removes the subscription with this endpoint from the user. Idempotent: an endpoint the user does not have also answers `204`. `POST /sair` also removes every subscription of the user.",
+        "description": "**Who can call:** operator, manager or driver (token from the login). Removes the subscription with this endpoint from the user. Idempotent: an endpoint the user does not have also answers `204`. `POST /sair` also removes every subscription of the user.",
         "security": [
           {
             "bearerAuth": []

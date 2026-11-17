@@ -16,7 +16,7 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
   POST /api/senha               troca a própria senha                   (todos os perfis)
   POST /api/sair                encerra todas as sessões do usuário     (todos os perfis)
-  POST/DELETE /api/push/inscricao  inscreve ou remove o aparelho nos alertas push (operador, gestor)
+  POST/DELETE /api/push/inscricao  inscreve ou remove o aparelho nos alertas push (todos os perfis)
   GET  /api/motorista           leitura, faixa e viagem do veículo vinculado (motorista)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/predict             risco de passar de 30 °C por mês e hora (operador, gestor)
@@ -103,7 +103,7 @@ HASH_FALSO = gerar_hash(uuid.uuid4().hex)
 TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
 MOTORISTA = ("motorista",)
-# A própria conta (ver, trocar a senha, sair) vale para todo perfil; o resto do
+# A própria conta (ver, trocar a senha, sair, inscrever no push) vale para todo perfil; o resto do
 # painel continua só de operador e gestor (o motorista recebe 403).
 CONTA = TODOS + MOTORISTA
 SEP = "~"
@@ -339,8 +339,24 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
 
 # ------------------------------------------------------------ alertas push
 
+def recebe_push(usuario, veiculo):
+    """True se o usuário recebe o push da leitura deste veículo.
+
+    Operador e gestor recebem tudo da empresa; motorista, só do veículo vinculado
+    a ele (relido do cadastro a cada leitura: trocar o veículo troca os alertas).
+    Sensor sem veículo não avisa motorista; perfil desconhecido não recebe nada.
+    """
+    if usuario.get("perfil") in TODOS:
+        return True
+    return (usuario.get("perfil") in MOTORISTA and veiculo is not None
+            and usuario.get("veiculo") == veiculo)
+
+
 def avisar_por_push(leitura, veiculo, medido, recebido):
     """Manda push aos usuários da empresa quando a leitura piora de faixa.
+
+    Operador e gestor recebem de todos os sensores da empresa; o motorista, só do
+    sensor do veículo vinculado a ele, com o toque abrindo a tela /motorista.
 
     Só na transição (NORMAL -> ATENCAO/CRITICO, ATENCAO -> CRITICO), comparando com a
     leitura anterior do mesmo sensor pelo horário da medição; no máximo 1 push por
@@ -365,15 +381,19 @@ def avisar_por_push(leitura, veiculo, medido, recebido):
                             push.INTERVALO_S):
         return 0
 
-    conteudo = push.mensagem(leitura, veiculo)
-    usuarios = [u for u in lista("usuarios", leitura["empresaId"], "c.id, c.push")
-                if u.get("push")]
+    conteudos = {False: push.mensagem(leitura, veiculo),
+                 True: push.mensagem(leitura, veiculo, motorista=True)}
+    usuarios = [u for u in lista("usuarios", leitura["empresaId"],
+                                 "c.id, c.push, c.perfil, c.veiculo")
+                if u.get("push") and recebe_push(u, veiculo)]
     envios = [(u, i) for u in usuarios for i in u["push"]]
     if not envios:
         return 0
     # Em paralelo: com vários aparelhos, o sensor não espera um envio depois do outro.
     with ThreadPoolExecutor(max_workers=min(8, len(envios))) as executor:
-        resultados = list(executor.map(lambda par: push.enviar(par[1], conteudo), envios))
+        resultados = list(executor.map(
+            lambda par: push.enviar(par[1], conteudos[par[0].get("perfil") in MOTORISTA]),
+            envios))
 
     expiradas = {}
     for (usuario, inscricao), resultado in zip(envios, resultados):
@@ -418,8 +438,12 @@ def _tirar_de_outros(endpoint, dono):
 
 @app.route(route="push/inscricao", methods=["POST", "DELETE"])
 def push_inscricao(req: func.HttpRequest) -> func.HttpResponse:
-    """POST guarda a inscrição do aparelho no usuário; DELETE tira (idempotente)."""
-    usuario, erro = autorizar(req, TODOS)
+    """POST guarda a inscrição do aparelho no usuário; DELETE tira (idempotente).
+
+    Vale para operador, gestor e motorista (o motorista só recebe alertas do
+    veículo vinculado a ele: o filtro é no envio, em avisar_por_push).
+    """
+    usuario, erro = autorizar(req, CONTA)
     if erro:
         return erro
     dados, erro = corpo_json(req)
