@@ -4,6 +4,7 @@
 # Configuração por variáveis de ambiente (ver cloud/function/local.settings.example.json):
 #   COSMOS_CONNECTION, COSMOS_DATABASE, COSMOS_CONTAINER, JWT_SECRET,
 #   AOAI_ENDPOINT, AOAI_DEPLOY_CHAT, AOAI_DEPLOY_EMBED, AOAI_API_VERSION
+#   e, para os alertas push (opcionais), VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
 # Nenhum segredo entra na imagem.
 FROM mcr.microsoft.com/azure-functions/python:4-python3.11
 
@@ -15,4 +16,4 @@ COPY requirements.txt /
 RUN pip install --no-cache-dir -r /requirements.txt
 
 COPY function_app.py contrato.py seguranca.py cadastros.py chat.py assistente.py limites.py \
-     predicao.py modelo_risco.json base_chat.json openapi.json host.json /home/site/wwwroot/
+     predicao.py push.py modelo_risco.json base_chat.json openapi.json host.json /home/site/wwwroot/

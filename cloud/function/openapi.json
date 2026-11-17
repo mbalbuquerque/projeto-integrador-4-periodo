@@ -63,6 +63,10 @@
     {
       "name": "Saúde",
       "description": "Service health check."
+    },
+    {
+      "name": "Alertas push",
+      "description": "Web Push (VAPID) alerts sent to the user's phone or browser when a sensor gets worse."
     }
   ],
   "paths": {
@@ -73,7 +77,7 @@
         ],
         "operationId": "enviarTelemetria",
         "summary": "Sends a sensor reading",
-        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values (including `seq`) returns `200` with `duplicada: true`.",
+        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values (including `seq`) returns `200` with `duplicada: true`. When the reading is worse than the previous one of the same sensor (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO), the API sends a Web Push to the subscribed users of the company (at most one per sensor and range every 10 minutes; readings measured more than 30 minutes ago do not notify). A push failure never changes the answer.",
         "security": [
           {
             "dispositivo": []
@@ -549,7 +553,7 @@
         ],
         "operationId": "sair",
         "summary": "Ends all of the user's sessions",
-        "description": "**Who can call:** operator or manager (token from the login). No body. Raises the session version: every token already issued (all devices) starts receiving `401`.",
+        "description": "**Who can call:** operator or manager (token from the login). No body. Raises the session version: every token already issued (all devices) starts receiving `401`. Also removes the user's push subscriptions.",
         "security": [
           {
             "bearerAuth": []
@@ -2385,6 +2389,176 @@
           }
         }
       }
+    },
+    "/push/chave": {
+      "get": {
+        "tags": [
+          "Alertas push"
+        ],
+        "operationId": "chavePush",
+        "summary": "Returns the VAPID public key for push alerts",
+        "description": "**Who can call:** public (no authentication). The dashboard needs this key to subscribe the browser. Returns `503` while the API has no VAPID keys configured.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Public key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushChave"
+                },
+                "example": {
+                  "chave": "BNNyrCNAoj-fpxZGB36Q6oRn52ViB6ipMPRuFXE7Yw5a_V3lbVndP5ziu2C1RV4v898H0uzC7DGD9GSQroTxzvs"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Push alerts not configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "alertas push indisponíveis"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/push/inscricao": {
+      "post": {
+        "tags": [
+          "Alertas push"
+        ],
+        "operationId": "inscreverPush",
+        "summary": "Subscribes this device to push alerts",
+        "description": "**Who can call:** operator or manager (token from the login). Stores the subscription in the user's document (field `push`, at most 10 devices; the oldest leaves). The same endpoint is never duplicated, and if it belonged to another account (shared device) it is removed from there. The user then receives a push whenever a sensor of the company gets worse (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushInscricao"
+              },
+              "example": {
+                "endpoint": "https://fcm.googleapis.com/fcm/send/exemplo-de-inscricao",
+                "expirationTime": null,
+                "keys": {
+                  "p256dh": "BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                  "auth": "AAAAAAAAAAAAAAAAAAAAAA"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Subscribed. Returns how many devices the user has.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "inscricoes"
+                  ],
+                  "properties": {
+                    "inscricoes": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "example": {
+                  "inscricoes": 1
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or unknown push service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "endpoint: serviço de push não reconhecido"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Alertas push"
+        ],
+        "operationId": "removerPush",
+        "summary": "Removes this device from push alerts",
+        "description": "**Who can call:** operator or manager (token from the login). Removes the subscription with this endpoint from the user. Idempotent: an endpoint the user does not have also answers `204`. `POST /sair` also removes every subscription of the user.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushRemocao"
+              },
+              "example": {
+                "endpoint": "https://fcm.googleapis.com/fcm/send/exemplo-de-inscricao"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Removed (or was not there). No body."
+          },
+          "400": {
+            "description": "Body without endpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "endpoint: obrigatório"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3462,6 +3636,70 @@
           "faltam": {
             "type": "integer",
             "description": "How many readings are missing."
+          }
+        }
+      },
+      "PushChave": {
+        "type": "object",
+        "required": [
+          "chave"
+        ],
+        "properties": {
+          "chave": {
+            "type": "string",
+            "description": "VAPID public key (base64url, uncompressed P-256 point). The browser passes it as applicationServerKey to pushManager.subscribe()."
+          }
+        }
+      },
+      "PushInscricao": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "description": "The browser's PushSubscription.toJSON(). expirationTime and other fields are accepted and ignored.",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "https URL of a known push service: fcm.googleapis.com, *.push.services.mozilla.com, *.push.apple.com or *.notify.windows.com. Any other host is refused (the API never posts to arbitrary URLs)."
+          },
+          "expirationTime": {
+            "type": "number",
+            "nullable": true
+          },
+          "keys": {
+            "type": "object",
+            "required": [
+              "p256dh",
+              "auth"
+            ],
+            "properties": {
+              "p256dh": {
+                "type": "string",
+                "minLength": 80,
+                "maxLength": 100,
+                "description": "Browser public key (base64url)."
+              },
+              "auth": {
+                "type": "string",
+                "minLength": 16,
+                "maxLength": 32,
+                "description": "Subscription auth secret (base64url)."
+              }
+            }
+          }
+        }
+      },
+      "PushRemocao": {
+        "type": "object",
+        "required": [
+          "endpoint"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "maxLength": 2048
           }
         }
       }

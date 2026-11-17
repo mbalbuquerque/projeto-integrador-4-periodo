@@ -10,6 +10,7 @@ chat.py
 assistente.py
 limites.py
 predicao.py
+push.py
 modelo_risco.json
 base_chat.json
 openapi.json

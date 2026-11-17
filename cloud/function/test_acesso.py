@@ -221,7 +221,8 @@ class TestSessao(BaseAcesso):
         self.assertEqual(status, 204)
         (tipo, item, ops), = self.containers["usuarios"].escritas
         self.assertEqual((tipo, item, ops),
-                         ("patch", "bia@a.com", [{"op": "incr", "path": "/sessao", "value": 1}]))
+                         ("patch", "bia@a.com", [{"op": "incr", "path": "/sessao", "value": 1},
+                                                 {"op": "set", "path": "/push", "value": []}]))
 
     def test_sair_sem_token(self):
         self.assertEqual(self.chamar(SAIR, "POST", "/api/sair")[0], 401)
