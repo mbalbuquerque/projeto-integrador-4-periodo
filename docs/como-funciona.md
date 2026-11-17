@@ -77,7 +77,7 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 |---|---|---|
 | Gestor da transportadora | Cadastra empresa, usuários, sensores, veículos e viagens; acompanha tudo | Painel, perfil `gestor` |
 | Operador logístico | Acompanha a carga, alertas e relatórios; não altera cadastros | Painel, perfil `operador` |
-| Motorista | Vê o semáforo (LED) no sensor | Placa |
+| Motorista | Vê o semáforo (LED) no sensor e, no celular, a temperatura do próprio veículo (somente leitura) | Placa; painel, perfil `motorista` |
 | Sensor | Envia leituras com a chave própria | `POST /api/telemetria` |
 
 ---
@@ -377,9 +377,12 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | GET | `/api/health` | público | 200 se o banco responde, 503 se não (`health`) |
 | POST | `/api/chat` | público | Chat do site com IA (`chat_site`) |
 | GET | `/api/docs`, `/api/openapi.json` | público | Swagger UI e a especificação |
-| GET | `/api/eu` | operador, gestor | Dados do usuário logado e nome da empresa |
-| POST | `/api/senha` | operador, gestor | Troca a própria senha (pede a atual) e devolve token novo |
-| POST | `/api/sair` | operador, gestor | Derruba todas as sessões do usuário (204) |
+| GET | `/api/eu` | todos os perfis | Dados do usuário logado e nome da empresa (e `veiculo` do motorista) |
+| POST | `/api/senha` | todos os perfis | Troca a própria senha (pede a atual) e devolve token novo |
+| POST | `/api/sair` | todos os perfis | Derruba todas as sessões do usuário (204) e apaga as inscrições de push |
+| GET | `/api/push/chave` | público | Chave pública VAPID dos alertas push (503 sem configuração) |
+| POST / DELETE | `/api/push/inscricao` | operador, gestor | Inscreve ou remove o aparelho nos alertas push |
+| GET | `/api/motorista` | motorista | Última leitura, faixa, status e viagem em curso **só do veículo vinculado** (`motorista`) |
 | POST | `/api/assistente` | operador, gestor | Assistente do painel com os dados da empresa |
 | GET | `/api/leituras?deviceId=&limite=&horas=&status=` | operador, gestor | Últimas leituras de um sensor da empresa (até 500) |
 | GET | `/api/predict?mes=&hora=` | operador, gestor | Risco de passar de 30 °C no mês e hora |
@@ -387,7 +390,7 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | POST / PUT / DELETE | `/api/dispositivos[/{id}]` | gestor | Registra (devolve a chave uma vez), gera chave nova, remove |
 | GET | `/api/veiculos`, `/api/viagens` | operador, gestor | Frota e viagens |
 | POST / PUT / DELETE | `/api/veiculos[/{id}]`, `/api/viagens[/{id}]` | gestor | Cadastros (`_cadastro`) |
-| GET / POST / PUT / DELETE | `/api/usuarios[/{id}]` | gestor | Usuários da empresa; PUT redefine a senha de outro usuário |
+| GET / POST / PUT / DELETE | `/api/usuarios[/{id}]` | gestor | Usuários da empresa; PUT redefine a senha de outro usuário ou troca o veículo do motorista |
 
 Documentação interativa: <https://func-coldtrack-7319.azurewebsites.net/api/docs>.
 Texto com as regras de cada rota: `docs/api.md`.
@@ -407,6 +410,7 @@ sequenceDiagram
     A->>A: classificar(temperatura, perfil)
     A->>DB: create_item(leitura) com id = deviceId~medidoEm
     alt id novo
+        A->>A: piorou de faixa? → push aos inscritos da empresa (falha não muda a resposta)
         A-->>P: 201 {id, status, perfil, faixa}
     else id já existe, mesmos valores
         A-->>P: 200 {id, duplicada: true}
@@ -429,7 +433,14 @@ sequenceDiagram
   emitido antes morre na hora, em todos os aparelhos. O perfil usado é o atual do banco, não o do
   token; perfil ausente ou empresa ausente → 403 ("na dúvida, nunca libera").
 - **Perfis**: `TODOS = ("operador", "gestor")` para leitura; `GESTOR = ("gestor",)` para criar,
-  alterar e remover.
+  alterar e remover; `MOTORISTA = ("motorista",)` só para `GET /motorista`. `CONTA` (os três)
+  vale para a própria conta: `/eu`, `/senha`, `/sair`. Qualquer outra rota nega o motorista com
+  403 (`test_motorista.py` chama todas).
+- **Motorista vinculado a um veículo**: o cadastro do usuário motorista guarda `veiculo` (código
+  da frota da mesma empresa), obrigatório nesse perfil e proibido nos outros
+  (`cadastros.validar_vinculo`; a rota confere se o veículo existe na empresa). O gestor troca o
+  vínculo com `PUT /usuarios/{email}` `{"veiculo"}`. `GET /motorista` usa o veículo do cadastro,
+  relido a cada chamada, e nunca um parâmetro da URL: um motorista não tem como ver outro veículo.
 - **Login sem vazar quem tem conta** (`login`): e-mail inexistente, senha errada e conta em espera
   recebem a mesma resposta 401, e o e-mail inexistente também paga o custo do scrypt (`HASH_FALSO`),
   para o tempo de resposta não denunciar. A partir da **5ª senha errada** a conta entra em espera de
@@ -486,6 +497,7 @@ O IP vem de `X-Azure-ClientIP` ou do último item do `X-Forwarded-For` (`ip_do_c
 | `POST /login` | 20 falhas por IP em 15 min; por conta, espera de 1 a 15 min | 429 / 401 |
 | `POST /chat` | 10 por minuto por IP; 2000 por dia no site todo | 429 |
 | `POST /assistente` | 15 por minuto por usuário; 300 por dia por empresa | 429 |
+| `GET /motorista` | 30 por minuto por usuário (a tela consulta a cada 20 s) | 429 |
 
 Sem limite próprio (e por quê, em `docs/seguranca.md`): `/telemetria` (um limite poderia descartar
 leitura legítima; a proteção é a chave), `/empresas` (lacuna conhecida), rotas estáticas, `/health`
@@ -525,6 +537,49 @@ Toda resposta JSON (`resposta()`) leva `CABECALHOS_SEGURANCA`: `X-Content-Type-O
 e do script de inicialização pelo hash SHA-256, `frame-ancestors 'none'`, mais
 `X-Frame-Options: DENY`, `Permissions-Policy` e SRI nos arquivos do Swagger.
 
+### 4.10 Alertas push (`push.py`)
+
+Exigência do app: alerta no celular por limiar. Web Push padrão com VAPID, sem serviço pago:
+
+```mermaid
+sequenceDiagram
+    participant N as Navegador (painel)
+    participant A as API
+    participant DB as Cosmos DB
+    participant S as Serviço de push (FCM, Apple, Mozilla)
+    N->>A: GET /push/chave
+    N->>S: pushManager.subscribe(chave) → inscrição
+    N->>A: POST /push/inscricao (token)
+    A->>DB: usuarios/{email}.push += inscrição
+    Note over A: mais tarde, no POST /telemetria
+    A->>DB: leitura anterior do sensor (medidoEm < atual)
+    A->>A: piorou? (NORMAL→ATENCAO/CRITICO, ATENCAO→CRITICO)
+    A->>DB: limites: 1 por sensor e faixa a cada 10 min
+    A->>S: webpush (cifrado, assinado com a chave privada VAPID)
+    S-->>N: notificação → service worker mostra e abre /alertas
+```
+
+- **Modelo**: sem container novo. A inscrição (`endpoint`, `keys.p256dh`, `keys.auth`,
+  `criadaEm`) fica no campo `push` do documento do usuário, no container `usuarios`. Assim herda o
+  `empresaId` do usuário (o envio consulta `lista("usuarios", empresa_do_sensor, "c.id, c.push")`,
+  e uma empresa nunca recebe alerta da outra), e some junto com o usuário. `publico()` e as listas
+  de usuários escolhem os campos, então a inscrição nunca sai em resposta da API.
+- **Só na transição** (`avisar_por_push`): compara com a leitura anterior do mesmo sensor pelo
+  horário da medição; só a piora avisa. O reenvio duplicado responde antes e nunca avisa.
+  Leitura com mais de 30 min (fila offline) não avisa. O contador `push:<sensor>:<faixa>` no
+  container `limites` segura 1 push por sensor e faixa a cada 10 min.
+- **Nunca quebra a gravação**: a leitura já está gravada quando o push começa; `push.enviar`
+  nunca levanta exceção, e qualquer outro erro do push é pego em `telemetria` e só vai para o log.
+  Os envios saem em paralelo (até 8) com tempo limite de 5 s cada.
+- **Limpeza**: resposta `404`/`410` do serviço de push = inscrição expirada, apagada do usuário.
+- **Segurança**: o `endpoint` só é aceito em hosts de serviço de push conhecidos (`HOSTS_PUSH`),
+  então a API não vira um jeito de fazer POST para qualquer URL. O conteúdo vai cifrado
+  (`aes128gcm`, RFC 8291) para a chave do navegador; o log não guarda endereço nem chaves. A chave
+  privada VAPID fica só no app setting `VAPID_PRIVATE_KEY`.
+- **Biblioteca**: `pywebpush` (com `py-vapid`, `http-ece` e `aiohttp`; `cryptography` e
+  `requests` já vinham das outras dependências). Os testes (`test_push.py`) simulam a lib ou só o
+  POST HTTP; um deles deixa a criptografia real rodar e decifra o conteúdo como o navegador faria.
+
 ---
 
 ## 5. Banco de dados
@@ -536,7 +591,7 @@ Azure Cosmos DB for NoSQL, conta `cosmos-coldtrack-7319`, banco `coldtrack` (`in
 | container | chave de partição | conteúdo e campos principais |
 |---|---|---|
 | `empresas` | `/id` | `id` (`E-XXXXXXXX`), `nome`, `criadaEm` |
-| `usuarios` | `/id` (e-mail) | `id`, `nome`, `perfil`, `empresaId`, `senhaHash`, `sessao`, e no login `falhas`, `ultimaFalha`, `bloqueadoAte` |
+| `usuarios` | `/id` (e-mail) | `id`, `nome`, `perfil`, `empresaId`, `senhaHash`, `sessao`, `veiculo` (só motorista), e no login `falhas`, `ultimaFalha`, `bloqueadoAte`; `push` (inscrições de alerta push) |
 | `dispositivos` | `/id` (ID do sensor) | `id`, `empresaId`, `descricao`, `chaveHash` (SHA-256), `criadoEm` |
 | `veiculos` | `/id` (`<empresa>~<código>`) | `tipo`, `deviceId`, `dispositivo`, `perfil` |
 | `viagens` | `/id` (`<empresa>~<código>`) | `veiculo`, `origem`, `destino`, `carga`, `inicio`, `fim` |
@@ -663,19 +718,21 @@ nas app settings da Function, não no repositório.
 
 ### 7.2 Publicação pelo GitHub Actions com OIDC
 
-- **API**: `.github/workflows/publicar-api.yml` roda a cada push na branch **`everson`** que mexa em
-  `cloud/function/`: instala, roda os testes (publica só se passarem), empacota pela lista
+- **API**: `.github/workflows/publicar-api.yml` roda a cada push na branch **`main`** que mexa em
+  `cloud/function/` (ou no próprio workflow), e também manualmente (`workflow_dispatch`): instala, roda os testes (publica só se passarem), empacota pela lista
   `pacote.txt`, faz login no Azure com `azure/login` e publica com
   `az functionapp deployment source config-zip ... --build-remote true`.
-- **Painel**: `front: .github/workflows/publicar-site.yml`, push na `everson`: lint, testes, build e
+- **Painel**: `front: .github/workflows/publicar-site.yml`, push na `main`: lint, testes, build e
   `scripts/enviar-site.sh dist` (arquivos com hash com cache de 1 ano, o resto `no-cache`, apaga do
   `$web` o que não está mais no build).
 - **OIDC, sem senha guardada**: existe um aplicativo no Entra ID (`coldtrack-github-deploy`) com
-  papel Contributor só no `rg-coldtrack`, com credencial federada cujo *subject* é a branch
-  `everson` de cada repositório. O GitHub emite um token assinado para o job e o `azure/login`
-  troca por acesso ao Azure. Os secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` e
-  `AZURE_SUBSCRIPTION_ID` só dizem qual identidade usar. Push em outra branch roda os testes, mas
-  não consegue publicar. Por isso a `everson` nunca pode ser apagada.
+  papel Contributor só no `rg-coldtrack`, com credenciais federadas cujo *subject* é a branch
+  `main` de cada repositório (a que publica) e a `everson` (reserva, não dispara mais a
+  publicação). O GitHub emite um token assinado para o job e o `azure/login` troca por acesso ao
+  Azure. Os secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` e `AZURE_SUBSCRIPTION_ID` só dizem qual
+  identidade usar. Push em outra branch roda os testes, mas não consegue publicar.
+- **Proteção da `main`**: pull request obrigatório e testes verdes antes do merge. Só um
+  administrador do repositório consegue ligar; o comando está no `CONTRIBUTING.md`.
 - **Infraestrutura como código**: `infra/main.bicep` descreve o ambiente; aplicar só depois de
   `what-if`.
 

@@ -46,8 +46,8 @@ Detalhe das rotas no [Swagger](https://func-coldtrack-7319.azurewebsites.net/api
 
 - Function App só aceita HTTPS (`httpsOnly`); TLS mínimo 1.2 na Function, nos Storages e no
   Cosmos. CORS liberado só para o painel publicado.
-- Publicação pelo GitHub Actions com OIDC: sem senha guardada no repositório, e só a branch
-  `everson` consegue publicar.
+- Publicação pelo GitHub Actions com OIDC: sem senha guardada no repositório, e só as branches
+  `main` (a que publica) e `everson` (reserva) conseguem login no Azure.
 - Azure OpenAI acessado pela identidade gerenciada da Function, com as chaves de API
   desligadas no recurso.
 - Nenhum segredo no histórico do Git (conferido na revisão).
@@ -78,6 +78,8 @@ entre todas as instâncias). Detalhe das respostas em [`api.md`](api.md).
 |---|---|---|---|
 | `POST /login` | IP de quem chama | 20 tentativas erradas a cada 15 min, em qualquer conta | `429` |
 | `POST /login` | conta | espera de 1 min a partir da 5ª senha errada seguida, dobrando até 15 min | `401` (igual à senha errada) |
+| `POST /empresas` | IP de quem chama | 5 cadastros por hora (conta o pedido válido, criado ou recusado por e-mail repetido; erro de validação não conta) | `429` |
+| `POST /senha` | conta (a mesma do login) | espera de 1 min a partir da 5ª senha atual errada seguida, dobrando até 15 min; em espera nem a senha certa troca | `429` |
 | `POST /chat` | IP | 10 perguntas por minuto | `429` |
 | `POST /chat` | site inteiro | 2000 perguntas por dia | `429` |
 | `POST /assistente` | usuário | 15 perguntas por minuto | `429` |
@@ -86,15 +88,25 @@ entre todas as instâncias). Detalhe das respostas em [`api.md`](api.md).
 As janelas são fixas (minuto, 15 min ou dia corrente em UTC). Sem o container `limites` ou com
 o banco fora do ar, o contador cai para a memória da instância e o limite fica mais frouxo.
 
+Por que 5 cadastros por hora por IP: uma empresa se cadastra uma vez, então o uso normal é 1; 5 cobre
+tentativas que chegam ao banco (e-mail já usado) e uma sala de aula ou escritório que sai por um IP
+só, e ainda limita um script a 120 contas por dia por IP. Quem usa vários IPs não é contido por
+esta regra (a proteção contra isso seria CAPTCHA, fora do escopo atual).
+
+Em `POST /senha`, a senha atual errada usa o mesmo contador de falhas e a mesma espera do login
+(`falhas` e `bloqueadoAte` da conta): quem erra no login e na troca soma as duas contagens, em vez
+de ganhar o dobro de tentativas. Efeito colateral aceito: quem tem um token roubado pode deixar a
+conta em espera por até 15 min. A senha certa zera a contagem. As respostas `429` não trazem
+`Retry-After`, como as demais da API; a mensagem manda aguardar.
+
 ### Rotas sem limite e por quê
 
 | rota | por que não tem limite |
 |---|---|
 | `POST /telemetria` | Cada sensor envia uma leitura a cada 20 s e reenvia a fila offline (até 10 por ciclo). Um limite por IP ou por sensor poderia descartar leitura legítima, e sensores de uma mesma transportadora podem sair pelo mesmo IP. A proteção é a chave por sensor (`x-device-key`). Lacuna conhecida: o dispositivo é lido no banco antes de a chave ser conferida, então chamadas em massa com ids aleatórios gastam leituras do Cosmos (ver "Limitações conhecidas") |
-| `POST /empresas` | Cadastro público de empresa, **sem limite**. É uma lacuna: um script pode criar empresas e usuários em massa, ocupando o banco. Não há limite implementado nem decisão registrada sobre isso; uma regra por IP precisaria de cuidado com clientes atrás do mesmo IP. Fica como melhoria |
 | `GET /perfis`, `GET /docs`, `GET /openapi.json` | Respostas estáticas, sem consulta ao banco e sem IA, de custo desprezível |
-| `GET /health` | Pública e sem limite. Faz uma consulta simples ao Cosmos (`SELECT TOP 1`) e serve de sonda; o custo por chamada é pequeno, mas não é zero |
-| `GET /eu`, `POST /sair`, `POST /senha`, `GET /leituras`, `/dispositivos`, `/veiculos`, `/viagens`, `/usuarios` (todos os métodos) | Exigem token válido, e a API relê o usuário no banco a cada chamada. Não têm limite próprio porque o painel os usa em atualização contínua (a tela de sensores consulta a cada 20 s) e um limite baixo derrubaria o uso normal. O controle é a autenticação e a separação por empresa. Lacuna: `POST /senha` não conta senha atual errada; só é explorável por quem já tem um token válido |
+| `GET /health` | Decisão: **sem limite**. É a sonda de disponibilidade (monitor externo, painel, verificação de implantação) e chega de vários IPs; um limite por IP poderia devolver `429` à sonda e fazer o serviço parecer fora do ar. O custo por chamada é uma consulta `SELECT TOP 1` ao Cosmos (pequeno, mas não zero); o teto geral abaixo contém o volume total. Reavaliar se o custo aparecer na fatura: a saída seria guardar o resultado por alguns segundos, não bloquear |
+| `GET /eu`, `POST /sair`, `GET /leituras`, `/dispositivos`, `/veiculos`, `/viagens`, `/usuarios` (todos os métodos) | Exigem token válido, e a API relê o usuário no banco a cada chamada. Não têm limite próprio porque o painel os usa em atualização contínua (a tela de sensores consulta a cada 20 s) e um limite baixo derrubaria o uso normal. O controle é a autenticação e a separação por empresa. A exceção é `POST /senha`, que tem o limite por conta da tabela acima |
 
 ### Teto geral
 

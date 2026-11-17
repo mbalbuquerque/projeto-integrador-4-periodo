@@ -7,7 +7,7 @@ API no Azure. Um painel web mostra as leituras, os alertas e os cadastros de cad
 
 Projeto Integrador do 4º período, Faculdade Senac PE, 2026.2.
 
-English version: [Readme_English](Readme_English).
+English version: [README.en.md](README.en.md).
 
 O projeto tem dois repositórios:
 
@@ -16,7 +16,7 @@ O projeto tem dois repositórios:
 | [projeto-integrador-4-periodo](https://github.com/mbalbuquerque/projeto-integrador-4-periodo) (este) | firmware do ESP32-C3, API (Azure Functions, Python), infraestrutura, análise climática e documentação |
 | [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) | painel web (React + Vite) publicado no Azure Storage |
 
-Os dois são publicados pela branch `everson` (ver [Publicação](#publicação)).
+Os dois são publicados pela branch `main` (ver [Publicação](#publicação)).
 
 | | endereço |
 |---|---|
@@ -94,6 +94,22 @@ spec em [`cloud/function/openapi.json`](cloud/function/openapi.json)) e [`docs/a
 └── .github/workflows/       testes (API e firmware) e publicação da API
 ```
 
+### Estrutura exigida na entrega
+
+As pastas não foram renomeadas para os nomes da entrega porque o caminho faz parte da
+publicação (workflows, `pacote.txt`, links da documentação e do Wokwi). Correspondência:
+
+| pasta exigida | onde está | conteúdo |
+|---|---|---|
+| `/firmware` | [`firmware/`](firmware/) | firmware do ESP32-C3, testes do firmware e circuito do Wokwi |
+| `/backend` | [`cloud/function/`](cloud/function/) | API em Azure Functions (Python), testes e publicação |
+| `/database` | [`infra/main.bicep`](infra/main.bicep) (Cosmos DB), [`infra/ci/preparar_banco.py`](infra/ci/preparar_banco.py), [`infra/backup/`](infra/backup/), [`cloud/function/scripts/`](cloud/function/scripts/) | definição do banco e dos containers, carga do ambiente de teste, backup lógico e restauração, migração |
+| `/frontend` | repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) | painel web (React + Vite) |
+| `/mobile` | repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) | o mesmo painel como PWA instalável no celular (`public/manifest.json`, `public/sw.js`); não há app nativo |
+| `/ia` | [`analise/`](analise/), [`cloud/function/chat.py`](cloud/function/chat.py), [`cloud/function/assistente.py`](cloud/function/assistente.py) | análise climática da rota (dados do INMET) e chat/assistente com Azure OpenAI |
+| `/infra` | [`infra/`](infra/), [`.github/workflows/`](.github/workflows/) | Bicep, Dockerfile, compose, backup e workflows de teste e publicação |
+| `/docs` | [`docs/`](docs/) | documentação técnica, API, segurança, implantação |
+
 ## Como rodar
 
 ### Firmware
@@ -149,16 +165,18 @@ Ver [`analise/README.md`](analise/README.md).
 ## Publicação
 
 - **API**: o workflow `publicar-api.yml` roda os testes e publica na Function App a cada push
-  na branch `everson` que altere `cloud/function/`. O login no Azure é por OIDC, aceito só para
-  essa branch. Publicação manual: `bash cloud/function/publicar.sh`.
+  na branch `main` que altere `cloud/function/`. O login no Azure é por OIDC, aceito só para a
+  `main` e para a `everson` (reserva, que não dispara mais a publicação). Publicação manual:
+  `bash cloud/function/publicar.sh`.
 - **Painel**: publicado pelo repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi),
-  também a cada push na `everson`.
+  também a cada push na `main`.
 - **Infraestrutura**: `infra/main.bicep` documenta o ambiente; não aplicar sem `what-if`
   (ver [`infra/README.md`](infra/README.md)).
 
-Fluxo de trabalho: commits na `everson`, pull request para a `main` quando a etapa fica pronta.
-**A `everson` nunca deve ser apagada**, porque a publicação e o login por OIDC dependem dela.
-Detalhes e convenção de commits em [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Fluxo de trabalho: branch a partir da `main`, pull request para a `main` com os testes verdes.
+A `everson` fica como reserva da publicação e não deve ser apagada. A proteção da `main` (pull
+request e testes obrigatórios) depende de um administrador do repositório; o comando está em
+[`CONTRIBUTING.md`](CONTRIBUTING.md), junto com a convenção de commits.
 
 ## Segurança
 

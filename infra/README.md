@@ -210,7 +210,7 @@ Leitura do resultado:
   nível Information (linhas de início e fim de cada execução do host). Subir o nível de log da
   Function para Warning (`logging.logLevel` no `host.json`) tira cerca de 60% do volume
   ingerido (de 68,8 para 27,1 MB no piloto), o que leva o item a cerca de US$ 43 e o total a
-  cerca de US$ 128 (R$ 741). Não foi aplicado: mexer em `cloud/function/` na `everson`
+  cerca de US$ 128 (R$ 741). Não foi aplicado: mexer em `cloud/function/` na `main`
   publica a API em produção.
 - **Function:** o valor usa a média medida e funciona como teto; com execuções curtas de
   telemetria o gasto deve ficar abaixo. Medir com sensores ligados por alguns dias melhora a
@@ -259,6 +259,101 @@ segundos, mas não de uma parada manual. A primeira medição desse CI usou `doc
 sem reinício, o que revelou essa diferença. Em produção (Function App), a recuperação é da plataforma
 Azure; o compose vale para desenvolvimento e para a demonstração em contêiner.
 
+## Backup e restauração (R8)
+
+Há duas camadas, com limites diferentes.
+
+### 1. Backup periódico gerenciado (Azure)
+
+A conta usa `backupPolicy: Periodic` (`infra/main.bicep`). Valores lidos da conta com
+`az cosmosdb show` em 16/11/2026:
+
+| parâmetro | valor |
+|---|---|
+| intervalo entre cópias | 240 min (4 h) |
+| retenção | 8 h (duas cópias) |
+| redundância do armazenamento do backup | Geo |
+
+- **RPO**: até 4 h de dados perdidos.
+- **RTO**: não mensurável por nós. No modo periódico a restauração é feita pelo suporte da
+  Azure, por chamado, para uma conta nova; não existe comando para o cliente. Por isso essa
+  camada **não foi testada**, e o tempo de atendimento do chamado é desconhecido.
+- **Limite importante**: com 8 h de retenção, um apagamento ou corrupção percebido depois
+  de 8 h não pode ser desfeito por essa camada. O chamado precisa ser aberto dentro da
+  janela.
+- Esta política não foi alterada. Mudar a retenção ou migrar para o modo contínuo (que
+  permite restauração para um instante, feita pelo próprio cliente) tem custo e é decisão
+  da equipe.
+
+### 2. Backup lógico (testado)
+
+Exporta cada container para um arquivo JSONL (um documento por linha, sem as propriedades de
+sistema do Cosmos) e um `manifesto.json` com data, banco, contagem, chave de partição e TTL de
+cada container. Os scripts ficam em `infra/backup/` e dependem só de `azure-cosmos`.
+
+**Exportar** (só leitura; use a chave somente leitura da conta):
+
+```bash
+export COSMOS_ENDPOINT=$(az cosmosdb show -g rg-coldtrack -n cosmos-coldtrack-7319 --query documentEndpoint -o tsv)
+export COSMOS_KEY=$(az cosmosdb keys list -g rg-coldtrack -n cosmos-coldtrack-7319 \
+  --type read-only-keys --query primaryReadonlyMasterKey -o tsv)
+python infra/backup/exportar.py ~/backups-coldtrack/$(date +%F)
+```
+
+O export contém dado real (e-mails, hashes de senha, leituras). Gravar **fora do
+repositório** e com acesso restrito; o `.gitignore` bloqueia `*.jsonl`, `manifesto.json` e
+`backups-coldtrack/` como segunda barreira. Containers com TTL (`limites`) são exportados
+como estão; seus contadores expiram sozinhos e não precisam ser preservados (use
+`--excluir limites` para pulá-los).
+
+**Restaurar** (nunca em produção):
+
+```bash
+export DEST_ENDPOINT=<endpoint da conta de teste ou do emulador>
+export DEST_KEY=<chave do destino>
+python infra/backup/restaurar.py ~/backups-coldtrack/2026-11-16 --banco coldtrack-restaurado
+```
+
+O script recusa qualquer endpoint `*.documents.azure.com` antes de abrir conexão. Cria o
+banco e os containers com a chave de partição e o TTL do manifesto, grava com `upsert` (pode
+repetir) e compara, container a container, a contagem esperada com a restaurada; sai com
+código 1 se houver divergência.
+
+**Procedimento de recuperação** (perda de dados em produção):
+
+1. Congelar escritas (parar a Function App ou tirar a API do ar) para não misturar dado novo.
+2. Pegar o export mais recente e conferir o `manifesto.json` (data e contagens).
+3. Criar uma conta Cosmos nova (ou o banco `coldtrack-restaurado` em conta de teste) e rodar
+   `restaurar.py` contra ela. Conferir a saída: todos os containers `[ok]`.
+4. Apontar `COSMOS_CONNECTION` da Function App para a conta restaurada, ou copiar de volta só os
+   documentos necessários. Trocar de conta exige pôr de novo os papéis e as configurações da
+   conta original.
+5. Conferir `GET /api/health` (`banco: ok`) e fazer um login.
+
+**Frequência sugerida**: um export por dia (RPO de até 24 h), guardado em local com retenção
+maior que as 8 h do periódico. Não há agendamento automático criado; rodar manualmente ou por
+um job da equipe, com a chave somente leitura.
+
+**Medições**
+
+| item | resultado |
+|---|---|
+| Export real de produção (16/11/2026, chave somente leitura) | 4.041 documentos em 7 containers, cerca de 1 MB, **8,1 s** (de uma máquina local) |
+| Contagens por container | `leituras` 4.025; `usuarios` 5; `empresas` 3; `limites` 3; `veiculos` 1; `dispositivos` 1; `viagens` 0 |
+| Restauração do export de produção | **não executada**: exige um Cosmos de teste e a regra do projeto proíbe Docker local para o emulador. O conteúdo real não foi restaurado em lugar nenhum |
+| Restauração sintética no emulador (CI) | PR #74: banco sintético de 63 documentos em 4 containers exportado e restaurado em outro banco, contagens iguais, leitura de um documento por container e chave de partição e TTL recriados; execução inteira dos testes em cerca de 1 s (o emulador leva cerca de 25 s para subir) |
+
+RTO do backup lógico: tempo de recriar o destino mais o da restauração (no CI, em
+runner pequeno, o volume sintético restaurou em menos de 1 s); para o volume atual fica na ordem de minutos, e cresce de forma linear com o
+número de documentos (o `upsert` documento a documento é o gargalo).
+
+**Teste no CI**: o workflow `.github/workflows/backup-logico.yml` sobe o emulador oficial do
+Cosmos DB, cria um banco sintético com os mesmos containers e chaves de partição do real,
+exporta, restaura em outro banco e confere contagens, um documento por container (leitura por
+id e chave de partição), a chave de partição e o TTL recriados. Também roda os dois scripts
+pela linha de comando e verifica que `restaurar.py` recusa um endpoint Azure. Os testes das
+funções ficam em `infra/backup/test_backup.py` (`python -m pytest infra/backup`).
+
 ## Validar e conferir
 
 ```bash
@@ -282,18 +377,29 @@ O workflow `.github/workflows/publicar-api.yml` entra no Azure por OIDC, sem sen
    **Contributor** apenas no grupo `rg-coldtrack`.
 2. Esse aplicativo tem uma credencial federada com emissor
    `https://token.actions.githubusercontent.com`, público `api://AzureADTokenExchange` e
-   *subject* restrito à branch `everson` deste repositório
-   (`repo:<dono>/projeto-integrador-4-periodo:ref:refs/heads/everson`, no formato com os IDs
-   do GitHub).
+   *subject* restrito a uma branch deste repositório. São duas credenciais:
+   `gh-projeto-integrador-4-periodo-main` (branch `main`, a que publica) e
+   `gh-projeto-integrador-4-periodo-everson` (branch `everson`, reserva). O *subject* usa o
+   formato com os IDs do GitHub:
+   `repo:<dono>@<id do dono>/projeto-integrador-4-periodo@<id do repo>:ref:refs/heads/main`.
 3. Os secrets do repositório `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` e
    `AZURE_SUBSCRIPTION_ID` só dizem **qual** identidade usar; não são senhas.
 4. Na execução, o GitHub emite um token assinado para o job, o `azure/login` troca esse
    token por um acesso ao Azure e o job publica o pacote.
 
-Consequência: um push em outra branch (inclusive `main`) não consegue publicar. Para
-publicar a partir de outra branch é preciso criar outra credencial federada com o
-*subject* dessa branch.
+O workflow dispara em push na `main` (e manualmente, por `workflow_dispatch`). Um push em
+outra branch não consegue publicar, porque o Azure recusa o token. Para publicar a partir de
+outra branch é preciso criar outra credencial federada com o *subject* dessa branch, copiando o
+formato de uma existente:
 
-O painel (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)) usa o mesmo aplicativo com uma segunda credencial
-federada, também presa à branch `everson` daquele repositório. Por isso a `everson` dos dois repositórios
-nunca deve ser apagada: o deploy e o login por OIDC dependem dela.
+```bash
+az ad app federated-credential list --id <AZURE_CLIENT_ID> -o table
+az ad app federated-credential create --id <AZURE_CLIENT_ID> --parameters credencial.json
+```
+
+O painel (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)) usa o mesmo
+aplicativo, com as credenciais `gh-Front-End-pi-main` e `gh-Front-End-pi-everson`.
+
+A `everson` dos dois repositórios deixou de disparar a publicação, mas a credencial dela foi
+mantida como reserva: se a publicação pela `main` falhar, basta voltar o gatilho do workflow
+para a `everson`. Por isso a `everson` não deve ser apagada enquanto essa credencial existir.

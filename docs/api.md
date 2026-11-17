@@ -44,8 +44,11 @@ acrescenta; os anteriores podem ter sido escritos pelo cliente).
 |---|---|---|
 | `POST /login` | 20 tentativas erradas por IP a cada 15 min (em qualquer conta) | `429` |
 | `POST /login` | por conta: espera de 1 min a partir da 5ª senha errada seguida, dobrando até 15 min | `401` (mesma resposta de senha errada) |
+| `POST /empresas` | 5 cadastros por hora por IP (pedido inválido não conta) | `429` |
+| `POST /senha` | por conta, junto com o login: espera de 1 min a partir da 5ª senha atual errada seguida, dobrando até 15 min | `429` |
 | `POST /chat` | 10 perguntas por minuto por IP; 2000 por dia no site todo | `429` |
 | `POST /assistente` | 15 perguntas por minuto por usuário; 300 por dia por empresa | `429` |
+| `GET /motorista` | 30 consultas por minuto por usuário (a tela consulta a cada 20 s) | `429` |
 
 As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 
@@ -59,7 +62,9 @@ As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 | `403` | perfil sem permissão | `seu perfil não tem acesso a esta ação` |
 | `404` | item inexistente ou de outra empresa (as duas respondem igual) | `não encontrado` / `dispositivo não encontrado` |
 
-Perfis: `operador` (consulta) e `gestor` (consulta e cadastra).
+Perfis: `operador` (consulta), `gestor` (consulta e cadastra) e `motorista` (só `GET /motorista`,
+com o veículo vinculado à conta, e a própria conta: `GET /eu`, `POST /senha`, `POST /sair`; as
+demais rotas do painel respondem `403`).
 
 ## Sensor
 
@@ -97,6 +102,9 @@ veículo usa `demonstrativo`). Dentro de `[min, max]` é `NORMAL`; até `margem`
 `ATENCAO`; além disso, `CRITICO`. `min` nulo significa sem limite inferior. O sensor usa a
 `faixa` devolvida para acender os LEDs.
 
+**Alerta push**: quando a leitura piora de faixa, os usuários inscritos da empresa recebem uma
+notificação (ver [Alertas push](#alertas-push-push)).
+
 ## Acesso
 
 ### `GET /perfis`
@@ -125,7 +133,7 @@ Acesso: aberto. Cria a empresa e o primeiro usuário, com perfil `gestor`.
 | `senha` | 8 a 128 caracteres |
 
 Respostas: `201 {"token", "usuario": {"id", "nome", "perfil", "empresaId", "empresa"}}`;
-`400` validação; `409` `já existe uma conta com esse e-mail`. O id da empresa é gerado
+`400` validação; `409` `já existe uma conta com esse e-mail`; `429` `muitos cadastros deste IP. Tente de novo em 1 hora.` O id da empresa é gerado
 (`E-` + 8 caracteres hexadecimais).
 
 ### `POST /login`
@@ -150,24 +158,66 @@ o gestor também tira a conta da espera ao redefinir a senha (`PUT /usuarios/{em
 
 ### `GET /eu`
 
-Acesso: operador, gestor. Resposta `200`: `{"id", "nome", "perfil", "empresaId", "empresa"}`.
+Acesso: operador, gestor, motorista. Resposta `200`: `{"id", "nome", "perfil", "empresaId", "empresa"}`,
+mais `veiculo` (código do veículo vinculado) quando o perfil é `motorista`. A resposta do login
+traz o mesmo objeto em `usuario`.
 
 ### `POST /senha`
 
-Acesso: operador, gestor. Troca a própria senha.
+Acesso: operador, gestor, motorista. Troca a própria senha.
 
 ```json
 {"atual": "********", "nova": "********"}
 ```
 
 `nova` com 8 a 128 caracteres e diferente de `atual`. Respostas: `200 {"token", "usuario"}`
-(novo token; os anteriores param de valer); `400` validação ou `atual: senha atual incorreta`.
+(novo token; os anteriores param de valer); `400` validação ou `atual: senha atual incorreta`; `429` `muitas tentativas de senha atual erradas. Aguarde alguns minutos.` (conta em espera: a senha atual errada conta na mesma espera do login e, durante ela, nem a senha certa troca; ao trocar com sucesso a contagem zera).
 
 ### `POST /sair`
 
-Acesso: operador, gestor. Sem corpo. Encerra **todas** as sessões do usuário (todos os
+Acesso: operador, gestor, motorista. Sem corpo. Encerra **todas** as sessões do usuário (todos os
 aparelhos): sobe a versão da sessão e todo token já emitido passa a receber `401`.
 Resposta: `204`. O painel deve chamar antes de apagar o token guardado no navegador.
+Também apaga as inscrições de alerta push do usuário.
+
+## Alertas push (`/push`)
+
+Web Push padrão (VAPID): o navegador do usuário (Chrome/Edge/Firefox no Android ou no
+computador; Safari no iPhone com o painel instalado na tela inicial, iOS 16.4 ou mais novo) cria
+uma inscrição no serviço de push dele e o painel a envia para a API. Sem serviço pago: a API
+assina cada envio com a chave privada VAPID e o serviço de push do navegador entrega.
+
+| método e rota | acesso | corpo | resposta |
+|---|---|---|---|
+| `GET /push/chave` | público | — | `200 {"chave"}` (chave pública VAPID, base64url); `503` sem chaves configuradas |
+| `POST /push/inscricao` | operador, gestor | `PushSubscription.toJSON()`: `{"endpoint", "keys": {"p256dh", "auth"}}` | `201 {"inscricoes": n}` |
+| `DELETE /push/inscricao` | operador, gestor | `{"endpoint"}` | `204` (também quando o endpoint não era do usuário) |
+
+- `endpoint` precisa ser `https` em um serviço de push conhecido (`fcm.googleapis.com`,
+  `*.push.services.mozilla.com`, `*.push.apple.com`, `*.notify.windows.com`); outro endereço dá
+  `400 endpoint: serviço de push não reconhecido`. A API só faz POST para esses hosts.
+- A inscrição fica no documento do usuário (campo `push`, até 10 aparelhos; o mais antigo sai).
+  O mesmo endpoint não se repete, e se estava em outra conta (aparelho compartilhado) sai de lá.
+- `POST /sair` apaga todas as inscrições do usuário; remover o usuário apaga junto.
+
+**Quando o push sai** (no `POST /telemetria`, depois de gravar a leitura nova):
+
+- só quando a faixa **piora** em relação à leitura anterior do mesmo sensor pelo horário da
+  medição: `NORMAL → ATENCAO`, `NORMAL → CRITICO`, `ATENCAO → CRITICO`. Mesma faixa ou melhora
+  não avisam; o reenvio duplicado (`200 duplicada`) não chega a esse ponto;
+- no máximo 1 push por sensor e faixa a cada 10 min (contador no container `limites`), para a
+  leitura que oscila na borda da faixa não virar uma notificação a cada 20 s;
+- leitura medida há mais de 30 min (fila offline do sensor chegando depois) não avisa;
+- vai para todas as inscrições dos usuários da **empresa do sensor**.
+
+Conteúdo da notificação (JSON cifrado de ponta a ponta, só o navegador lê):
+`{"titulo", "corpo", "url", "tag", "status", "deviceId"}`, com `url` `/alertas?veiculo=<código>`
+(ou `/alertas` se o sensor não está em veículo). Falha no envio nunca muda a resposta da
+telemetria (fica só no log, sem endereço nem chaves); o serviço de push respondendo `404` ou
+`410` (inscrição expirada) faz a API apagar a inscrição.
+
+Configuração (app settings da Function App): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` (só no app
+setting, nunca no repositório) e `VAPID_SUBJECT` (contato `https://` ou `mailto:`).
 
 ## Chat do site
 
@@ -250,6 +300,39 @@ Os textos do retrato (nomes, tipos, cargas, cidades) foram digitados por usuári
 trazer instruções maliciosas. O prompt manda o modelo tratar o bloco como dado, nunca como
 instrução, e não escrever links nem pedir login ou credencial; e a resposta passa pelo mesmo
 filtro de links do `POST /chat`.
+
+## Motorista
+
+### `GET /motorista`
+
+Acesso: só `motorista` (operador e gestor recebem `403`). Somente leitura. Alimenta a tela do
+motorista no celular e devolve **apenas o veículo vinculado à conta**: o veículo vem do cadastro
+do usuário, relido do banco a cada chamada, nunca da URL.
+
+```json
+{
+  "veiculo": {"id": "CT-001", "tipo": "Caminhão baú refrigerado", "perfil": "manga"},
+  "faixa": {"nome": "Manga", "min": 10.0, "max": 13.0, "margem": 3.0},
+  "leitura": {"temperatura": 11.8, "umidade": 87.0, "status": "NORMAL",
+              "medidoEm": "2026-11-10T21:30:00+00:00"},
+  "status": "NORMAL",
+  "minutosSemLeitura": 1,
+  "viagem": {"origem": "Petrolina - PE", "destino": "Suape - PE",
+             "carga": "Manga Tommy, 12 paletes", "inicio": "2026-11-10T06:00:00-03:00", "fim": null}
+}
+```
+
+- `leitura`: a mais nova do sensor do veículo, ou `null` se ele nunca enviou (ou o veículo está
+  sem sensor). `leitura.status` é a classificação gravada com ela.
+- `status`: `NORMAL`, `ATENCAO`, `CRITICO` (os mesmos da telemetria) ou `SEM_LEITURA`, quando
+  não há leitura ou a última foi medida há mais de 5 min (o sensor envia a cada 20 s). Sem
+  sinal, `leitura` continua com o último valor, para a tela mostrá-lo como antigo.
+- `minutosSemLeitura`: minutos inteiros desde a medição da última leitura; `null` sem leitura.
+- `viagem`: a viagem do veículo em curso (começou e não tem fim, ou o fim ainda não chegou); com
+  mais de uma, a que começou por último. `null` quando não há.
+
+Erros: `401`; `403` para outro perfil; `404` `nenhum veículo vinculado a este motorista; fale com o
+gestor` (o veículo saiu da frota); `429` `muitas consultas seguidas. Tente de novo em 1 min.`
 
 ## Leituras
 
@@ -383,13 +466,16 @@ Todas as operações exigem perfil gestor e valem só para a empresa dele.
 
 | método e rota | corpo | resposta |
 |---|---|---|
-| `GET /usuarios` | — | `200 {"usuarios": [{"id", "nome", "perfil"}]}` |
-| `POST /usuarios` | `{"email", "nome", "perfil", "senha"}` | `201 {"id", "nome", "perfil", "empresaId"}` |
-| `PUT /usuarios/{email}` | `{"senha"}` | `200 {"id", "nome", "perfil", "empresaId"}`: redefine a senha de outro usuário, derruba as sessões dele e tira a conta da espera do login |
+| `GET /usuarios` | — | `200 {"usuarios": [{"id", "nome", "perfil", "veiculo"?}]}` |
+| `POST /usuarios` | `{"email", "nome", "perfil", "senha", "veiculo"?}` | `201 {"id", "nome", "perfil", "empresaId", "veiculo"?}` |
+| `PUT /usuarios/{email}` | `{"senha"}` e/ou `{"veiculo"}` | `200 {"id", "nome", "perfil", "empresaId", "veiculo"?}`: com `senha`, redefine a senha de outro usuário, derruba as sessões dele e tira a conta da espera do login; com `veiculo`, troca o veículo de um motorista (sem mexer na senha nem nas sessões) |
 | `DELETE /usuarios/{email}` | — | `204` |
 
-Regras do `POST` iguais às de `POST /empresas` (sem `empresa`), com `perfil` `operador` ou
-`gestor`. Erros: `400` validação, `você não pode remover o próprio usuário` ou, no `PUT`
+Regras do `POST` iguais às de `POST /empresas` (sem `empresa`), com `perfil` `operador`,
+`gestor` ou `motorista`. `veiculo` é obrigatório no perfil `motorista` e proibido nos outros, e
+precisa ser um veículo da frota da empresa (de outra empresa responde igual a inexistente):
+`veiculo: obrigatório para o perfil motorista`, `veiculo: só o perfil motorista tem veículo
+vinculado`, `veiculo: CT-999 não está cadastrado na frota`. Erros: `400` validação, `você não pode remover o próprio usuário` ou, no `PUT`
 com o próprio e-mail, `para trocar a própria senha use Configurações → Trocar senha` (a
 própria senha só muda com a atual, em `POST /senha`); `404`
 `não encontrado`; `409` `já existe um usuário com esse e-mail`.

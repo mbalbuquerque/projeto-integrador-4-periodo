@@ -27,6 +27,7 @@ import time
 from azure.cosmos import exceptions
 
 MINUTO = 60
+HORA = 3600
 DIA = 24 * 3600
 # Folga do TTL depois do fim da janela, para o contador não sumir no meio dela.
 FOLGA_TTL_S = 300

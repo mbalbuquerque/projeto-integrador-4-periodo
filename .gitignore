@@ -21,3 +21,8 @@ cloud/function/publicar.zip
 
 # Copia temporaria do sketch para compilar (ver CONTRIBUTING.md)
 build/
+
+# Backup logico do Cosmos (dado real: e-mail, hash de senha, leituras). Nunca versionar.
+backups-coldtrack/
+*.jsonl
+manifesto.json

@@ -8,13 +8,16 @@ Público:
   POST /api/login               e-mail e senha -> token de 8 h
   GET  /api/perfis              perfis de carga e faixas de temperatura
   GET  /api/health              estado do serviço e do banco (200 ou 503)
+  GET  /api/push/chave          chave pública VAPID dos alertas push
   POST /api/chat                pergunta ao assistente do site (Azure OpenAI)
 
 Painel (token do login no header `Authorization: Bearer <token>`):
-  GET  /api/eu                  dados do usuário logado
+  GET  /api/eu                  dados do usuário logado                 (todos os perfis)
   POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
-  POST /api/senha               troca a própria senha                   (operador, gestor)
-  POST /api/sair                encerra todas as sessões do usuário     (operador, gestor)
+  POST /api/senha               troca a própria senha                   (todos os perfis)
+  POST /api/sair                encerra todas as sessões do usuário     (todos os perfis)
+  POST/DELETE /api/push/inscricao  inscreve ou remove o aparelho nos alertas push (operador, gestor)
+  GET  /api/motorista           leitura, faixa e viagem do veículo vinculado (motorista)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/predict             risco de passar de 30 °C por mês e hora (operador, gestor)
   GET  /api/dispositivos        sensores da empresa, com último contato e online (operador, gestor)
@@ -41,6 +44,7 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import azure.functions as func
@@ -50,6 +54,7 @@ import assistente
 import chat
 import limites
 import predicao
+import push
 from cadastros import (
     EMAIL,
     SENHA_MIN,
@@ -59,6 +64,7 @@ from cadastros import (
     validar_usuario,
     validar_veiculo,
     validar_viagem,
+    validar_vinculo,
 )
 from contrato import (
     PERFIL_PADRAO,
@@ -96,10 +102,19 @@ HASH_FALSO = gerar_hash(uuid.uuid4().hex)
 
 TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
+MOTORISTA = ("motorista",)
+# A própria conta (ver, trocar a senha, sair) vale para todo perfil; o resto do
+# painel continua só de operador e gestor (o motorista recebe 403).
+CONTA = TODOS + MOTORISTA
 SEP = "~"
 
 # Sensor sem leitura recebida há mais que isso aparece como offline (6 ciclos de 20 s).
 LIMITE_ONLINE_S = 120
+
+# Tela do motorista: última leitura mais velha que isso vira SEM_LEITURA (15 ciclos de 20 s).
+LIMITE_SINAL_MOTORISTA_S = 5 * 60
+# A tela consulta a cada 20 s (3 por minuto); 30 por minuto por usuário segura um laço.
+MOTORISTA_POR_MINUTO = 30
 
 # Limites de uso (contados no Cosmos, valem somando todas as instâncias):
 # chat do site: 10 perguntas por minuto por IP e 2000 por dia no total;
@@ -108,6 +123,17 @@ CHAT_POR_MINUTO = 10
 CHAT_POR_DIA = 2000
 ASSISTENTE_POR_MINUTO = 15
 ASSISTENTE_POR_DIA = 300
+
+# Cadastro de empresa: até 5 por IP por hora. Uma empresa se cadastra uma vez;
+# 5 cobre erros de digitação que chegam ao banco (e-mail repetido), um escritório
+# ou uma sala de aula atrás do mesmo IP, e ainda limita um script a 120 contas
+# por dia por IP.
+EMPRESAS_POR_HORA_POR_IP = 5
+MSG_CADASTRO_LIMITE = "muitos cadastros deste IP. Tente de novo em 1 hora."
+
+# Troca de senha: a senha atual errada conta na mesma espera crescente do login.
+MSG_SENHA_EM_ESPERA = ("muitas tentativas de senha atual erradas. "
+                       "Aguarde alguns minutos.")
 
 # Login: até 20 tentativas erradas por IP a cada 15 minutos.
 LOGIN_FALHAS_POR_IP = 20
@@ -193,7 +219,8 @@ def autorizar(req, perfis):
 
 
 def publico(usuario):
-    return {k: usuario[k] for k in ("id", "nome", "perfil", "empresaId") if k in usuario}
+    return {k: usuario[k] for k in ("id", "nome", "perfil", "empresaId", "veiculo")
+            if k in usuario}
 
 
 def com_empresa(usuario):
@@ -258,7 +285,7 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
 
     empresa = dispositivo["empresaId"]
     veiculo = next(iter(container("veiculos").query_items(
-        "SELECT TOP 1 c.perfil FROM c WHERE c.empresaId = @e AND c.deviceId = @d",
+        "SELECT TOP 1 c.id, c.perfil FROM c WHERE c.empresaId = @e AND c.deviceId = @d",
         parameters=[{"name": "@e", "value": empresa},
                     {"name": "@d", "value": dispositivo["id"]}],
         enable_cross_partition_query=True)), None)
@@ -299,9 +326,129 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
                         leitura["id"])
         return resposta(
             {"erros": ["já existe leitura deste sensor neste horário, com outros valores"]}, 409)
+    # Só leitura nova chega aqui (reenvio duplicado já respondeu): o push nunca repete.
+    # Qualquer falha do push fica no log; a leitura já está gravada e a resposta é 201.
+    try:
+        avisar_por_push(leitura, id_externo(veiculo)["id"] if veiculo else None, medido, recebido)
+    except Exception as e:
+        logging.warning("push: falha ao avisar a transição (%s)", type(e).__name__)
     # A faixa volta na resposta: o sensor acende o LED certo para a carga do veículo.
     return resposta({"id": leitura["id"], "status": leitura["status"],
                      "perfil": perfil, "faixa": faixa(perfil)}, 201)
+
+
+# ------------------------------------------------------------ alertas push
+
+def avisar_por_push(leitura, veiculo, medido, recebido):
+    """Manda push aos usuários da empresa quando a leitura piora de faixa.
+
+    Só na transição (NORMAL -> ATENCAO/CRITICO, ATENCAO -> CRITICO), comparando com a
+    leitura anterior do mesmo sensor pelo horário da medição; no máximo 1 push por
+    sensor e faixa a cada push.INTERVALO_S; leitura atrasada (fila offline) não avisa.
+    Inscrição que o serviço de push diz que expirou (404/410) é apagada.
+    Devolve quantos pushes o serviço de push aceitou.
+    """
+    if not push.configurado() or leitura["status"] == "NORMAL":
+        return 0
+    if (recebido - medido).total_seconds() > push.IDADE_MAX_S:
+        return 0
+    anterior = next(iter(container().query_items(
+        "SELECT TOP 1 c.status FROM c WHERE c.deviceId = @device AND c.medidoEm < @antes "
+        "ORDER BY c.medidoEm DESC",
+        parameters=[{"name": "@device", "value": leitura["deviceId"]},
+                    {"name": "@antes", "value": leitura["medidoEm"]}],
+        partition_key=leitura["deviceId"])), None)
+    status_anterior = (anterior or {}).get("status")
+    if not push.piorou(status_anterior, leitura["status"]):
+        return 0
+    if not LIMITES.permitir(f"push:{leitura['deviceId']}:{leitura['status']}", 1,
+                            push.INTERVALO_S):
+        return 0
+
+    conteudo = push.mensagem(leitura, veiculo)
+    usuarios = [u for u in lista("usuarios", leitura["empresaId"], "c.id, c.push")
+                if u.get("push")]
+    envios = [(u, i) for u in usuarios for i in u["push"]]
+    if not envios:
+        return 0
+    # Em paralelo: com vários aparelhos, o sensor não espera um envio depois do outro.
+    with ThreadPoolExecutor(max_workers=min(8, len(envios))) as executor:
+        resultados = list(executor.map(lambda par: push.enviar(par[1], conteudo), envios))
+
+    expiradas = {}
+    for (usuario, inscricao), resultado in zip(envios, resultados):
+        if resultado == "expirada":
+            expiradas.setdefault(usuario["id"], set()).add(inscricao["endpoint"])
+    for usuario in usuarios:
+        if usuario["id"] in expiradas:
+            _patch_usuario(usuario["id"], [{"op": "set", "path": "/push", "value": push.sem(
+                usuario["push"], expiradas[usuario["id"]])}])
+    aceitos = resultados.count("ok")
+    logging.info("push: %s %s -> %s, %d de %d aceitos, %d expirados",
+                 leitura["deviceId"], status_anterior or "sem anterior", leitura["status"],
+                 aceitos, len(envios), sum(len(e) for e in expiradas.values()))
+    return aceitos
+
+
+@app.route(route="push/chave", methods=["GET"])
+def push_chave(req: func.HttpRequest) -> func.HttpResponse:
+    """Chave pública VAPID: o navegador precisa dela para criar a inscrição."""
+    if not push.configurado():
+        return resposta({"erros": ["alertas push indisponíveis"]}, 503)
+    return resposta({"chave": push.chave_publica()})
+
+
+def _tirar_de_outros(endpoint, dono):
+    """O mesmo navegador entrou com outra conta: a conta anterior para de receber nele.
+
+    Sem isso, um aparelho compartilhado receberia alertas de duas contas (ou de
+    duas empresas) depois de trocar de usuário.
+    """
+    donos = container("usuarios").query_items(
+        "SELECT c.id, c.push FROM c WHERE EXISTS("
+        "SELECT VALUE p FROM p IN c.push WHERE p.endpoint = @endpoint)",
+        parameters=[{"name": "@endpoint", "value": endpoint}],
+        enable_cross_partition_query=True)
+    for outro in donos:
+        inscricoes = outro.get("push") or []
+        if outro["id"] != dono and any(i.get("endpoint") == endpoint for i in inscricoes):
+            _patch_usuario(outro["id"], [{"op": "set", "path": "/push",
+                                          "value": push.sem(inscricoes, {endpoint})}])
+
+
+@app.route(route="push/inscricao", methods=["POST", "DELETE"])
+def push_inscricao(req: func.HttpRequest) -> func.HttpResponse:
+    """POST guarda a inscrição do aparelho no usuário; DELETE tira (idempotente)."""
+    usuario, erro = autorizar(req, TODOS)
+    if erro:
+        return erro
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    inscricoes = usuario.get("push") or []
+
+    if req.method.upper() == "DELETE":
+        erros, endpoint = push.validar_remocao(dados)
+        if erros:
+            return resposta({"erros": erros}, 400)
+        if any(i.get("endpoint") == endpoint for i in inscricoes):
+            _patch_usuario(usuario["id"], [{"op": "set", "path": "/push",
+                                            "value": push.sem(inscricoes, {endpoint})}])
+            logging.info("%s removeu um aparelho dos alertas push",
+                         mascarar_email(usuario["id"]))
+        return func.HttpResponse(status_code=204)
+
+    erros, doc = push.validar_inscricao(dados)
+    if erros:
+        return resposta({"erros": erros}, 400)
+    doc["criadaEm"] = datetime.now(timezone.utc).isoformat()
+    _tirar_de_outros(doc["endpoint"], usuario["id"])
+    novas = push.juntar(inscricoes, doc)
+    if _patch_usuario(usuario["id"], [{"op": "set", "path": "/push", "value": novas}]) is None:
+        return resposta({"erros": ["faça login para continuar"]}, 401)
+    logging.info("%s inscreveu um aparelho nos alertas push (%d no total)",
+                 mascarar_email(usuario["id"]), len(novas))
+    return resposta({"inscricoes": len(novas)}, 201)
 
 
 # ------------------------------------------------------------ acesso
@@ -319,6 +466,11 @@ def empresas(req: func.HttpRequest) -> func.HttpResponse:
     erros, doc = validar_empresa(dados)
     if erros:
         return resposta({"erros": erros}, 400)
+    # Conta só o pedido válido (que chega ao banco): erro de validação não gasta o limite.
+    if not LIMITES.permitir(f"empresas:ip:{ip_do_cliente(req.headers)}",
+                            EMPRESAS_POR_HORA_POR_IP, limites.HORA):
+        logging.warning("cadastro recusado: IP acima de %d por hora", EMPRESAS_POR_HORA_POR_IP)
+        return resposta({"erros": [MSG_CADASTRO_LIMITE]}, 429)
 
     empresa_id = "E-" + uuid.uuid4().hex[:8].upper()
     usuario = doc["usuario"]
@@ -409,13 +561,13 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="eu", methods=["GET"])
 def eu(req: func.HttpRequest) -> func.HttpResponse:
-    usuario, erro = autorizar(req, TODOS)
+    usuario, erro = autorizar(req, CONTA)
     return erro or resposta(com_empresa(usuario))
 
 
 @app.route(route="senha", methods=["POST"])
 def senha(req: func.HttpRequest) -> func.HttpResponse:
-    usuario, erro = autorizar(req, TODOS)
+    usuario, erro = autorizar(req, CONTA)
     if erro:
         return erro
     dados, erro = corpo_json(req)
@@ -424,15 +576,25 @@ def senha(req: func.HttpRequest) -> func.HttpResponse:
     erros, doc = validar_troca_senha(dados)
     if erros:
         return resposta({"erros": erros}, 400)
+    # Conta em espera (mesma do login): nem a senha certa troca a senha. Aqui o
+    # dono já está autenticado, então a resposta pode dizer a verdade (429).
+    if bloqueado_ate(usuario) > 0:
+        logging.warning("troca de senha recusada para %s (conta em espera)",
+                        mascarar_email(usuario["id"]))
+        return resposta({"erros": [MSG_SENHA_EM_ESPERA]}, 429)
     if not conferir_senha(doc["atual"], usuario["senhaHash"]):
+        _registrar_falha(usuario)
         return resposta({"erros": ["atual: senha atual incorreta"]}, 400)
 
     # Nova versão da sessão: tokens emitidos antes (outros aparelhos) param de valer.
     # Patch: grava só a senha e a sessão, sem regravar o resto do cadastro.
-    atualizado = _patch_usuario(usuario["id"], [
+    operacoes = [
         {"op": "set", "path": "/senhaHash", "value": gerar_hash(doc["nova"])},
         {"op": "incr", "path": "/sessao", "value": 1},
-    ])
+    ]
+    if usuario.get("falhas") or usuario.get("bloqueadoAte"):
+        operacoes += OPERACOES_DE_SUCESSO  # senha certa zera a contagem de falhas
+    atualizado = _patch_usuario(usuario["id"], operacoes)
     if atualizado is None:
         return resposta({"erros": ["faça login para continuar"]}, 401)
     logging.info("%s trocou a senha", mascarar_email(usuario["id"]))
@@ -442,11 +604,15 @@ def senha(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="sair", methods=["POST"])
 def sair(req: func.HttpRequest) -> func.HttpResponse:
-    """Sai de todos os aparelhos: sobe a versão da sessão e todo token emitido morre."""
-    usuario, erro = autorizar(req, TODOS)
+    """Sai de todos os aparelhos: sobe a versão da sessão e todo token emitido morre.
+
+    Também tira as inscrições de push: aparelho sem sessão não recebe alerta da empresa.
+    """
+    usuario, erro = autorizar(req, CONTA)
     if erro:
         return erro
-    _patch_usuario(usuario["id"], [{"op": "incr", "path": "/sessao", "value": 1}])
+    _patch_usuario(usuario["id"], [{"op": "incr", "path": "/sessao", "value": 1},
+                                   {"op": "set", "path": "/push", "value": []}])
     logging.info("%s saiu (sessões encerradas)", mascarar_email(usuario["id"]))
     return func.HttpResponse(status_code=204)
 
@@ -626,6 +792,78 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
     if filtros["status"] is None:
         corpo["lacunas"] = lacunas_de_sequencia(itens)
     return resposta(corpo)
+
+
+# ------------------------------------------------------------ tela do motorista
+
+def _instante(texto):
+    """datetime de um ISO 8601 gravado no banco, ou None se faltar ou estiver quebrado."""
+    try:
+        return datetime.fromisoformat(str(texto).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def viagem_ativa(empresa, codigo, agora):
+    """Viagem do veículo em curso: começou e não terminou (sem fim ou fim no futuro).
+
+    Com mais de uma em curso (cadastro sobreposto), vale a que começou por último.
+    """
+    ativas = []
+    for v in lista("viagens", empresa):
+        inicio, fim = _instante(v.get("inicio")), _instante(v.get("fim"))
+        if (v.get("veiculo") == codigo and inicio is not None and inicio <= agora
+                and (v.get("fim") is None or (fim is not None and fim > agora))):
+            ativas.append((inicio, v))
+    if not ativas:
+        return None
+    v = max(ativas, key=lambda par: par[0])[1]
+    return {k: v.get(k) for k in ("origem", "destino", "carga", "inicio", "fim")}
+
+
+@app.route(route="motorista", methods=["GET"])
+def motorista(req: func.HttpRequest) -> func.HttpResponse:
+    """Só o veículo vinculado ao motorista: última leitura, faixa e viagem em curso.
+
+    Somente leitura. O veículo vem do cadastro do usuário (relido do banco a cada
+    chamada), nunca da URL: um motorista não tem como pedir o veículo de outro.
+    """
+    usuario, erro = autorizar(req, MOTORISTA)
+    if erro:
+        return erro
+    if not LIMITES.permitir(f"motorista:usuario:{usuario['id']}", MOTORISTA_POR_MINUTO,
+                            limites.MINUTO):
+        return resposta({"erros": ["muitas consultas seguidas. Tente de novo em 1 min."]}, 429)
+    empresa = usuario["empresaId"]
+    codigo = usuario.get("veiculo")
+    veiculo = ler("veiculos", id_interno(empresa, codigo)) if codigo else None
+    if veiculo is None or veiculo.get("empresaId") != empresa:
+        return resposta({"erros": ["nenhum veículo vinculado a este motorista; "
+                                   "fale com o gestor"]}, 404)
+
+    perfil = veiculo.get("perfil", PERFIL_PADRAO)
+    agora = datetime.now(timezone.utc)
+    ultima = consultar_leituras(veiculo["deviceId"], empresa, 1) if veiculo.get("deviceId") else []
+    leitura, minutos, status = None, None, "SEM_LEITURA"
+    if ultima:
+        u = ultima[0]
+        leitura = {"temperatura": u["temperatura"], "umidade": u["umidade"],
+                   "status": u["status"], "medidoEm": u["medidoEm"]}
+        medido = _instante(u["medidoEm"])
+        if medido is not None:
+            minutos = max(0, int((agora - medido).total_seconds() // 60))
+            if (agora - medido).total_seconds() <= LIMITE_SINAL_MOTORISTA_S:
+                status = u["status"]
+
+    return resposta({
+        "veiculo": {"id": codigo, "tipo": veiculo.get("tipo", ""), "perfil": perfil},
+        "faixa": {"nome": PERFIS_CARGA.get(perfil, PERFIS_CARGA[PERFIL_PADRAO])["nome"],
+                  **faixa(perfil)},
+        "leitura": leitura,
+        "status": status,
+        "minutosSemLeitura": minutos,
+        "viagem": viagem_ativa(empresa, codigo, agora),
+    })
 
 
 # ------------------------------------------------------------ risco térmico (modelo)
@@ -810,6 +1048,13 @@ def viagens(req: func.HttpRequest) -> func.HttpResponse:
                      gerar_id=lambda: "V-" + uuid.uuid4().hex[:6].upper())
 
 
+def _veiculo_inexistente(empresa, codigo):
+    """Erro se o veículo do motorista não está na frota da empresa (outra empresa = inexistente)."""
+    if ler("veiculos", id_interno(empresa, codigo)) is None:
+        return [f"veiculo: {codigo} não está cadastrado na frota"]
+    return []
+
+
 @app.route(route="usuarios/{id?}", methods=["GET", "POST", "PUT", "DELETE"])
 def usuarios(req: func.HttpRequest) -> func.HttpResponse:
     gestor, erro = autorizar(req, GESTOR)
@@ -821,7 +1066,8 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
     item_id = (req.route_params.get("id") or "").lower()
 
     if metodo == "GET":
-        return resposta({"usuarios": lista("usuarios", empresa, "c.id, c.nome, c.perfil")})
+        return resposta({"usuarios": lista("usuarios", empresa,
+                                           "c.id, c.nome, c.perfil, c.veiculo")})
 
     if metodo in ("PUT", "DELETE"):
         alvo = ler("usuarios", item_id) if item_id else None
@@ -846,23 +1092,39 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
         if item_id == gestor["id"]:
             return resposta({"erros": [
                 "para trocar a própria senha use Configurações → Trocar senha"]}, 400)
+        dados = dados if isinstance(dados, dict) else {}
+        operacoes = []
+        # Troca do veículo do motorista (só esse perfil tem veículo).
+        if "veiculo" in dados:
+            erros = []
+            codigo = validar_vinculo(dados, alvo.get("perfil"), erros)
+            erros = erros or _veiculo_inexistente(empresa, codigo)
+            if erros:
+                return resposta({"erros": erros}, 400)
+            operacoes.append({"op": "set", "path": "/veiculo", "value": codigo})
         # Gestor redefine a senha de quem esqueceu: derruba as sessões abertas
         # e tira a conta da espera do login.
-        nova = (dados or {}).get("senha") if isinstance(dados, dict) else None
-        if not isinstance(nova, str) or not SENHA_MIN <= len(nova) <= 128:
-            return resposta({"erros": [f"senha: no mínimo {SENHA_MIN} caracteres"]}, 400)
-        atualizado = _patch_usuario(item_id, [
-            {"op": "set", "path": "/senhaHash", "value": gerar_hash(nova)},
-            {"op": "incr", "path": "/sessao", "value": 1},
-            *OPERACOES_DE_SUCESSO,
-        ])
+        if "senha" in dados or not operacoes:
+            nova = dados.get("senha")
+            if not isinstance(nova, str) or not SENHA_MIN <= len(nova) <= 128:
+                return resposta({"erros": [f"senha: no mínimo {SENHA_MIN} caracteres"]}, 400)
+            operacoes += [
+                {"op": "set", "path": "/senhaHash", "value": gerar_hash(nova)},
+                {"op": "incr", "path": "/sessao", "value": 1},
+                *OPERACOES_DE_SUCESSO,
+            ]
+        atualizado = _patch_usuario(item_id, operacoes)
         if atualizado is None:
             return resposta({"erros": ["não encontrado"]}, 404)
-        logging.info("%s redefiniu a senha de %s", mascarar_email(gestor["id"]),
+        logging.info("%s alterou %s de %s", mascarar_email(gestor["id"]),
+                     " e ".join(o["path"].lstrip("/") for o in operacoes
+                                if o["path"] in ("/veiculo", "/senhaHash")),
                      mascarar_email(item_id))
         return resposta(publico(atualizado))
 
     erros, doc = validar_usuario(dados)
+    if not erros and "veiculo" in doc:
+        erros = _veiculo_inexistente(empresa, doc["veiculo"])
     if erros:
         return resposta({"erros": erros}, 400)
 
