@@ -74,7 +74,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| CC-01 | Persona, jornada e proposta de valor com pesquisa | `docs/ux/` | Pesquisa secundária com 13 fontes públicas e 5 entrevistas simuladas, identificadas como simuladas; persona, jornada e proposta de valor derivadas. Falta validação com usuários reais | Parcial |
+| CC-01 | Persona, jornada e proposta de valor com pesquisa | `docs/ux/` | Pesquisa secundária com 13 fontes públicas e 5 entrevistas simuladas, identificadas como simuladas; persona, jornada e proposta de valor derivadas. Questionário (`roteiro-pesquisa-real.md`) aplicado a 5 respondentes simulados, com tarefas e SUS simulados (média 73,5), em `respostas-pesquisa-simulada.md`, por decisão da equipe em 17/11 (#38). Não houve coleta com usuários reais | Parcial |
 
 ## Tech English
 
