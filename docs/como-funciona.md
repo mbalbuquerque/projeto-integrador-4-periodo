@@ -628,7 +628,8 @@ React 18 + Vite 5 + React Router 6, em JavaScript, publicado como site estático
 | `/viagens` | Viagens com faixa registrada, tempo fora da faixa e gráfico; registrar e encerrar (gestor) | `/viagens`, `/leituras` |
 | `/alertas` | Ocorrências fora da faixa (leituras seguidas viram uma ocorrência), 24 h ou 7 dias | `/leituras` |
 | `/relatorios` | Média, mínima, máxima, percentual fora da faixa, gráfico e CSV | `/leituras` |
-| `/configuracoes` | Trocar senha; usuários (gestor) | `/senha`, `/usuarios` |
+| `/configuracoes` | Trocar senha; usuários (gestor), com o perfil Motorista e o veículo dele | `/senha`, `/usuarios`, `/veiculos` |
+| `/motorista` | **Só o perfil motorista**, no celular: temperatura grande, status em cor e texto (NORMAL, ATENÇÃO, CRÍTICO, SEM SINAL), faixa, última leitura e viagem; alerta local (vibração, bipe, notificação) quando piora, aviso até voltar ao normal, tela acesa (Wake Lock), faixa sem conexão com o último valor marcado como antigo | `/motorista` |
 | `/monitoramento` | Tela demonstrativa que lê o canal público do ThingSpeak (`thingspeak.js`) | ThingSpeak |
 | `/usuarios`, `/auditoria`, `/cadastro-usuario`, `/logistica` | Telas demonstrativas com dados de exemplo, sem API | — |
 | todas as logadas | Botão do **assistente do painel** (`AssistentePainel`, montado no `PainelLayout`) | `POST /assistente` |
@@ -650,7 +651,9 @@ fazer login (a etiqueta não dá acesso sozinha).
 `front: src/lib/sessao.js` guarda `{ token, usuario, expiraEm }` no `localStorage`
 (`coldtrack.sessao`), com `expiraEm` tirado do `exp` do JWT; sessão vencida é descartada antes de
 usar. `useSessao().sair()` chama `POST /sair` (melhor esforço, 5 s), limpa a sessão e volta ao
-login. `RequireAuth` protege as rotas logadas; `ehGestor` esconde os botões de gestor. Quem decide
+login. `RequireAuth` protege as rotas logadas; `ehGestor` esconde os botões de gestor. O
+motorista vai do login direto para `/motorista` (`rotaInicial`), e qualquer outra rota logada o
+leva de volta para lá; `/motorista` manda operador e gestor ao `/dashboard`. Quem decide
 de verdade é a API (403).
 
 ### 6.4 "Sem dados desde", indicador de conexão e selo online/offline
