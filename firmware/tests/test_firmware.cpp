@@ -136,7 +136,8 @@ void test_payload_com_seq() {
     std::string s(buffer);
 
     ASSERT(s == "{\"deviceId\":\"coldtrack-01\",\"temperatura\":12.4,\"umidade\":81.0,"
-                "\"rssi\":-58,\"seq\":4294967295,\"medidoEm\":1790000000}");
+                "\"rssi\":-58,\"seq\":4294967295,\"medidoEm\":1790000000,"
+                "\"origem\":\"placa\"}");
 
     // seq 0 = firmware sem sequencia: o campo nao vai.
     montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 0, 0);
