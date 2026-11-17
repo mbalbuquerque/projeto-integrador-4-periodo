@@ -63,6 +63,21 @@ class TestValidar(unittest.TestCase):
         self.assertTrue(validar({**VALIDO, "senha": "x"}))
 
 
+class TestOrigem(unittest.TestCase):
+    def test_ausente_continua_valido(self):
+        self.assertEqual(validar(VALIDO), [])
+
+    def test_valida(self):
+        for valor in ("placa", "simulador"):
+            self.assertEqual(validar({**VALIDO, "origem": valor}), [])
+
+    def test_invalida(self):
+        for valor in ("real", "Placa", "", None, 1, True):
+            with self.subTest(origem=valor):
+                self.assertIn("origem: use placa ou simulador",
+                              validar({**VALIDO, "origem": valor}))
+
+
 class TestSeq(unittest.TestCase):
     def test_ausente_continua_valido(self):
         # Placa com firmware antigo não manda seq.

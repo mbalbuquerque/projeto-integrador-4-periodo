@@ -10,7 +10,8 @@ Payload esperado (POST /api/telemetria):
   "umidade": 81.0,
   "rssi": -58,
   "medidoEm": 1790000000,     (opcional: epoch UTC em segundos da medição)
-  "seq": 42                   (opcional: número de sequência da leitura no sensor)
+  "seq": 42,                  (opcional: número de sequência da leitura no sensor)
+  "origem": "placa"           (opcional: "placa" ou "simulador")
 }
 """
 
@@ -27,6 +28,10 @@ RSSI_MIN, RSSI_MAX = -120, 0
 
 # Número de sequência: contador do sensor, gravado na flash (uint32 no ESP32).
 SEQ_MIN, SEQ_MAX = 1, 2**32 - 1
+
+# Origem da leitura: placa física ou simulador (Wokwi). Firmware antigo não manda.
+ORIGENS = ("placa", "simulador")
+ORIGEM_NAO_INFORMADA = "nao_informada"
 
 # Janela aceita para o horário da medição.
 MEDIDO_FUTURO_MAX_S = 5 * 60
@@ -106,7 +111,12 @@ def validar(dados, agora=None):
         if not isinstance(seq, int) or isinstance(seq, bool) or not SEQ_MIN <= seq <= SEQ_MAX:
             erros.append(f"seq: inteiro de {SEQ_MIN} a {SEQ_MAX}")
 
-    extras = set(dados) - {"deviceId", "temperatura", "umidade", "rssi", "medidoEm", "seq"}
+    # origem: placa física ou simulador, opcional (firmware antigo não manda).
+    if "origem" in dados and dados["origem"] not in ORIGENS:
+        erros.append("origem: use " + " ou ".join(ORIGENS))
+
+    extras = set(dados) - {"deviceId", "temperatura", "umidade", "rssi", "medidoEm", "seq",
+                           "origem"}
     if extras:
         erros.append("campos não previstos: " + ", ".join(sorted(extras)))
 

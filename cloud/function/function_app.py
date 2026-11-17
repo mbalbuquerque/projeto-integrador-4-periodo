@@ -74,6 +74,7 @@ from cadastros import (
     validar_vinculo,
 )
 from contrato import (
+    ORIGEM_NAO_INFORMADA,
     PERFIL_PADRAO,
     PERFIS_CARGA,
     classificar,
@@ -339,6 +340,7 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         "status": classificar(dados["temperatura"], perfil),
         "medidoEm": medido.isoformat(),
         "recebidoEm": recebido.isoformat(),
+        "origem": dados.get("origem", ORIGEM_NAO_INFORMADA),
     }
     if "seq" in dados:
         leitura["seq"] = dados["seq"]
@@ -977,11 +979,11 @@ def consultar_leituras(device, empresa, limite, desde=None, status=None):
     if status is not None:
         condicoes.append("ARRAY_CONTAINS(@status, c.status)")
         parametros.append({"name": "@status", "value": status})
-    return list(
+    itens = list(
         container().query_items(
             query=(
                 "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
-                "c.perfil, c.status, c.medidoEm, c.recebidoEm, c.seq FROM c WHERE "
+                "c.perfil, c.status, c.medidoEm, c.recebidoEm, c.seq, c.origem FROM c WHERE "
                 + " AND ".join(condicoes)
                 + " ORDER BY c.medidoEm DESC"
             ),
@@ -989,6 +991,11 @@ def consultar_leituras(device, empresa, limite, desde=None, status=None):
             partition_key=device,
         )
     )
+    for item in itens:
+        # Leitura gravada antes do campo existir (ou por firmware antigo).
+        if item.get("origem") is None:
+            item["origem"] = ORIGEM_NAO_INFORMADA
+    return itens
 
 
 @app.route(route="leituras", methods=["GET"])

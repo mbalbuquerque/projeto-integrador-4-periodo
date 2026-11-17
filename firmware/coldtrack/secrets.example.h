@@ -12,6 +12,10 @@
 #define WIFI_SSID     "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
 
+// Origem da leitura no banco: este exemplo e o build do simulador Wokwi, entao marca
+// "simulador". Na placa fisica APAGUE esta linha (sem ela o padrao e "placa").
+#define ORIGEM_SIMULADOR
+
 // Sensor: descomente na placa física com DHT11 (o padrão é DHT22, usado no Wokwi)
 // #define DHT_TYPE DHT11
 

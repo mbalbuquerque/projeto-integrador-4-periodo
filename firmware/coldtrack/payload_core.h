@@ -10,9 +10,10 @@
 #include <string>
 
 // seq: numero de sequencia da leitura (1, 2, 3...); 0 = sem seq (campo omitido).
+// origem: "placa" (padrao) ou "simulador"; nulo/vazio = "placa".
 inline void montarPayloadCore(char *destino, size_t tamanho, const char *deviceId,
                               float temperatura, float umidade, long rssi, time_t medidoEm,
-                              uint32_t seq = 0) {
+                              uint32_t seq = 0, const char *origem = "placa") {
     char rssiJson[16];
     if (rssi < 0) {
         snprintf(rssiJson, sizeof(rssiJson), "%ld", rssi);
@@ -31,8 +32,9 @@ inline void montarPayloadCore(char *destino, size_t tamanho, const char *deviceI
     }
 
     snprintf(destino, tamanho,
-             "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s%s%s}",
-             deviceId ? deviceId : "", temperatura, umidade, rssiJson, seqJson, medidoJson);
+             "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s%s%s,\"origem\":\"%s\"}",
+             deviceId ? deviceId : "", temperatura, umidade, rssiJson, seqJson, medidoJson,
+             (origem && origem[0]) ? origem : "placa");
 }
 
 // Heartbeat (POST /api/heartbeat): placa viva sem leitura valida para enviar.
