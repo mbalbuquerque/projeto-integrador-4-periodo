@@ -1,0 +1,90 @@
+name: Backup logico
+
+# Teste de restauracao do backup logico do Cosmos DB: gera um banco sintetico no emulador oficial,
+# exporta para JSONL, restaura em outro banco e confere contagens e um documento por container.
+# So dado ficticio; a chave do emulador e publica. Nunca toca em producao.
+on:
+  pull_request:
+    paths:
+      - "infra/backup/**"
+      - ".github/workflows/backup-logico.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/backup/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restauracao:
+    name: Exportar e restaurar no emulador
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TESTE_COSMOS_ENDPOINT: http://localhost:8081
+      # Chave publica e documentada do emulador (nao e segredo).
+      TESTE_COSMOS_KEY: C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install azure-cosmos==4.17.1 pytest==9.0.2 ruff==0.17.4
+
+      - name: Lint
+        run: ruff check --line-length 100 --select E,F,W,I infra/backup
+
+      - name: Subir o emulador do Cosmos DB
+        run: |
+          docker run -d --name cosmos -p 8081:8081 \
+            mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview --protocol http
+          for i in $(seq 1 60); do
+            python - <<'EOF' && break
+          import os, sys
+          from azure.cosmos import CosmosClient
+          try:
+              CosmosClient(os.environ["TESTE_COSMOS_ENDPOINT"],
+                           credential=os.environ["TESTE_COSMOS_KEY"]).create_database_if_not_exists("pronto")
+          except Exception as e:
+              print("emulador ainda nao respondeu:", type(e).__name__)
+              sys.exit(1)
+          EOF
+            sleep 5
+          done
+
+      - name: Testes (funcoes e ida e volta no emulador)
+        run: python -m pytest infra/backup -v -rs
+
+      - name: Roteiro por linha de comando (exportar.py e restaurar.py)
+        run: |
+          python - <<'EOF'
+          import os
+          from azure.cosmos import CosmosClient, PartitionKey
+          c = CosmosClient(os.environ["TESTE_COSMOS_ENDPOINT"], credential=os.environ["TESTE_COSMOS_KEY"])
+          b = c.create_database_if_not_exists("cli-origem")
+          for nome, pk in {"usuarios": "/id", "leituras": "/deviceId"}.items():
+              ct = b.create_container_if_not_exists(nome, partition_key=PartitionKey(path=pk))
+              for i in range(5):
+                  ct.upsert_item({"id": f"{nome}-{i}", "deviceId": "d1", "valor": i})
+          EOF
+          export COSMOS_ENDPOINT=$TESTE_COSMOS_ENDPOINT COSMOS_KEY=$TESTE_COSMOS_KEY
+          python infra/backup/exportar.py "$RUNNER_TEMP/export" --banco cli-origem | tee resultado.txt
+          export DEST_ENDPOINT=$TESTE_COSMOS_ENDPOINT DEST_KEY=$TESTE_COSMOS_KEY
+          python infra/backup/restaurar.py "$RUNNER_TEMP/export" --banco cli-destino | tee -a resultado.txt
+          # a recusa de producao tem de funcionar pela linha de comando tambem
+          if DEST_ENDPOINT=https://exemplo.documents.azure.com:443/ python infra/backup/restaurar.py "$RUNNER_TEMP/export"; then
+            echo "restaurar.py aceitou um endpoint Azure"; exit 1
+          fi
+
+      - name: Guardar resultado
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-logico
+          path: resultado.txt
+          if-no-files-found: ignore
