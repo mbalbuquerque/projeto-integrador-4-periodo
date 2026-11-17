@@ -324,8 +324,10 @@ mensagem; painel → placa começa com `CT<`, placa → painel com `CT>`; o rest
 CT<{"cmd":"info"}
 CT>{"id":"coldtrack-a1b2c3","chip":"coldtrack-a1b2c3","configurado":false,"ssid":"","wifi":false,"fw":"2026.09.28"}
 CT<{"cmd":"config","ssid":"..","senha":"..","id":"..","chave":".."}
-CT>{"ok":true,"wifi":"conectado","rssi":-55,"id":".."}
-CT>{"ok":false,"erro":"senha","motivo":15}
+CT>{"ok":true,"wifi":"conectado","rssi":-55,"canal":6,"seguranca":"wpa2","id":".."}
+CT>{"ok":false,"erro":"sinal_fraco","motivo":15,"rssi":-84,"canal":11,"seguranca":"wpa2"}
+CT<{"cmd":"redes"}
+CT>{"ok":true,"redes":[{"ssid":"..","rssi":-61,"canal":6,"seguranca":"wpa2"}]}
 ```
 
 Lado da placa (`lerSerial`, `tratarComando`, `testarWiFi`):
@@ -334,9 +336,29 @@ Lado da placa (`lerSerial`, `tratarComando`, `testarWiFi`):
   configurada, a rede e a versão do firmware.
 - `wifi` troca só a rede (exige identidade já gravada); `config` grava rede, ID e chave.
 - Valida: rede de 1 a 32 caracteres, senha até 63, ID de 3 a 40, chave com pelo menos 16.
-- **Testa a rede antes de gravar** (até 15 s, `TESTE_WIFI_MS`), traduzindo o motivo do driver
-  em `senha`, `rede_nao_encontrada` ou `tempo`. Se falhar, **nada é gravado** e a placa volta para
-  a rede anterior.
+- **Procura a rede antes de testar** (`procurarRede`): scan dirigido ao nome (acha também rede
+  oculta) e guarda o AP de sinal mais forte (RSSI, canal, segurança). Não achou → `rede_nao_encontrada`
+  (o ESP32-C3 só tem rádio 2.4 GHz: rede só de 5 GHz não aparece); WPA-Enterprise (802.1X, login
+  com usuário) → `rede_corporativa`; WEP ou WPA antigo → `seguranca_incompativel`. Rede aberta
+  ignora a senha digitada.
+- **Testa a rede antes de gravar** (até 25 s com a rede achada, `TESTE_WIFI_ACHADA_MS`; 15 s sem
+  scan, `TESTE_WIFI_MS`), traduzindo o motivo do driver (`traduzirMotivo`) em `senha`,
+  `sinal_fraco` (handshake que estoura com RSSI abaixo de -80 dBm, `RSSI_FRACO`, ou perda de
+  beacon), `sem_ip` (associou, mas o DHCP não respondeu), `seguranca_incompativel`,
+  `rede_corporativa`, `rede_nao_encontrada` ou `tempo`. A resposta leva o `motivo` numérico do
+  driver (`wifi_err_reason_t`) e, se o scan achou a rede, `rssi`, `canal` e `seguranca`; a serial
+  registra o motivo com o nome (`WIFI: ..., motivo 15 (4WAY_HANDSHAKE_TIMEOUT)`). Se falhar,
+  **nada é gravado** e a placa volta para a rede anterior.
+- `redes` faz um scan e devolve até 15 redes 2.4 GHz vistas (uma por nome, o AP mais forte), da
+  mais forte para a mais fraca, com `ssid`, `rssi`, `canal` e `seguranca`. Nenhuma senha.
+- Toda tentativa de conexão (`iniciarWiFi`) começa com `WiFi.disconnect()`: sem isso, um `begin`
+  no meio da tentativa anterior é recusado pelo driver (`sta is connecting, cannot set config`) e
+  a tentativa em curso é atropelada. O scan é em todos os canais e escolhe o AP pelo sinal
+  (`WIFI_ALL_CHANNEL_SCAN` + `WIFI_CONNECT_AP_BY_SIGNAL`); o padrão entra no primeiro AP com o
+  nome, e em campus há vários APs com o mesmo SSID. A potência reduzida da placa com tela é
+  aplicada antes do `begin` (o modo estação já está ligado desde o `setup`). Sem rede, o loop
+  tenta de novo a cada 30 s (`RECONEXAO_MS`); no meio, o driver segue tentando sozinho e a
+  leitura e a fila continuam.
 - Se conectou, grava no `Preferences` (namespace `config`). Se o ID mudou, apaga a fila (as
   leituras guardadas eram de outra identidade e a nuvem recusaria).
 - Senha e chave nunca voltam pela serial nem aparecem no log.
@@ -350,8 +372,10 @@ Lado do site (`front: src/pages/Sensores/serial.js`, classe `SensorUsb`, e `Sens
 3. `situacaoDaPlaca` (`front: src/pages/Sensores/sensores.js`) decide o caso: **novo** (registra
    com `POST /api/dispositivos`, que devolve a chave), **nova-chave** (sensor já registrado sem
    chave gravada: `PUT /api/dispositivos/{id}` gera outra), **trocar-rede** (só manda `cmd: wifi`).
-4. `configurar()` manda o comando e espera até 25 s pela resposta (a placa testa a rede por até
-   15 s). Se a rede falhar, a chave já gerada é reaproveitada na próxima tentativa.
+4. `configurar()` manda o comando e espera até 45 s pela resposta (scan + teste de até 25 s na
+   placa). Se a rede falhar, a chave já gerada é reaproveitada na próxima tentativa; a mensagem
+   (`mensagemDeErro`) diz o motivo e acrescenta sinal, canal e o motivo numérico do driver.
+   O botão "Ver redes que o sensor enxerga" (`redes()`) lista o scan da placa.
 5. `esperarPrimeiraLeitura`: consulta `GET /api/leituras` a cada 5 s por até 2 min e só aceita
    leitura recebida depois da configuração; aí mostra **ONLINE** com a temperatura.
 
