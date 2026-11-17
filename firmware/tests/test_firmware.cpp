@@ -40,6 +40,19 @@ void test_payload_com_rssi_negativo_e_medido_em() {
     PASS();
 }
 
+void test_payload_origem() {
+    TEST("montarPayloadCore leva origem (padrao placa, simulador quando pedido)");
+    char buffer[256];
+    montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 1790000000, 5);
+    ASSERT(std::string(buffer).find("\"origem\":\"placa\"") != std::string::npos);
+    montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 1790000000, 5,
+                      "simulador");
+    ASSERT(std::string(buffer).find("\"origem\":\"simulador\"") != std::string::npos);
+    montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 0, 0, "");
+    ASSERT(std::string(buffer).find("\"origem\":\"placa\"") != std::string::npos);
+    PASS();
+}
+
 void test_payload_com_rssi_positivo_vira_null() {
     TEST("montarPayloadCore com RSSI positivo vai como null");
     char buffer[256];
@@ -123,7 +136,8 @@ void test_payload_com_seq() {
     std::string s(buffer);
 
     ASSERT(s == "{\"deviceId\":\"coldtrack-01\",\"temperatura\":12.4,\"umidade\":81.0,"
-                "\"rssi\":-58,\"seq\":4294967295,\"medidoEm\":1790000000}");
+                "\"rssi\":-58,\"seq\":4294967295,\"medidoEm\":1790000000,"
+                "\"origem\":\"placa\"}");
 
     // seq 0 = firmware sem sequencia: o campo nao vai.
     montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 0, 0);
@@ -199,6 +213,7 @@ int main() {
     test_heartbeat();
     test_url_do_heartbeat();
     test_payload_com_rssi_negativo_e_medido_em();
+    test_payload_origem();
     test_payload_com_rssi_positivo_vira_null();
     test_payload_com_seq();
     test_extrair_numero_do_json();

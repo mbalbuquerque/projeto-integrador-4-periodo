@@ -268,7 +268,9 @@ internet.
 3. Corpo, montado por `montarPayload`:
    `{"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58,"medidoEm":1790000000}`.
    RSSI maior ou igual a zero (valor impossível, aparece no simulador) vai como `null`. Sem relógio
-   sincronizado, o `medidoEm` é omitido.
+   sincronizado, o `medidoEm` é omitido. O campo `origem` (`"placa"` ou `"simulador"`, fixado na
+   compilação: o build do Wokwi define `ORIGEM_SIMULADOR`) é gravado com a leitura; firmware antigo
+   não envia e a leitura fica como `nao_informada`. Outro valor é recusado com `400`.
 4. Resposta `201`: gravado; atualiza a faixa. `200`: a leitura já estava gravada (reenvio).
    Outro código: registra o erro.
 5. Cada envio imprime uma linha `MEDIDA;https;<ms>;<bytes enviados>;<bytes recebidos>;<ok>`

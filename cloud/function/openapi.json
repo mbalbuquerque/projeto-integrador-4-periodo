@@ -3525,6 +3525,11 @@
             "type": "number",
             "description": "Optional. UTC epoch in seconds of the measurement: up to 5 min in the future and up to 7 days in the past. Without it, the time of receipt is used."
           },
+          "origem": {
+            "type": "string",
+            "enum": ["placa", "simulador"],
+            "description": "Optional. Where the reading came from: the physical board (`placa`) or the Wokwi simulator (`simulador`). Without it (older firmware) the reading is stored as `nao_informada`. Any other value is rejected with 400."
+          },
           "seq": {
             "type": "integer",
             "minimum": 1,
@@ -3538,7 +3543,8 @@
           "umidade": 81.0,
           "rssi": -58,
           "medidoEm": 1794240000,
-          "seq": 42
+          "seq": 42,
+          "origem": "placa"
         }
       },
       "TelemetriaGravada": {
@@ -3731,6 +3737,11 @@
           "seq": {
             "type": "integer",
             "description": "Sequence number sent by the sensor. Absent for readings of firmware without it."
+          },
+          "origem": {
+            "type": "string",
+            "enum": ["placa", "simulador", "nao_informada"],
+            "description": "Where the reading came from: physical board, Wokwi simulator, or `nao_informada` (older firmware or reading stored before the field existed)."
           }
         },
         "example": {
