@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include <Preferences.h>
 #include <esp_task_wdt.h>
+#include <esp_sntp.h>
 #include "secrets.h"
 #include "azure_ca.h"
 // Montagem do payload, leitura de numero no JSON e classificacao da faixa:
@@ -95,7 +96,7 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.17.2"
+#define FW_VERSAO "2026.11.17.3"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
@@ -134,6 +135,23 @@ String cfgSenha;
 String cfgId;
 String cfgChave;
 
+// ID e chave sao lidos pela tarefa de envio e trocados pela configuracao pelo
+// cabo (loop): a troca e a leitura passam por esta trava.
+SemaphoreHandle_t cfgTrava = nullptr;
+
+
+String copiarCfg(const String &campo) {
+
+  if (cfgTrava) {
+    xSemaphoreTake(cfgTrava, portMAX_DELAY);
+  }
+  String copia = campo;
+  if (cfgTrava) {
+    xSemaphoreGive(cfgTrava);
+  }
+  return copia;
+}
+
 // Melhor AP com o nome pedido, visto no scan antes do teste de rede. Fica
 // aqui no topo porque o Arduino gera os prototipos antes da primeira funcao.
 struct ApVisto {
@@ -147,17 +165,37 @@ struct ApVisto {
 ApVisto ultimoAp = { false, false, 0, 0, WIFI_AUTH_OPEN };
 
 
-// Tempo maximo de espera da requisicao HTTPS, em ms.
-#define HTTP_TIMEOUT_MS 5000
+// Limites de cada envio. Somados, o pior caso de uma requisicao HTTPS fica
+// em ~17 s, bem abaixo do watchdog. O envio roda em tarefa propria: nem esse
+// pior caso atrasa a proxima medicao.
+#define HTTP_TIMEOUT_MS     5000   // resposta do servidor, em ms
+#define CONEXAO_TIMEOUT_MS  4000   // conexao TCP, em ms
+#define TLS_HANDSHAKE_S     8      // handshake TLS, em s (o padrao do core e 120 s)
+
+// Serial USB (ESP32-C3): com o cabo num computador que nao esta lendo a porta,
+// cada escrita esperava ate 2 s (20 x 100 ms) e um ciclo com ~25 prints levava
+// ~58 s a mais (ciclo de 78 s medido em 17/11). Com 5 ms, o que nao cabe no
+// buffer e descartado: o log se perde, a medicao nao atrasa.
+#define SERIAL_TX_TIMEOUT_MS 5
 
 // ================= STORE-AND-FORWARD =================
 //
 // Sem conexao (estrada sem sinal), a leitura fica guardada na flash
 // e e reenviada quando a conexao volta, com o horario da medicao.
 
+// Toda leitura entra na fila ANTES do envio (gravada logo depois de ganhar o
+// numero de sequencia) e so sai quando a nuvem confirma. Um reinicio no meio
+// do envio (watchdog, gravacao, porta serial aberta com DTR) nao perde a
+// leitura: ela sai depois do boot com o mesmo seq e medidoEm, e a nuvem
+// responde 200 se ja tinha gravado.
+
 #define FILA_ARQUIVO      "/fila.jsonl"
 #define FILA_MAX          500   // ~2h45 de leituras a cada 20 s
-#define REENVIO_POR_CICLO 10    // limita o tempo gasto reenviando por ciclo
+#define REENVIO_POR_LOTE  10    // linhas lidas da flash por vez
+
+// Leitura sem relogio (NTP ainda nao respondeu) sai sem medidoEm se for
+// recente (a nuvem usa a hora da chegada); mais velha, espera o relogio.
+#define SEM_RELOGIO_RECENTE_MS 40000
 
 // Teste: finge conexao caida por N segundos (0 = desligado), a partir de
 // SIMULAR_QUEDA_INICIO_S segundos ligado (padrao 0: desde o boot).
@@ -171,6 +209,18 @@ ApVisto ultimoAp = { false, false, 0, 0, WIFI_AUTH_OPEN };
 // Teste (simulador): com SIMULAR_API_STATUS definido, o envio nao sai da
 // placa e devolve esse status HTTP (201 = gravado, 401 = chave recusada...).
 // Serve para provar a tela e o LED sem escrever na API de producao.
+// SIMULAR_ENVIO_MS: quanto o envio simulado demora (padrao 800 ms, uma
+// requisicao normal; 35000 prova que envio lento nao empurra a medicao).
+#ifndef SIMULAR_ENVIO_MS
+#define SIMULAR_ENVIO_MS 800
+#endif
+
+// Teste: reinicia a placa no meio do primeiro envio depois de N segundos
+// ligada (0 = desligado), para provar que a leitura em curso nao se perde.
+// Depois desse reinicio (por software) nao reinicia de novo.
+#ifndef SIMULAR_REINICIO_ENVIO_S
+#define SIMULAR_REINICIO_ENVIO_S 0
+#endif
 
 // Teste: finge relogio sem sincronizar nos primeiros N segundos (0 = desligado).
 #ifndef SIMULAR_SEM_RELOGIO_S
@@ -455,9 +505,10 @@ uint32_t proximaSeq() {
 // Watchdog de tarefa (TWDT) no loop: se o loop passar WATCHDOG_S sem
 // alimentar o watchdog (travou em rede, flash ou sensor), a placa reinicia.
 // A fila (LittleFS) e a sequencia (Preferences) estao na flash, entao o
-// envio retoma sozinho depois do reinicio. Os trechos longos (Wi-Fi, reenvio
-// da fila) alimentam o watchdog no meio; o pior caso legitimo entre duas
-// alimentacoes e uma requisicao HTTPS (conexao + TLS + 5 s de resposta).
+// envio retoma sozinho depois do reinicio. Vigia as duas tarefas: o loop
+// (medicao) e a tarefa de envio. Os trechos longos alimentam o watchdog no
+// meio; o pior caso legitimo entre duas alimentacoes e uma requisicao HTTPS
+// ou uma conexao MQTT (4 s de TCP + 8 s de TLS + 5 s de resposta).
 
 #ifndef WATCHDOG_S
 #define WATCHDOG_S 60
@@ -508,9 +559,63 @@ bool reiniciouPorWatchdog() {
 // Sensor mudo (DHT sem resposta) para de enviar e aparece offline no painel:
 // sem medicao nao ha garantia da carga, e esse e o alerta certo.
 
+// Agenda fixa: 20 s do inicio de um ciclo ao inicio do seguinte. O envio
+// (HTTPS, MQTT, fila) roda na tarefa de envio e nao empurra a medicao.
 const unsigned long INTERVALO_ENVIO = 20000;
 
-unsigned long ultimoEnvio = 0;
+unsigned long proximoCiclo = 0;     // millis() marcado para o proximo ciclo
+bool cicloImediato = true;          // mede ja (boot, configuracao pelo cabo)
+
+
+// ================= TAREFA DE ENVIO =================
+//
+// O loop mede, numera, grava na fila e avisa; esta tarefa esvazia a fila
+// (HTTPS), manda o heartbeat e publica no MQTT. Rede lenta ou fora do ar
+// atrasa so o envio, nunca o proximo ciclo.
+
+TaskHandle_t tarefaEnvioHandle = nullptr;
+SemaphoreHandle_t filaTrava = nullptr;   // fila na flash: o loop grava, a tarefa de envio le e apaga
+
+volatile bool pausaEnvio = false;        // configuracao pelo cabo mexendo na rede/identidade
+volatile bool envioOcupado = false;      // tarefa de envio no meio de uma requisicao
+volatile bool heartbeatPendente = false;
+volatile unsigned long heartbeatPedidoEm = 0;
+
+// Ultima leitura para o MQTT (so a do ciclo, feita com rede).
+portMUX_TYPE mqttLeituraTrava = portMUX_INITIALIZER_UNLOCKED;
+struct LeituraMqtt {
+  bool pendente;
+  float temperatura;
+  float umidade;
+  long rssi;
+  unsigned long em;
+};
+LeituraMqtt leituraMqtt = { false, 0, 0, 0, 0 };
+
+
+// Trava da fila enquanto o objeto existe (recursiva: uma funcao com a trava
+// pode chamar outra que tambem trava).
+class TravaFila {
+public:
+  TravaFila() {
+    if (filaTrava) {
+      xSemaphoreTakeRecursive(filaTrava, portMAX_DELAY);
+    }
+  }
+  ~TravaFila() {
+    if (filaTrava) {
+      xSemaphoreGiveRecursive(filaTrava);
+    }
+  }
+};
+
+
+void avisarEnvio() {
+
+  if (tarefaEnvioHandle) {
+    xTaskNotifyGive(tarefaEnvioHandle);
+  }
+}
 
 
 // ==========================================================
@@ -1076,12 +1181,14 @@ void atualizarFaixa(const String &resposta) {
   faixaMax = novoMax;
   faixaMargem = novaMargem;
 
-  // Grava so quando muda: poupa a flash.
-  preferencias.begin("coldtrack", false);
-  preferencias.putFloat("min", faixaMin);
-  preferencias.putFloat("max", faixaMax);
-  preferencias.putFloat("margem", faixaMargem);
-  preferencias.end();
+  // Grava so quando muda: poupa a flash. Objeto proprio: roda na tarefa de
+  // envio, ao mesmo tempo que o loop grava o seq no `preferencias`.
+  Preferences flash;
+  flash.begin("coldtrack", false);
+  flash.putFloat("min", faixaMin);
+  flash.putFloat("max", faixaMax);
+  flash.putFloat("margem", faixaMargem);
+  flash.end();
 
   Serial.print("FAIXA: nova faixa da carga ");
   Serial.print(isnan(faixaMin) ? String("-") : String(faixaMin, 1));
@@ -1096,8 +1203,15 @@ void atualizarFaixa(const String &resposta) {
 // Retorna o status HTTP (201 = gravado) ou um codigo negativo de falha de rede.
 int postarAzure(const char *payload) {
 
+  if (SIMULAR_REINICIO_ENVIO_S > 0 && millis() > SIMULAR_REINICIO_ENVIO_S * 1000UL &&
+      esp_reset_reason() != ESP_RST_SW) {
+    Serial.println("TESTE: reiniciando a placa no meio do envio.");
+    Serial.flush();
+    ESP.restart();
+  }
+
 #ifdef SIMULAR_API_STATUS
-  esperarAtualizando(800);   // tempo de uma requisicao de verdade
+  delay(SIMULAR_ENVIO_MS);   // tempo da requisicao (tarefa de envio: nao desenha a tela)
   Serial.print("Azure (SIMULADO, nada saiu da placa): status ");
   Serial.println(SIMULAR_API_STATUS);
   return SIMULAR_API_STATUS;
@@ -1105,8 +1219,10 @@ int postarAzure(const char *payload) {
 
   ClienteContado clienteSeguro;
   clienteSeguro.setCACert(AZURE_ROOT_CA);
+  clienteSeguro.setHandshakeTimeout(TLS_HANDSHAKE_S);
 
   HTTPClient http;
+  http.setConnectTimeout(CONEXAO_TIMEOUT_MS);
   http.setTimeout(HTTP_TIMEOUT_MS);
 
   // Tempo e bytes do envio inteiro: conexao TCP + TLS + requisicao + resposta.
@@ -1120,7 +1236,7 @@ int postarAzure(const char *payload) {
   }
 
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("x-device-key", cfgChave);
+  http.addHeader("x-device-key", copiarCfg(cfgChave));
 
   int status = http.POST(payload);
 
@@ -1164,14 +1280,15 @@ int postarAzure(const char *payload) {
 int enviarHeartbeat(const char *motivo) {
 
   char payload[160];
-  montarHeartbeatCore(payload, sizeof(payload), cfgId.c_str(), motivo, FW_VERSAO,
+  String id = copiarCfg(cfgId);
+  montarHeartbeatCore(payload, sizeof(payload), id.c_str(), motivo, FW_VERSAO,
                       WiFi.RSSI(), seqAtual);
 
   Serial.print("HEARTBEAT: ");
   Serial.println(payload);
 
 #ifdef SIMULAR_API_STATUS
-  esperarAtualizando(800);
+  delay(800);
   // A rota de heartbeat responde 200 (nao cria nada); 201 simulado vira 200.
   int simulado = SIMULAR_API_STATUS == 201 ? 200 : SIMULAR_API_STATUS;
   Serial.print("HEARTBEAT (SIMULADO, nada saiu da placa): status ");
@@ -1187,8 +1304,10 @@ int enviarHeartbeat(const char *motivo) {
 
   ClienteContado clienteSeguro;
   clienteSeguro.setCACert(AZURE_ROOT_CA);
+  clienteSeguro.setHandshakeTimeout(TLS_HANDSHAKE_S);
 
   HTTPClient http;
+  http.setConnectTimeout(CONEXAO_TIMEOUT_MS);
   http.setTimeout(HTTP_TIMEOUT_MS);
 
   unsigned long inicio = millis();
@@ -1201,7 +1320,7 @@ int enviarHeartbeat(const char *motivo) {
   }
 
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("x-device-key", cfgChave);
+  http.addHeader("x-device-key", copiarCfg(cfgChave));
 
   int status = http.POST(payload);
 
@@ -1233,8 +1352,8 @@ int enviarHeartbeat(const char *motivo) {
 
 #define MQTT_HOST       "mqtt3.thingspeak.com"
 #define MQTT_PORTA      8883
-#define MQTT_KEEPALIVE  120   // s; maior que o pior ciclo (Azure + 10 reenvios)
-#define MQTT_TIMEOUT    5     // s
+#define MQTT_KEEPALIVE  120   // s
+#define MQTT_TIMEOUT    5     // s (resposta do broker)
 
 ClienteContado clienteMqtt;
 PubSubClient mqtt(clienteMqtt);
@@ -1287,6 +1406,8 @@ bool garantirMqtt() {
   }
 
   clienteMqtt.setCACert(AZURE_ROOT_CA);
+  clienteMqtt.setConnectionTimeout(CONEXAO_TIMEOUT_MS);
+  clienteMqtt.setHandshakeTimeout(TLS_HANDSHAKE_S);
   clienteMqtt.zerar();
 
   mqtt.setServer(MQTT_HOST, MQTT_PORTA);
@@ -1365,8 +1486,23 @@ bool falhaTemporaria(int status) {
 // RELOGIO (NTP)
 // ==========================================================
 
+// Relogio so vale depois do NTP responder neste boot. Num reinicio que nao
+// e por falta de energia (watchdog, gravacao, porta aberta com DTR), o ESP32
+// devolve a hora a partir do oscilador RC interno, que deriva: em 17/11 a
+// leitura 266 saiu ~1 min adiantada e chegou "depois" da 270. Ate o NTP, a
+// leitura e guardada com o millis() e ganha o horario quando ele responde.
+volatile bool relogioSincronizado = false;
+
+
+void aoSincronizarRelogio(struct timeval *tv) {
+
+  relogioSincronizado = true;
+}
+
+
 void sincronizarRelogio() {
 
+  sntp_set_time_sync_notification_cb(aoSincronizarRelogio);
   configTime(0, 0, "pool.ntp.org", "time.google.com");
 }
 
@@ -1377,7 +1513,7 @@ bool relogioOk() {
     return false;
   }
 
-  return time(nullptr) >= EPOCH_VALIDO;
+  return relogioSincronizado && time(nullptr) >= EPOCH_VALIDO;
 }
 
 
@@ -1399,8 +1535,14 @@ bool conexaoDisponivel() {
 // ==========================================================
 // FILA EM FLASH (STORE-AND-FORWARD)
 // ==========================================================
+//
+// Uma linha JSON por leitura, da mais antiga para a mais nova. O loop grava
+// no fim (enfileirar); a tarefa de envio le o inicio e apaga o que a nuvem
+// confirmou (descartarEnviadas). TravaFila em toda funcao que abre o arquivo.
 
 int contarFila() {
+
+  TravaFila trava;
 
   File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
 
@@ -1426,8 +1568,10 @@ int contarFila() {
 }
 
 
-// Reescreve a fila pulando as `pular` primeiras linhas.
+// Reescreve a fila pulando as `pular` primeiras linhas (fila cheia).
 void descartarInicioDaFila(int pular) {
+
+  TravaFila trava;
 
   File origem = LittleFS.open(FILA_ARQUIVO, "r");
   File destino = LittleFS.open("/fila.tmp", "w");
@@ -1463,8 +1607,63 @@ void descartarInicioDaFila(int pular) {
 }
 
 
+// Reescreve a fila sem as linhas que a nuvem confirmou. Compara pelo texto
+// (cada linha tem seu seq): se o loop gravou linha nova, ou a fila cheia
+// descartou a mais antiga, no meio do envio, nada que nao saiu e apagado.
+void descartarEnviadas(const String lote[], const bool enviada[], int quantas) {
+
+  TravaFila trava;
+
+  bool tirada[REENVIO_POR_LOTE] = { false };
+
+  File origem = LittleFS.open(FILA_ARQUIVO, "r");
+
+  if (!origem) {
+    filaTamanho = 0;
+    return;
+  }
+
+  File destino = LittleFS.open("/fila.tmp", "w");
+
+  int restantes = 0;
+
+  while (origem.available()) {
+
+    String linha = origem.readStringUntil('\n');
+    linha.trim();
+
+    if (linha.length() == 0) {
+      continue;
+    }
+
+    bool pular = false;
+
+    for (int i = 0; i < quantas; i++) {
+      if (enviada[i] && !tirada[i] && linha == lote[i]) {
+        tirada[i] = true;
+        pular = true;
+        break;
+      }
+    }
+
+    if (!pular) {
+      destino.println(linha);
+      restantes++;
+    }
+  }
+
+  origem.close();
+  destino.close();
+
+  LittleFS.remove(FILA_ARQUIVO);
+  LittleFS.rename("/fila.tmp", FILA_ARQUIVO);
+
+  filaTamanho = restantes;
+}
+
+
 // Linhas guardadas sem relogio levam "ms" (millis da medicao) no lugar do medidoEm.
-bool filaTemMs = false;
+volatile bool filaTemMs = false;
 
 
 bool linhaTemMs(const String &linha) {
@@ -1477,6 +1676,8 @@ bool linhaTemMs(const String &linha) {
 //   converter = true: troca "ms" pelo medidoEm (agora - tempo desde a medicao);
 //   converter = false: descarta (vieram de antes de um reinicio, o millis zerou).
 void reescreverFilaMs(bool converter) {
+
+  TravaFila trava;
 
   File origem = LittleFS.open(FILA_ARQUIVO, "r");
 
@@ -1547,6 +1748,8 @@ void reescreverFilaMs(bool converter) {
 // Procura linhas com "ms" (so no boot; depois o flag acompanha).
 bool filaTemLinhaMs() {
 
+  TravaFila trava;
+
   File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
 
   if (!arquivo) {
@@ -1565,14 +1768,17 @@ bool filaTemLinhaMs() {
 }
 
 
-void enfileirar(const char *payload) {
+// Grava uma linha no fim da fila. false = flash indisponivel.
+bool enfileirar(const char *payload, bool offline) {
+
+  TravaFila trava;
 
   File arquivo = LittleFS.open(FILA_ARQUIVO, "a");
 
   if (!arquivo) {
 
-    Serial.println("FILA: erro ao abrir a flash. Leitura perdida.");
-    return;
+    Serial.println("FILA: erro ao abrir a flash.");
+    return false;
   }
 
   arquivo.println(payload);
@@ -1586,18 +1792,20 @@ void enfileirar(const char *payload) {
     descartarInicioDaFila(filaTamanho - FILA_MAX);
   }
 
-  Serial.print("FILA: leitura guardada offline (");
+  Serial.print(offline ? "FILA: leitura guardada offline (" : "FILA: leitura guardada antes do envio (");
   Serial.print(filaTamanho);
   Serial.println(" na fila).");
+
+  return true;
 }
 
 
-// Guarda a leitura para reenvio. Sem relogio, guarda o millis da medicao.
-void guardarOffline(const char *payload, time_t medidoEm, unsigned long msMedicao) {
+// Guarda a leitura na fila (com ou sem rede: o envio sai da fila). Sem
+// relogio, guarda o millis da medicao. false = flash indisponivel.
+bool guardarLeitura(const char *payload, time_t medidoEm, unsigned long msMedicao, bool offline) {
 
   if (medidoEm > 0) {
-    enfileirar(payload);
-    return;
+    return enfileirar(payload, offline);
   }
 
   String linha = payload;
@@ -1606,13 +1814,72 @@ void guardarOffline(const char *payload, time_t medidoEm, unsigned long msMedica
   linha = linha.substring(0, fim) + ",\"ms\":" + String(msMedicao) + "}";
 
   Serial.println("FILA: sem relogio; guardando com o tempo desde que a placa ligou.");
-  enfileirar(linha.c_str());
-  filaTemMs = true;
+
+  TravaFila trava;
+
+  bool ok = enfileirar(linha.c_str(), offline);
+
+  if (ok) {
+    filaTemMs = true;
+  }
+
+  return ok;
 }
 
 
-// Envia as leituras guardadas, da mais antiga para a mais nova.
-// Para na primeira falha temporaria para manter a ordem.
+// Flash indisponivel: a leitura do ciclo vai direto, uma tentativa so.
+portMUX_TYPE envioDiretoTrava = portMUX_INITIALIZER_UNLOCKED;
+char envioDireto[160];
+bool envioDiretoPendente = false;
+
+
+void pedirEnvioDireto(const char *payload) {
+
+  portENTER_CRITICAL(&envioDiretoTrava);
+  strncpy(envioDireto, payload, sizeof(envioDireto) - 1);
+  envioDireto[sizeof(envioDireto) - 1] = '\0';
+  envioDiretoPendente = true;
+  portEXIT_CRITICAL(&envioDiretoTrava);
+}
+
+
+void registrarResultado(int status) {
+
+  indUltimoHttp = status;
+
+  if (status == 201 || status == 200) {
+    indEnviadoEm = millis();
+  }
+}
+
+
+void enviarDireto() {
+
+  char copia[160];
+  bool tem;
+
+  portENTER_CRITICAL(&envioDiretoTrava);
+  tem = envioDiretoPendente;
+  if (tem) {
+    memcpy(copia, envioDireto, sizeof(copia));
+    envioDiretoPendente = false;
+  }
+  portEXIT_CRITICAL(&envioDiretoTrava);
+
+  if (!tem) {
+    return;
+  }
+
+  Serial.println("Enviando telemetria ao Azure (sem fila: flash indisponivel)...");
+  alimentarWatchdog();
+  registrarResultado(postarAzure(copia));
+}
+
+
+// Envia as leituras da fila, da mais antiga para a mais nova, ate esvaziar ou
+// ate a primeira falha temporaria (para manter a ordem). Roda na tarefa de
+// envio. A trava da fila fica presa so para ler e para reescrever o arquivo,
+// nunca durante a requisicao: o loop grava a leitura nova sem esperar a rede.
 void reenviarFila() {
 
   if (filaTamanho == 0) {
@@ -1623,64 +1890,196 @@ void reenviarFila() {
     reescreverFilaMs(true);
   }
 
-  if (filaTamanho == 0) {
-    return;
+  // Aviso de espera pelo relogio: uma vez so, ate o relogio chegar.
+  static bool avisouRelogio = false;
+
+  if (relogioOk()) {
+    avisouRelogio = false;
   }
 
-  Serial.print("FILA: reenviando (");
-  Serial.print(filaTamanho);
-  Serial.println(" pendentes)...");
+  // Limite de voltas: protege contra reenviar sem fim se o descarte falhar.
+  for (int volta = 0; volta <= FILA_MAX / REENVIO_POR_LOTE &&
+                      filaTamanho > 0 && !pausaEnvio && conexaoDisponivel(); volta++) {
 
-  File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
+    String lote[REENVIO_POR_LOTE];
+    bool enviada[REENVIO_POR_LOTE] = { false };
+    int lidas = 0;
+    int pendentes = 0;
 
-  if (!arquivo) {
+    {
+      TravaFila trava;
 
-    filaTamanho = 0;
-    return;
+      File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
+
+      if (!arquivo) {
+        filaTamanho = 0;
+        return;
+      }
+
+      while (arquivo.available() && lidas < REENVIO_POR_LOTE) {
+
+        String linha = arquivo.readStringUntil('\n');
+        linha.trim();
+
+        if (linha.length() > 0) {
+          lote[lidas++] = linha;
+        }
+      }
+
+      arquivo.close();
+      pendentes = filaTamanho;
+    }
+
+    if (lidas == 0) {
+      break;
+    }
+
+    int enviadas = 0;
+    bool avisouEnvio = false;
+    bool falhou = false;
+
+    for (int i = 0; i < lidas && !pausaEnvio; i++) {
+
+      String corpo = lote[i];
+      unsigned long ms = 0;
+      std::string semMs;
+
+      // Sem relogio ainda: recente sai sem medidoEm (a nuvem usa a hora da
+      // chegada); mais velha espera o NTP (reescreverFilaMs da o horario).
+      if (linhaComMsCore(lote[i].c_str(), &ms, &semMs)) {
+
+        if (millis() - ms > SEM_RELOGIO_RECENTE_MS) {
+          if (!avisouRelogio) {
+            Serial.println("FILA: aguardando o relogio para reenviar leituras sem horario.");
+            avisouRelogio = true;
+          }
+          continue;
+        }
+
+        corpo = semMs.c_str();
+      }
+
+      alimentarWatchdog();
+
+      if (!avisouEnvio) {
+        Serial.print("Enviando telemetria ao Azure (");
+        Serial.print(pendentes);
+        Serial.println(" na fila)...");
+        avisouEnvio = true;
+      }
+
+      Serial.print("FILA: enviando ");
+      Serial.println(corpo);
+
+      int status = postarAzure(corpo.c_str());
+      registrarResultado(status);
+
+      if (falhaTemporaria(status)) {
+        falhou = true;
+        break;
+      }
+
+      // Enviada, ou recusada de vez (4xx): nao adianta reenviar.
+      enviada[i] = true;
+      enviadas++;
+    }
+
+    if (enviadas > 0) {
+
+      descartarEnviadas(lote, enviada, lidas);
+
+      Serial.print("FILA: ");
+      Serial.print(enviadas);
+      Serial.print(" reenviadas, ");
+      Serial.print(filaTamanho);
+      Serial.println(" restantes.");
+    }
+
+    if (falhou || enviadas == 0) {
+      break;
+    }
   }
+}
 
-  int processadas = 0;
 
-  while (arquivo.available() && processadas < REENVIO_POR_CICLO) {
+// ==========================================================
+// TAREFA DE ENVIO
+// ==========================================================
 
-    String linha = arquivo.readStringUntil('\n');
-    linha.trim();
+#define TAREFA_ENVIO_PILHA 12288   // bytes; TLS (mbedTLS) + HTTPClient
+#define TAREFA_ENVIO_ESPERA_MS 1000
 
-    if (linha.length() == 0) {
+
+void tarefaEnvio(void *parametro) {
+
+  esp_task_wdt_add(NULL);
+
+  for (;;) {
+
+    esp_task_wdt_reset();
+
+    // Acorda quando o loop grava uma leitura, ou a cada 1 s (fila antiga,
+    // rede que voltou, keep-alive do MQTT).
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(TAREFA_ENVIO_ESPERA_MS));
+
+    esp_task_wdt_reset();
+
+    if (pausaEnvio || !conexaoDisponivel()) {
       continue;
     }
 
-    // Leitura sem horario so sai depois do relogio (a API nao aceita "ms").
-    if (linhaTemMs(linha)) {
-      Serial.println("FILA: aguardando o relogio para reenviar leituras sem horario.");
-      break;
+#ifdef COM_MQTT
+    // Mantem a conexao viva (PINGREQ) e processa o que o broker mandar.
+    mqtt.loop();
+#endif
+
+    // Heartbeat velho nao diz nada sobre agora: so vale o do ultimo ciclo.
+    bool heartbeat = heartbeatPendente;
+    if (heartbeat && millis() - heartbeatPedidoEm > INTERVALO_ENVIO) {
+      heartbeatPendente = false;
+      heartbeat = false;
     }
 
-    alimentarWatchdog();
+    if (filaTamanho > 0 || heartbeat || envioDiretoPendente) {
 
-    Serial.print("FILA: reenviando ");
-    Serial.println(linha);
+      indEnviando = true;
 
-    int status = postarAzure(linha.c_str());
+      // Primeiro o que ficou guardado, para manter a ordem no banco.
+      reenviarFila();
+      enviarDireto();
 
-    if (falhaTemporaria(status)) {
-      break;
+      if (heartbeat && !pausaEnvio && conexaoDisponivel()) {
+        heartbeatPendente = false;
+        esp_task_wdt_reset();
+        indUltimoHttp = enviarHeartbeat("sensor_falha");
+      }
+
+      indEnviando = false;
     }
 
-    processadas++;
+#ifdef COM_MQTT
+    LeituraMqtt leitura;
+
+    portENTER_CRITICAL(&mqttLeituraTrava);
+    leitura = leituraMqtt;
+    leituraMqtt.pendente = false;
+    portEXIT_CRITICAL(&mqttLeituraTrava);
+
+    // So a leitura deste ciclo (a fila offline e so do HTTPS).
+    if (leitura.pendente && millis() - leitura.em < INTERVALO_ENVIO && !pausaEnvio) {
+      esp_task_wdt_reset();
+      publicarMqtt(leitura.temperatura, leitura.umidade, leitura.rssi);
+    }
+#endif
   }
+}
 
-  arquivo.close();
 
-  if (processadas > 0) {
+void iniciarTarefaEnvio() {
 
-    descartarInicioDaFila(processadas);
-
-    Serial.print("FILA: ");
-    Serial.print(processadas);
-    Serial.print(" reenviadas, ");
-    Serial.print(filaTamanho);
-    Serial.println(" restantes.");
+  if (xTaskCreate(tarefaEnvio, "envio", TAREFA_ENVIO_PILHA, nullptr, 1, &tarefaEnvioHandle) != pdPASS) {
+    Serial.println("ENVIO: sem memoria para a tarefa de envio; nada sera enviado.");
+    tarefaEnvioHandle = nullptr;
   }
 }
 
@@ -2178,8 +2577,11 @@ void listarRedes() {
 
 void apagarFila() {
 
+  TravaFila trava;
+
   LittleFS.remove(FILA_ARQUIVO);
   filaTamanho = 0;
+  filaTemMs = false;
 }
 
 
@@ -2252,6 +2654,10 @@ void tratarComando() {
   Serial.print("CONFIG: testando a rede ");
   Serial.println(ssid);
 
+  // A tarefa de envio para enquanto a rede e a identidade mudam (a requisicao
+  // em curso cai junto com o Wi-Fi e a leitura segue na fila).
+  pausaEnvio = true;
+
   indCabo = CABO_TESTANDO;
   indCaboSsid = ssid;
   desenharIndicadores();
@@ -2281,6 +2687,7 @@ void tratarComando() {
     } else {
       WiFi.disconnect();
     }
+    pausaEnvio = false;
     return;
   }
 
@@ -2298,8 +2705,10 @@ void tratarComando() {
 
     preferencias.putString("id", id);
     preferencias.putString("chave", chave);
+    xSemaphoreTake(cfgTrava, portMAX_DELAY);
     cfgId = id;
     cfgChave = chave;
+    xSemaphoreGive(cfgTrava);
   }
 
   preferencias.end();
@@ -2319,8 +2728,10 @@ void tratarComando() {
 
   sincronizarRelogio();
 
+  pausaEnvio = false;
+
   // Proxima leitura sai ja, para o painel mostrar "online" logo.
-  ultimoEnvio = 0;
+  cicloImediato = true;
 }
 
 
@@ -2333,6 +2744,14 @@ void setup() {
   // Comando de configuracao passa de 200 bytes; o buffer padrao e pequeno.
   Serial.setRxBufferSize(1024);
   Serial.begin(115200);
+
+#if ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE
+  // USB nativo (placa fisica): porta que ninguem le nao segura o firmware.
+  Serial.setTxTimeoutMs(SERIAL_TX_TIMEOUT_MS);
+#endif
+
+  filaTrava = xSemaphoreCreateRecursiveMutex();
+  cfgTrava = xSemaphoreCreateMutex();
 
   iniciarWatchdog();
 
@@ -2408,6 +2827,8 @@ void setup() {
 
   sincronizarRelogio();
 
+  iniciarTarefaEnvio();
+
   Serial.println();
   Serial.println("Sistema iniciado.");
 
@@ -2447,11 +2868,6 @@ void loop() {
     tratarComando();
   }
 
-#ifdef COM_MQTT
-  // Mantem a conexao viva (PINGREQ) e processa o que o broker mandar.
-  mqtt.loop();
-#endif
-
 
   // --------------------------------------------------------
   // Sem Wi-Fi ou sem ID/chave: pisca o amarelo e espera o cabo
@@ -2486,15 +2902,15 @@ void loop() {
   // Verifica conexão Wi-Fi
   // --------------------------------------------------------
 
-  // Uma tentativa nova a cada RECONEXAO_MS: no meio delas o driver segue
-  // tentando sozinho, e a leitura e a fila continuam andando.
+  // Uma tentativa nova a cada RECONEXAO_MS, sem esperar por ela: no meio
+  // delas o driver segue tentando sozinho, e a medicao segue na agenda.
   if (WiFi.status() != WL_CONNECTED &&
       (ultimaTentativaWiFi == 0 || millis() - ultimaTentativaWiFi >= RECONEXAO_MS)) {
 
-    Serial.println("Wi-Fi desconectado.");
-    Serial.println("Tentando reconectar...");
+    Serial.println("Wi-Fi desconectado. Tentando reconectar em segundo plano...");
+    logMotivo("sem conexao");
 
-    conectarWiFi();
+    iniciarWiFi(cfgSsid.c_str(), cfgSenha.c_str());
   }
 
 
@@ -2502,10 +2918,18 @@ void loop() {
   // Controla intervalo de envio
   // --------------------------------------------------------
 
-  if (millis() - ultimoEnvio >= INTERVALO_ENVIO ||
-      ultimoEnvio == 0) {
+  unsigned long agora = millis();
 
-    ultimoEnvio = millis();
+  if (cicloImediato || cicloVencidoCore(agora, proximoCiclo)) {
+
+    // Agenda fixa: o proximo ciclo conta do horario marcado deste, nao do
+    // fim do envio (que roda na tarefa de envio).
+    proximoCiclo = proximoCicloCore(agora, proximoCiclo, INTERVALO_ENVIO, cicloImediato);
+    cicloImediato = false;
+
+    Serial.print("CICLO: ");
+    Serial.print(agora);
+    Serial.println(" ms");
 
 
     // ======================================================
@@ -2542,18 +2966,10 @@ void loop() {
       // sendo reenviada.
       if (conexaoDisponivel()) {
 
-        indEnviando = true;
-        desenharIndicadores();
-
-        reenviarFila();
-
-        alimentarWatchdog();
-
-        int status = enviarHeartbeat("sensor_falha");
-
-        indEnviando = false;
-        indUltimoHttp = status;
-        desenharIndicadores();
+        // A tarefa de envio manda depois de esvaziar a fila.
+        heartbeatPedidoEm = millis();
+        heartbeatPendente = true;
+        avisarEnvio();
       }
 
       else {
@@ -2636,51 +3052,31 @@ void loop() {
 
 
     // ======================================================
-    // ENVIO (Azure com store-and-forward)
+    // FILA E ENVIO (store-and-forward)
     // ======================================================
 
-    if (conexaoDisponivel()) {
+    // A leitura vai para a fila na flash logo depois de ganhar o numero, com
+    // ou sem rede: um reinicio daqui em diante nao a perde. A tarefa de envio
+    // tira da fila quando a nuvem confirma. Nada aqui espera a rede.
+    bool online = conexaoDisponivel();
 
-      Serial.println();
+    if (!online) {
+      Serial.println("Sem conexao. Telemetria nao enviada agora.");
+    }
 
-      // ENVIANDO... na tela antes da requisicao (ela segura o loop ate 5 s).
-      indEnviando = true;
-      desenharIndicadores();
-
-      // Primeiro o que ficou guardado, para manter a ordem no banco.
-      reenviarFila();
-
-      Serial.println("Enviando telemetria ao Azure...");
-
-      alimentarWatchdog();
-
-      int status = postarAzure(payload);
-
-      indEnviando = false;
-      indUltimoHttp = status;
-      if (status == 201 || status == 200) {
-        indEnviadoEm = millis();
-      }
-      desenharIndicadores();
+    if (!guardarLeitura(payload, medidoEm, msMedicao, !online) && online) {
+      pedirEnvioDireto(payload);
+    }
 
 #ifdef COM_MQTT
-      alimentarWatchdog();
-      publicarMqtt(temperatura, umidade, rssi);
+    if (online) {
+      portENTER_CRITICAL(&mqttLeituraTrava);
+      leituraMqtt = { true, temperatura, umidade, rssi, millis() };
+      portEXIT_CRITICAL(&mqttLeituraTrava);
+    }
 #endif
 
-      if (falhaTemporaria(status)) {
-
-        guardarOffline(payload, medidoEm, msMedicao);
-      }
-
-    }
-
-    else {
-
-      Serial.println("Sem conexao. Telemetria nao enviada agora.");
-
-      guardarOffline(payload, medidoEm, msMedicao);
-    }
+    avisarEnvio();
 
 
     Serial.println("----------------------------------------");

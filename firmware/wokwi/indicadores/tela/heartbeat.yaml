@@ -10,7 +10,8 @@
 # Heartbeat com o sensor em falha (issue 35, R7). "fio" e um botao no fio de
 # dados do DHT: pressionado = fio ligado; solto = fio puxado. Queda simulada de
 # 25 s a 80 s: a leitura valida feita sem rede vai para a fila; o heartbeat
-# feito sem rede nao vai; quando a rede volta, a fila sai antes do heartbeat.
+# feito sem rede nao vai; quando a rede volta, a tarefa de envio esvazia a
+# fila (sem esperar o proximo ciclo) e o heartbeat sai no ciclo seguinte.
 name: Heartbeat com sensor em falha
 version: 1
 author: ColdTrack
@@ -23,9 +24,8 @@ steps:
   - wait-serial: "Sem conexao. Heartbeat nao enviado (heartbeat nao vai para a fila)."
   - delay: 300ms
   - take-screenshot: { part-id: oled1, save-to: shots/30-falha-sem-rede.png }
-  - wait-serial: "ERRO: Falha na leitura do sensor!"
   - wait-serial: "FILA: 1 reenviadas, 0 restantes."
-  - wait-serial: "HEARTBEAT: {\"deviceId\":\"coldtrack-sim\",\"motivo\":\"sensor_falha\",\"fw\":\"2026.11.17.2\",\"rssi\":"
+  - wait-serial: "HEARTBEAT: {\"deviceId\":\"coldtrack-sim\",\"motivo\":\"sensor_falha\",\"fw\":\"2026.11.17.3\",\"rssi\":"
   - wait-serial: "HEARTBEAT (SIMULADO, nada saiu da placa): status 200"
   - delay: 300ms
   - take-screenshot: { part-id: oled1, save-to: shots/31-falha-heartbeat.png }

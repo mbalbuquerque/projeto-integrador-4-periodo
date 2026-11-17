@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <math.h>
@@ -63,6 +64,40 @@ inline std::string urlHeartbeatCore(const std::string &urlTelemetria) {
     size_t pos = urlTelemetria.rfind(rota);
     if (pos == std::string::npos) return "";
     return urlTelemetria.substr(0, pos) + "/heartbeat" + urlTelemetria.substr(pos + rota.size());
+}
+
+// Agenda fixa da medicao: o proximo ciclo e o anterior + intervalo, contado do
+// inicio ao inicio, sem depender de quanto o envio demorou. Se a placa ficou
+// parada mais de um intervalo inteiro (configuracao pelo cabo, por exemplo), a
+// agenda recomeca de agora, sem rajada de leituras para compensar.
+// `previsto` e o horario em que o ciclo que comeca agora estava marcado.
+// Conta com a volta do millis() (unsigned).
+inline unsigned long proximoCicloCore(unsigned long agora, unsigned long previsto,
+                                      unsigned long intervalo, bool recomecar) {
+    if (recomecar || agora - previsto >= intervalo) {
+        return agora + intervalo;
+    }
+    return previsto + intervalo;
+}
+
+// Ja passou do horario marcado? (com a volta do millis())
+inline bool cicloVencidoCore(unsigned long agora, unsigned long previsto) {
+    return (long)(agora - previsto) >= 0;
+}
+
+// Linha da fila guardada sem relogio: {...,"ms":<millis da medicao>}.
+// Devolve true e o millis se a linha tem o campo; `semMs` recebe a linha sem ele.
+inline bool linhaComMsCore(const std::string &linha, unsigned long *ms, std::string *semMs) {
+    const std::string campo = ",\"ms\":";
+    size_t pos = linha.find(campo);
+    if (pos == std::string::npos) return false;
+    size_t inicio = pos + campo.size();
+    size_t fim = inicio;
+    while (fim < linha.size() && linha[fim] >= '0' && linha[fim] <= '9') fim++;
+    if (fim == inicio) return false;
+    if (ms) *ms = strtoul(linha.substr(inicio, fim - inicio).c_str(), nullptr, 10);
+    if (semMs) *semMs = linha.substr(0, pos) + linha.substr(fim);
+    return true;
 }
 
 inline float extrairNumeroJson(const std::string &json, const std::string &chave) {

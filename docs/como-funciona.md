@@ -148,7 +148,10 @@ Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.11.17.1"`)
 ### 3.2 `setup()`: o que acontece ao ligar
 
 1. Abre a serial a 115200 baud com buffer de recepção de 1024 bytes (o comando de configuração
-   passa de 200 bytes).
+   passa de 200 bytes). Na placa física (USB nativo), limita a espera de cada escrita a 5 ms
+   (`SERIAL_TX_TIMEOUT_MS`): com o cabo num computador que não lê a porta, cada `print` esperava
+   até 2 s e o ciclo passava de 20 s para ~78 s (medido em 17/11/2026). Agora o log que não cabe
+   no buffer é descartado e a medição não atrasa.
 2. Prepara os LEDs ou a tela ("INICIANDO").
 3. Monta o LittleFS (`LittleFS.begin(true)`: formata a flash se ainda não houver sistema de
    arquivos) e conta a fila pendente (`contarFila`).
@@ -159,32 +162,39 @@ Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.11.17.1"`)
    gravado na flash vale mais que o `secrets.h`; o `secrets.h` só é usado se a flash estiver vazia
    (é o caso do Wokwi).
 6. Liga o Wi-Fi em modo estação e registra o evento de queda (`aoCairWiFi` guarda o motivo).
-7. Conecta ao Wi-Fi (`conectarWiFi`) e pede a hora por NTP (`sincronizarRelogio`).
+7. Conecta ao Wi-Fi (`conectarWiFi`), pede a hora por NTP (`sincronizarRelogio`) e inicia a
+   tarefa de envio (`iniciarTarefaEnvio`).
 
 ### 3.3 `loop()`: um ciclo
+
+O firmware tem duas tarefas. O `loop()` mede, classifica, numera e grava a leitura na fila; a
+**tarefa de envio** (`tarefaEnvio`, FreeRTOS) esvazia a fila por HTTPS, manda o heartbeat e publica
+no MQTT. A medição segue uma **agenda fixa de 20 s, contada do início de um ciclo ao início do
+seguinte** (`proximoCicloCore`): envio lento, servidor fora do ar ou reconexão do MQTT atrasam só o
+envio, nunca a próxima leitura. Se a placa ficar parada mais de um ciclo inteiro (configuração pelo
+cabo), a agenda recomeça daquele instante, sem rajada de leituras. Cada ciclo imprime
+`CICLO: <millis> ms`, que permite medir o intervalo na serial.
 
 ```mermaid
 flowchart TD
     A[lerSerial: chegou comando CT&lt;?] -->|sim| B[tratarComando]
-    A --> M[mqtt.loop, se COM_MQTT]
-    M --> C{tem Wi-Fi configurado<br/>e ID + chave?}
+    A --> C{tem Wi-Fi configurado<br/>e ID + chave?}
     C -->|não| D[amarelo em dois toques / tela SEM CONFIG<br/>espera o cabo]
     C -->|sim| E{Wi-Fi conectado?}
-    E -->|não| F[conectarWiFi: até 20 x 500 ms]
+    E -->|não, 30 s desde a última| F[iniciarWiFi: tentativa nova,<br/>sem esperar]
     E -->|sim| G
-    F --> G{passaram 20 s?}
+    F --> G{chegou a hora marcada?}
     G -->|não| A
-    G -->|sim| H[lerSensor: 2 tentativas]
+    G -->|sim| H[lerSensor: 2 tentativas<br/>marca o próximo ciclo +20 s]
     H -->|falhou| I[FALHA SENSOR: três LEDs piscam<br/>nenhuma leitura enviada]
     I --> P{conexaoDisponivel?}
-    P -->|sim| Q[reenviarFila até 10<br/>enviarHeartbeat sensor_falha]
+    P -->|sim| Q[pede heartbeat sensor_falha<br/>à tarefa de envio]
     P -->|não| R[heartbeat descartado<br/>não vai para a fila]
     H -->|ok| J[classifica pela faixa<br/>acende LED / tela]
-    J --> K[montarPayload com medidoEm]
-    K --> L{conexaoDisponivel?}
-    L -->|sim| N[reenviarFila até 10<br/>postarAzure da leitura atual<br/>publicarMqtt]
-    N -->|falha temporária| O[guardarOffline]
-    L -->|não| O
+    J --> K[proximaSeq + montarPayload]
+    K --> L[guardarLeitura: grava na fila<br/>antes de qualquer envio]
+    L --> S[avisa a tarefa de envio]
+    T[tarefaEnvio: acorda pelo aviso<br/>ou a cada 1 s] --> U[mqtt.loop<br/>reenviarFila: da mais antiga para a mais nova<br/>heartbeat pendente<br/>publicarMqtt da leitura do ciclo]
 ```
 
 ### 3.4 Leitura do DHT (validação, checksum, 2 tentativas)
@@ -251,8 +261,9 @@ internet.
    aceitaria qualquer servidor.
 2. `POST` em `AZURE_FUNCTION_URL` (padrão
    `https://func-coldtrack-7319.azurewebsites.net/api/telemetria`), com `Content-Type:
-   application/json` e o cabeçalho **`x-device-key`** com a chave do sensor. Tempo limite de 5 s
-   (`HTTP_TIMEOUT_MS`).
+   application/json` e o cabeçalho **`x-device-key`** com a chave do sensor. Tempos limite: 4 s
+   de conexão TCP (`CONEXAO_TIMEOUT_MS`), 8 s de handshake TLS (`TLS_HANDSHAKE_S`; o padrão do core
+   é 120 s, mais que o watchdog) e 5 s de resposta (`HTTP_TIMEOUT_MS`). Roda na tarefa de envio.
 3. Corpo, montado por `montarPayload`:
    `{"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58,"medidoEm":1790000000}`.
    RSSI maior ou igual a zero (valor impossível, aparece no simulador) vai como `null`. Sem relógio
@@ -270,7 +281,8 @@ Um `4xx` (dado recusado pelo contrato) não melhora reenviando.
 Bloco `#ifdef COM_MQTT`:
 
 - Conexão persistente em `mqtt3.thingspeak.com:8883` com TLS (mesma raiz DigiCert), keep-alive de
-  120 s e tempo limite de 5 s.
+  120 s, 4 s de conexão TCP, 8 s de handshake TLS e 5 s de resposta do broker. Tudo do MQTT roda
+  na tarefa de envio: reconexão lenta não atrasa a medição.
 - `garantirMqtt`: só tenta com rede e com relógio válido (o certificado não se valida sem hora). Se
   falhar, espera **5 s, dobrando até 60 s** (`mqttEspera`) antes da próxima tentativa, e imprime o
   motivo traduzido (`estadoMqtt`).
@@ -284,25 +296,39 @@ Bloco `#ifdef COM_MQTT`:
 ### 3.8 Fila em flash (store-and-forward)
 
 Constantes: arquivo `/fila.jsonl` (uma leitura JSON por linha), `FILA_MAX 500` (~2 h 45 min a cada
-20 s), `REENVIO_POR_CICLO 10`.
+20 s), `REENVIO_POR_LOTE 10` (linhas lidas da flash por vez).
 
-- `guardarOffline`: sem conexão, ou com falha temporária no envio, a leitura vai para a fila
-  (`enfileirar`). Se a fila passar de 500, **descarta a mais antiga** (`descartarInicioDaFila`).
-  Se a flash não abrir, a leitura é perdida e isso sai no log.
+- `guardarLeitura`: **toda** leitura vai para a fila logo depois de ganhar o número de sequência,
+  com ou sem rede, antes de qualquer envio, e só sai quando a nuvem responde. Um reinício no meio
+  do envio (watchdog, gravação do firmware, porta serial aberta com DTR) não perde a leitura: ela
+  sai depois do boot com o mesmo `seq` e o mesmo `medidoEm`, e a API responde `200` se já tinha
+  gravado. Antes, a leitura só entrava na fila depois de uma falha, e as leituras 56 e 132 da
+  coleta de 16-17/11/2026 se perderam em reinícios. Se a fila passar de 500, **descarta a mais
+  antiga** (`descartarInicioDaFila`). Se a flash não abrir, a leitura do ciclo vai direto, uma
+  tentativa só (`pedirEnvioDireto`).
+- O `loop()` só grava no fim do arquivo; a tarefa de envio lê o início e apaga o que foi confirmado
+  (`descartarEnviadas`, pelo texto da linha). Uma trava (`TravaFila`) protege o arquivo, mas fica
+  presa só para ler e reescrever, nunca durante a requisição.
 - Sem relógio, a linha é guardada com `"ms"` (o `millis()` da medição) no lugar do `medidoEm`.
   Quando o relógio sincroniza, `reescreverFilaMs(true)` converte para o horário real
   (`agora - (millis atual - ms) / 1000`). Linhas com `"ms"` de antes de um reinício são descartadas
   no boot.
-- `reenviarFila`: com conexão, **antes** da leitura atual, envia até 10 leituras da fila, **da
-  mais antiga para a mais nova**, para manter a ordem. Para na primeira falha temporária. As que
-  receberam resposta definitiva (201, 200 e também 4xx) saem da fila.
+- `reenviarFila` (tarefa de envio): com conexão, envia a fila **da mais antiga para a mais nova**,
+  em lotes de 10, até esvaziar. Para na primeira falha temporária e tenta de novo no segundo
+  seguinte. As que receberam resposta definitiva (201, 200 e também 4xx) saem da fila. Linha sem
+  horário recente (menos de 40 s, `SEM_RELOGIO_RECENTE_MS`) sai sem `medidoEm` (a API usa a hora
+  da chegada); mais velha espera o relógio.
 - O horário da medição (`medidoEm`) viaja junto: o banco guarda quando foi medido, não quando
   chegou.
 
 ### 3.9 Horário (NTP)
 
 `sincronizarRelogio` chama `configTime(0, 0, "pool.ntp.org", "time.google.com")` (UTC).
-`relogioOk` só considera o relógio válido depois de `EPOCH_VALIDO` (1700000000, nov/2023).
+`relogioOk` só considera o relógio válido **depois que o NTP respondeu neste boot**
+(`aoSincronizarRelogio`) e depois de `EPOCH_VALIDO` (1700000000, nov/2023). Num reinício que não
+é falta de energia, o ESP32 devolve a hora a partir do oscilador RC interno, que deriva: na coleta
+de 17/11/2026 a leitura 266 saiu com o relógio ~1 min adiantado e ficou com horário depois da 270.
+Até o NTP responder, a leitura é guardada com o `millis()` e ganha o horário quando ele chega.
 Para testes há `SIMULAR_SEM_RELOGIO_S` e `SIMULAR_QUEDA_S`, que fingem relógio e rede fora nos
 primeiros N segundos (`SIMULAR_QUEDA_INICIO_S` adia o começo da queda, para simular a rede caindo
 com a placa já enviando), e `SIMULAR_API_STATUS`, que faz o envio devolver esse status HTTP sem
@@ -310,12 +336,13 @@ sair da placa (prova de tela e LED no simulador sem escrever na API de produçã
 
 ### 3.10 Reconexão
 
-- **Wi-Fi**: a cada passada do `loop()`, se `WiFi.status() != WL_CONNECTED`, chama
-  `conectarWiFi`, que tenta por até 20 x 500 ms (cerca de 10 s) e devolve o controle. Não há
-  espera crescente no Wi-Fi: a próxima tentativa é na próxima passada. A medição a cada 20 s
-  continua acontecendo, e as leituras vão para a fila.
+- **Wi-Fi**: se `WiFi.status() != WL_CONNECTED`, o `loop()` começa uma tentativa nova a cada 30 s
+  (`RECONEXAO_MS`, `iniciarWiFi`) e não espera por ela: no meio, o driver segue tentando sozinho. A
+  medição segue a agenda de 20 s e as leituras vão para a fila. Só o `setup()` espera a conexão
+  (`conectarWiFi`, até 20 x 500 ms).
 - **MQTT**: espera crescente de 5 s até 60 s (seção 3.7).
-- **Watchdog** (R4): watchdog de tarefa (TWDT) de `WATCHDOG_S` (60 s) no `loop()`; travou, a placa
+- **Watchdog** (R4): watchdog de tarefa (TWDT) de `WATCHDOG_S` (60 s) no `loop()` e na tarefa de
+  envio (o pior caso legítimo de uma requisição é ~17 s); travou, a placa
   reinicia, avisa `REINICIO WDT` e retoma a fila e a sequência, que estão na flash
   (`iniciarWatchdog`, `alimentarWatchdog`; provado no Wokwi com `tela/erro-wdt.yaml`).
 
@@ -389,7 +416,10 @@ Lado da placa (`lerSerial`, `tratarComando`, `testarWiFi`):
 - Se conectou, grava no `Preferences` (namespace `config`). Se o ID mudou, apaga a fila (as
   leituras guardadas eram de outra identidade e a nuvem recusaria).
 - Senha e chave nunca voltam pela serial nem aparecem no log.
-- Ao final, sincroniza o relógio e zera `ultimoEnvio`: a próxima leitura sai na hora.
+- Enquanto testa a rede, a tarefa de envio fica parada (`pausaEnvio`); a troca de ID e chave passa
+  por uma trava (`cfgTrava`), porque a tarefa de envio lê os dois.
+- Ao final, sincroniza o relógio e marca `cicloImediato`: a próxima leitura sai na hora e a agenda
+  de 20 s recomeça dali.
 
 Lado do site (`front: src/pages/Sensores/serial.js`, classe `SensorUsb`, e `Sensores.jsx`):
 
@@ -517,7 +547,12 @@ solto é o fio puxado (o Wokwi não tem controle para desligar o DHT). O envio u
   o heartbeat `sensor_falha` (simulado, `200`); outro heartbeat no ciclo seguinte; o fio volta e a
   leitura válida sai de novo (`201`);
 - `leds/leds.yaml`: os padrões dos três LEDs (log `LED:` e `expect-pin`), com o analisador lógico
-  gravando os três pinos.
+  gravando os três pinos;
+- `ciclo-fixo.yaml` (issue 96): cada envio simulado demora 35 s (`SIMULAR_ENVIO_MS 35000`), mais
+  que o ciclo; as linhas `CICLO:` seguem a 20 s e a fila sai em ordem;
+- `reinicio-no-envio.yaml` (issue 96): a placa reinicia no meio do envio
+  (`SIMULAR_REINICIO_ENVIO_S 30`); a leitura em curso já estava na fila e sai depois do boot com o
+  mesmo `seq` e `medidoEm`.
 
 Na placa física o teste fica para depois da coleta de 48 h em andamento (gravar reinicia a placa).
 
