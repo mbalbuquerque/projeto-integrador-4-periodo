@@ -1,0 +1,13 @@
+# Cenario do wokwi-cli: comando "redes" enviado logo depois do boot, com a
+# placa ainda conectando ao Wi-Fi (scan recusado pelo driver). Esperado: a
+# linha de prontidao e, depois, a lista de redes (nunca "scan_falhou").
+# Uso: wokwi-cli --scenario redes-no-boot.yaml <pasta com wokwi.toml e diagram.json>
+# (secrets.h so com WIFI_SSID "Wokwi-GUEST", sem identidade: nada vai para a API).
+name: Redes logo depois do boot
+version: 1
+author: ColdTrack
+steps:
+  - wait-serial: "Conectando ao Wi-Fi Wokwi-GUEST"
+  - write-serial: "CT<{\"cmd\":\"redes\"}\n"
+  - wait-serial: "CT>{\"pronto\":true"
+  - wait-serial: "CT>{\"ok\":true,\"redes\":["

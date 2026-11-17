@@ -328,6 +328,7 @@ CT>{"ok":true,"wifi":"conectado","rssi":-55,"canal":6,"seguranca":"wpa2","id":".
 CT>{"ok":false,"erro":"sinal_fraco","motivo":15,"rssi":-84,"canal":11,"seguranca":"wpa2"}
 CT<{"cmd":"redes"}
 CT>{"ok":true,"redes":[{"ssid":"..","rssi":-61,"canal":6,"seguranca":"wpa2"}]}
+CT>{"pronto":true,"fw":"2026.11.16.3"}        (uma vez, ao fim do setup)
 ```
 
 Lado da placa (`lerSerial`, `tratarComando`, `testarWiFi`):
@@ -351,6 +352,13 @@ Lado da placa (`lerSerial`, `tratarComando`, `testarWiFi`):
   **nada é gravado** e a placa volta para a rede anterior.
 - `redes` faz um scan e devolve até 15 redes 2.4 GHz vistas (uma por nome, o AP mais forte), da
   mais forte para a mais fraca, com `ssid`, `rssi`, `canal` e `seguranca`. Nenhuma senha.
+- **Scan recusado** (`escanear`): o driver recusa o scan enquanto a estação está no meio de uma
+  tentativa de conexão (estado *connecting*, típico logo depois do boot). Nesse caso a placa para a
+  tentativa (`WiFi.disconnect()`), espera o estado assentar (500 ms, 1 s, 1,5 s, alimentando o
+  watchdog) e repete, até 4 vezes (`SCAN_TENTATIVAS`); o loop reconecta logo depois. Só responde
+  `scan_falhou` se as 4 falharem. Vale para `redes` e para o scan antes do teste de `wifi`/`config`.
+- **Linha de prontidão**: ao fim do `setup()` a placa manda `CT>{"pronto":true,"fw":".."}`. Ela não
+  responde a comando nenhum; avisa que a placa acabou de iniciar e já trata comandos.
 - Toda tentativa de conexão (`iniciarWiFi`) começa com `WiFi.disconnect()`: sem isso, um `begin`
   no meio da tentativa anterior é recusado pelo driver (`sta is connecting, cannot set config`) e
   a tentativa em curso é atropelada. O scan é em todos os canais e escolhe o AP pelo sinal
@@ -367,17 +375,42 @@ Lado da placa (`lerSerial`, `tratarComando`, `testarWiFi`):
 Lado do site (`front: src/pages/Sensores/serial.js`, classe `SensorUsb`, e `Sensores.jsx`):
 
 1. `conectar()`: `navigator.serial.requestPort()` abre a janela do navegador para escolher a
-   porta; abre a 115200 baud e passa a ler linha por linha, ignorando o que não começa com `CT>`.
-2. `info()`: pergunta até 6 vezes (2 s cada), porque a placa pode reiniciar ao abrir a porta.
+   porta; abre a 115200 baud, solta os sinais RTS e DTR (`soltarSinais`, ver abaixo) e passa a ler
+   linha por linha, ignorando o que não começa com `CT>`.
+2. `info()`: **espera a placa ficar pronta** antes de qualquer outro comando. Pergunta `info` a
+   cada 2 s por até 20 s (`PRONTO_MS`); a linha `CT>{"pronto":true}` que chega no meio corta a
+   espera e o `info` sai de novo na hora. Placa que não reiniciou não manda a linha, mas responde o
+   `info`. A linha de prontidão nunca é tomada como resposta de comando: se chegar com um comando
+   em curso, a placa reiniciou e o comando se perdeu (quem esperava recebe `null`).
 3. `situacaoDaPlaca` (`front: src/pages/Sensores/sensores.js`) decide o caso: **novo** (registra
    com `POST /api/dispositivos`, que devolve a chave), **nova-chave** (sensor já registrado sem
    chave gravada: `PUT /api/dispositivos/{id}` gera outra), **trocar-rede** (só manda `cmd: wifi`).
-4. `configurar()` manda o comando e espera até 45 s pela resposta (scan + teste de até 25 s na
-   placa). Se a rede falhar, a chave já gerada é reaproveitada na próxima tentativa; a mensagem
+4. `configurar()` manda o comando e espera até 50 s pela resposta (scan, que a placa repete se o
+   rádio estiver ocupado, + teste de até 25 s). Se a rede falhar, a chave já gerada é reaproveitada na próxima tentativa; a mensagem
    (`mensagemDeErro`) diz o motivo e acrescenta sinal, canal e o motivo numérico do driver.
-   O botão "Ver redes que o sensor enxerga" (`redes()`) lista o scan da placa.
+   O botão "Ver redes que o sensor enxerga" (`redes()`) lista o scan da placa; se vier
+   `scan_falhou`, o painel repete uma vez antes de mostrar o erro.
 5. `esperarPrimeiraLeitura`: consulta `GET /api/leituras` a cada 5 s por até 2 min e só aceita
    leitura recebida depois da configuração; aí mostra **ONLINE** com a temperatura.
+
+**Abrir a porta reinicia a placa.** O ESP32-C3 desta placa usa o controlador USB Serial/JTAG do
+próprio chip (VID 303A, PID 1001), que imita os sinais de controle de uma porta serial: com **RTS
+ativo e DTR inativo o chip é reiniciado** (é a mesma lógica do circuito de auto-reset com dois
+transistores das placas com conversor USB-serial: os dois ativos não reiniciam; a sequência de
+reset do `esptool` é "RTS ativo, espera, RTS inativo"). Abrir a porta com os sinais padrão no
+Windows passa por esse estado: na placa física, abrir com o pyserial nos sinais padrão reiniciou a
+placa, e um `redes` enviado logo depois, com a placa ainda conectando ao Wi-Fi salvo, voltou
+`scan_falhou`; abrindo com DTR e RTS inativos a placa não reiniciou e `redes`, `rede_nao_encontrada`
+e `senha` funcionaram. A Web Serial não deixa escolher os sinais antes do `open()`, então o painel
+(a) logo depois de abrir solta primeiro o RTS e depois o DTR, em duas chamadas de `setSignals`,
+para nunca passar por "RTS ativo com DTR inativo" (navegador sem `setSignals` segue sem isso);
+(b) não manda configuração nem `redes` antes da linha de prontidão ou de um `info` respondido; e
+(c) a placa não responde mais `scan_falhou` só por estar conectando. Se o próprio `open()` do
+navegador reiniciar a placa, (b) e (c) cobrem o caso.
+
+Prova no simulador: cenário `firmware/wokwi/redes-no-boot.yaml` (manda `redes` assim que a placa
+começa a conectar, antes da conexão). Com o firmware anterior a resposta foi `scan_falhou`; com o
+atual o scan foi recusado duas vezes e a terceira devolveu a lista.
 
 A rede e a senha do Wi-Fi vão direto para a placa pelo cabo; o painel não as guarda. A chave do
 sensor sai da API uma única vez e vai para a placa sem o usuário copiar.
