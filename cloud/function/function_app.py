@@ -8,6 +8,7 @@ Público:
   POST /api/login               e-mail e senha -> token de 8 h
   GET  /api/perfis              perfis de carga e faixas de temperatura
   GET  /api/health              estado do serviço e do banco (200 ou 503)
+  GET  /api/push/chave          chave pública VAPID dos alertas push
   POST /api/chat                pergunta ao assistente do site (Azure OpenAI)
 
 Painel (token do login no header `Authorization: Bearer <token>`):
@@ -15,6 +16,7 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
   POST /api/senha               troca a própria senha                   (operador, gestor)
   POST /api/sair                encerra todas as sessões do usuário     (operador, gestor)
+  POST/DELETE /api/push/inscricao  inscreve ou remove o aparelho nos alertas push (operador, gestor)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/predict             risco de passar de 30 °C por mês e hora (operador, gestor)
   GET  /api/dispositivos        sensores da empresa, com último contato e online (operador, gestor)
@@ -41,6 +43,7 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import azure.functions as func
@@ -50,6 +53,7 @@ import assistente
 import chat
 import limites
 import predicao
+import push
 from cadastros import (
     EMAIL,
     SENHA_MIN,
@@ -269,7 +273,7 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
 
     empresa = dispositivo["empresaId"]
     veiculo = next(iter(container("veiculos").query_items(
-        "SELECT TOP 1 c.perfil FROM c WHERE c.empresaId = @e AND c.deviceId = @d",
+        "SELECT TOP 1 c.id, c.perfil FROM c WHERE c.empresaId = @e AND c.deviceId = @d",
         parameters=[{"name": "@e", "value": empresa},
                     {"name": "@d", "value": dispositivo["id"]}],
         enable_cross_partition_query=True)), None)
@@ -310,9 +314,129 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
                         leitura["id"])
         return resposta(
             {"erros": ["já existe leitura deste sensor neste horário, com outros valores"]}, 409)
+    # Só leitura nova chega aqui (reenvio duplicado já respondeu): o push nunca repete.
+    # Qualquer falha do push fica no log; a leitura já está gravada e a resposta é 201.
+    try:
+        avisar_por_push(leitura, id_externo(veiculo)["id"] if veiculo else None, medido, recebido)
+    except Exception as e:
+        logging.warning("push: falha ao avisar a transição (%s)", type(e).__name__)
     # A faixa volta na resposta: o sensor acende o LED certo para a carga do veículo.
     return resposta({"id": leitura["id"], "status": leitura["status"],
                      "perfil": perfil, "faixa": faixa(perfil)}, 201)
+
+
+# ------------------------------------------------------------ alertas push
+
+def avisar_por_push(leitura, veiculo, medido, recebido):
+    """Manda push aos usuários da empresa quando a leitura piora de faixa.
+
+    Só na transição (NORMAL -> ATENCAO/CRITICO, ATENCAO -> CRITICO), comparando com a
+    leitura anterior do mesmo sensor pelo horário da medição; no máximo 1 push por
+    sensor e faixa a cada push.INTERVALO_S; leitura atrasada (fila offline) não avisa.
+    Inscrição que o serviço de push diz que expirou (404/410) é apagada.
+    Devolve quantos pushes o serviço de push aceitou.
+    """
+    if not push.configurado() or leitura["status"] == "NORMAL":
+        return 0
+    if (recebido - medido).total_seconds() > push.IDADE_MAX_S:
+        return 0
+    anterior = next(iter(container().query_items(
+        "SELECT TOP 1 c.status FROM c WHERE c.deviceId = @device AND c.medidoEm < @antes "
+        "ORDER BY c.medidoEm DESC",
+        parameters=[{"name": "@device", "value": leitura["deviceId"]},
+                    {"name": "@antes", "value": leitura["medidoEm"]}],
+        partition_key=leitura["deviceId"])), None)
+    status_anterior = (anterior or {}).get("status")
+    if not push.piorou(status_anterior, leitura["status"]):
+        return 0
+    if not LIMITES.permitir(f"push:{leitura['deviceId']}:{leitura['status']}", 1,
+                            push.INTERVALO_S):
+        return 0
+
+    conteudo = push.mensagem(leitura, veiculo)
+    usuarios = [u for u in lista("usuarios", leitura["empresaId"], "c.id, c.push")
+                if u.get("push")]
+    envios = [(u, i) for u in usuarios for i in u["push"]]
+    if not envios:
+        return 0
+    # Em paralelo: com vários aparelhos, o sensor não espera um envio depois do outro.
+    with ThreadPoolExecutor(max_workers=min(8, len(envios))) as executor:
+        resultados = list(executor.map(lambda par: push.enviar(par[1], conteudo), envios))
+
+    expiradas = {}
+    for (usuario, inscricao), resultado in zip(envios, resultados):
+        if resultado == "expirada":
+            expiradas.setdefault(usuario["id"], set()).add(inscricao["endpoint"])
+    for usuario in usuarios:
+        if usuario["id"] in expiradas:
+            _patch_usuario(usuario["id"], [{"op": "set", "path": "/push", "value": push.sem(
+                usuario["push"], expiradas[usuario["id"]])}])
+    aceitos = resultados.count("ok")
+    logging.info("push: %s %s -> %s, %d de %d aceitos, %d expirados",
+                 leitura["deviceId"], status_anterior or "sem anterior", leitura["status"],
+                 aceitos, len(envios), sum(len(e) for e in expiradas.values()))
+    return aceitos
+
+
+@app.route(route="push/chave", methods=["GET"])
+def push_chave(req: func.HttpRequest) -> func.HttpResponse:
+    """Chave pública VAPID: o navegador precisa dela para criar a inscrição."""
+    if not push.configurado():
+        return resposta({"erros": ["alertas push indisponíveis"]}, 503)
+    return resposta({"chave": push.chave_publica()})
+
+
+def _tirar_de_outros(endpoint, dono):
+    """O mesmo navegador entrou com outra conta: a conta anterior para de receber nele.
+
+    Sem isso, um aparelho compartilhado receberia alertas de duas contas (ou de
+    duas empresas) depois de trocar de usuário.
+    """
+    donos = container("usuarios").query_items(
+        "SELECT c.id, c.push FROM c WHERE EXISTS("
+        "SELECT VALUE p FROM p IN c.push WHERE p.endpoint = @endpoint)",
+        parameters=[{"name": "@endpoint", "value": endpoint}],
+        enable_cross_partition_query=True)
+    for outro in donos:
+        inscricoes = outro.get("push") or []
+        if outro["id"] != dono and any(i.get("endpoint") == endpoint for i in inscricoes):
+            _patch_usuario(outro["id"], [{"op": "set", "path": "/push",
+                                          "value": push.sem(inscricoes, {endpoint})}])
+
+
+@app.route(route="push/inscricao", methods=["POST", "DELETE"])
+def push_inscricao(req: func.HttpRequest) -> func.HttpResponse:
+    """POST guarda a inscrição do aparelho no usuário; DELETE tira (idempotente)."""
+    usuario, erro = autorizar(req, TODOS)
+    if erro:
+        return erro
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    inscricoes = usuario.get("push") or []
+
+    if req.method.upper() == "DELETE":
+        erros, endpoint = push.validar_remocao(dados)
+        if erros:
+            return resposta({"erros": erros}, 400)
+        if any(i.get("endpoint") == endpoint for i in inscricoes):
+            _patch_usuario(usuario["id"], [{"op": "set", "path": "/push",
+                                            "value": push.sem(inscricoes, {endpoint})}])
+            logging.info("%s removeu um aparelho dos alertas push",
+                         mascarar_email(usuario["id"]))
+        return func.HttpResponse(status_code=204)
+
+    erros, doc = push.validar_inscricao(dados)
+    if erros:
+        return resposta({"erros": erros}, 400)
+    doc["criadaEm"] = datetime.now(timezone.utc).isoformat()
+    _tirar_de_outros(doc["endpoint"], usuario["id"])
+    novas = push.juntar(inscricoes, doc)
+    if _patch_usuario(usuario["id"], [{"op": "set", "path": "/push", "value": novas}]) is None:
+        return resposta({"erros": ["faça login para continuar"]}, 401)
+    logging.info("%s inscreveu um aparelho nos alertas push (%d no total)",
+                 mascarar_email(usuario["id"]), len(novas))
+    return resposta({"inscricoes": len(novas)}, 201)
 
 
 # ------------------------------------------------------------ acesso
@@ -468,11 +592,15 @@ def senha(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="sair", methods=["POST"])
 def sair(req: func.HttpRequest) -> func.HttpResponse:
-    """Sai de todos os aparelhos: sobe a versão da sessão e todo token emitido morre."""
+    """Sai de todos os aparelhos: sobe a versão da sessão e todo token emitido morre.
+
+    Também tira as inscrições de push: aparelho sem sessão não recebe alerta da empresa.
+    """
     usuario, erro = autorizar(req, TODOS)
     if erro:
         return erro
-    _patch_usuario(usuario["id"], [{"op": "incr", "path": "/sessao", "value": 1}])
+    _patch_usuario(usuario["id"], [{"op": "incr", "path": "/sessao", "value": 1},
+                                   {"op": "set", "path": "/push", "value": []}])
     logging.info("%s saiu (sessões encerradas)", mascarar_email(usuario["id"]))
     return func.HttpResponse(status_code=204)
 
