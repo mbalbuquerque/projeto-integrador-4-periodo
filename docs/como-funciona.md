@@ -101,6 +101,7 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 | `cloud/function/cadastros.py` | Validação de empresa, usuário, sensor, veículo e viagem |
 | `cloud/function/chat.py`, `assistente.py`, `base_chat.json` | Chat do site e assistente do painel (Azure OpenAI + busca por embeddings) |
 | `cloud/function/predicao.py`, `modelo_risco.json` | Modelo de risco térmico servido em `GET /api/predict` |
+| `cloud/function/previsao_sensor.py`, `modelo_sensor.json` | Previsão da temperatura do sensor 10 min à frente, servida em `GET /api/predict/sensor` |
 | `cloud/function/openapi.json` | Especificação OpenAPI 3.0, em inglês, exibida em `/api/docs` |
 | `cloud/function/test_*.py` | Testes da API (pytest/unittest, com Cosmos falso) |
 | `cloud/function/pacote.txt`, `publicar.sh` | Lista do que é publicado e publicação manual |
@@ -549,6 +550,7 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | POST | `/api/assistente` | operador, gestor | Assistente do painel com os dados da empresa |
 | GET | `/api/leituras?deviceId=&limite=&horas=&status=` | operador, gestor | Últimas leituras de um sensor da empresa (até 500) |
 | GET | `/api/predict?mes=&hora=` | operador, gestor | Risco de passar de 30 °C no mês e hora |
+| GET | `/api/predict/sensor?deviceId=` | operador, gestor, motorista | Temperatura do sensor prevista 10 min à frente, com baseline (o motorista recebe a do próprio veículo) |
 | GET | `/api/dispositivos` | operador, gestor | Sensores da empresa com `ultimoContato` e `online` |
 | POST / PUT / DELETE | `/api/dispositivos[/{id}]` | gestor | Registra (devolve a chave uma vez), gera chave nova, remove |
 | GET | `/api/veiculos`, `/api/viagens` | operador, gestor | Frota e viagens |
@@ -676,6 +678,15 @@ e as rotas autenticadas (o painel consulta a cada 20 s).
   célula (mês, hora) da tabela `modelo_risco.json` e devolve probabilidade, nível (`baixo` até 0,20,
   `moderado` até 0,50, `alto` acima), horas de histórico da célula, o baseline e os dois Brier, com
   `usaLeiturasDoSensor: false`. Sem o arquivo → 503 (seção 11).
+- **`GET /predict/sensor?deviceId=`**: operador e gestor escolhem o sensor (de outra empresa →
+  404, igual a inexistente); o motorista recebe sempre o sensor do veículo vinculado a ele, e o
+  `deviceId` da URL é ignorado. Lê do banco as leituras dos últimos 20 min do sensor
+  (`consultar_leituras`, filtrado por sensor e empresa) e chama `previsao_sensor.prever`, que
+  devolve a última leitura, a previsão do modelo, o baseline de persistência, qual das duas é a
+  `recomendada` (a que ganhou no teste), `antecipaExcursao` e o `motivo` quando falta base
+  (`sem_leituras`, `sem_leitura_recente` com a última leitura há mais de 5 min,
+  `historico_insuficiente` com menos de 10 min contínuos). Até 30 chamadas por minuto por
+  usuário (429). Sem `modelo_sensor.json` → 503 (seção 11).
 - **`POST /chat`** (site, público) — **RAG**: `chat.responder` transforma a pergunta em vetor
   (`text-embedding-3-small`, 512 dimensões), acha os 4 trechos mais parecidos da
   `base_chat.json` por cosseno (mínimo 0,2), põe esses trechos no prompt e pede a resposta ao
@@ -1140,7 +1151,14 @@ rota responde 201: o teste quebra no `assertEqual(status, 200)`. Junto dele:
 ## 11. Inteligência artificial
 
 Fontes: `analise/relatorio.md`, `docs/model-card.md`, `analise/explorar.py`,
-`analise/exportar_modelo.py`, `cloud/function/predicao.py`.
+`analise/exportar_modelo.py`, `cloud/function/predicao.py`; para o modelo sobre o sensor,
+`analise/sensor/modelo_previsao.py`, `analise/sensor/relatorio_previsao.md` e
+`cloud/function/previsao_sensor.py`.
+
+São dois modelos. O **11.1** usa o clima externo (INMET); o **11.2** usa as leituras do próprio
+sensor.
+
+### 11.1 Risco térmico externo (INMET)
 
 - **Problema**: qual a chance de a temperatura externa passar de 30 °C no mês e na hora da saída?
   Apoia a decisão humana de **quando sair ou carregar** e quando reforçar o monitoramento. Não
@@ -1164,9 +1182,45 @@ Fontes: `analise/relatorio.md`, `docs/model-card.md`, `analise/explorar.py`,
   alguns meses têm menos anos (o campo `horasDeHistorico` mostra a amostra da célula).
 - **Servido em** `GET /api/predict` e mostrado no card **Risco térmico da saída** do dashboard.
 - **Limitação principal**: **não usa as leituras do sensor do baú** (`usaLeiturasDoSensor:
-  false`). Mede o calor de fora, em Petrolina. A base real da placa (`analise/sensor/relatorio.md`)
-  tem 1.588 leituras e 8,55 h cobertas, com maior janela contínua de 1,19 h, abaixo da meta de 48 h.
+  false`). Mede o calor de fora, em Petrolina. O modelo sobre o sensor é o da seção 11.2.
   Próximo passo: cruzar a telemetria das viagens com o clima externo e usar a previsão do dia.
+
+### 11.2 Previsão da temperatura do sensor (10 min à frente)
+
+- **Problema**: a partir das últimas leituras do sensor, qual será a temperatura daqui a 10 min
+  e em que status ela cai no perfil da carga? Apoia a decisão humana de **conferir a porta, o
+  equipamento de frio ou a rota antes** de a carga sair da faixa. Não dispara ação automática.
+- **Por que previsão e não detecção de anomalia**: a base real não tem nenhuma falha rotulada
+  (sensor travado, porta aberta, frio desligado). Um detector só poderia ser medido em falhas
+  inseridas à mão; a previsão é medida nas próprias leituras reais.
+- **Dados**: canal público ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe), 1.899
+  leituras baixadas em 17/11/2026. Limpeza: descarta leitura sem temperatura ou sem data, fora
+  da faixa do DHT11 (0 a 50 °C) ou com instante repetido (nenhuma saiu nesta base). Intervalo
+  de mais de 5 min entre leituras abre trecho novo; nenhuma amostra atravessa lacuna. Uma
+  amostra por minuto: 714 amostras (cerca de 11,9 h) em 8 trechos.
+- **Modelo**: regressão ridge sem intercepto sobre a variação (alvo menos a última leitura),
+  com três atributos dos últimos 10 min: variação em 5 min (`d5`), em 10 min (`d10`) e média
+  dos 10 min menos a última leitura (`m10`); lambda fixo 1. Exportado como três coeficientes
+  em `modelo_sensor.json` (versão `sensor-ridge-10min-v1`), sem biblioteca de ML em produção. O
+  cálculo dos atributos é a mesma função (`previsao_sensor.atributos`) no treino e na rota.
+- **Baseline**: persistência (a temperatura daqui a 10 min é a última leitura).
+- **Divisão temporal**: teste = 30% mais recentes dos instantes (17/11 02:29 a 06:06 UTC, 218
+  amostras); treino = o que vem antes (496 amostras), descartando amostra cujo alvo cai depois
+  do corte, para não vazar futuro.
+- **Resultado (teste)**: MAE do modelo **0,342 °C** contra **0,313 °C** da persistência; RMSE
+  0,471 contra 0,494. Com a métrica principal (MAE, definida antes do treino) **o modelo não
+  supera o baseline**. Por isso o arquivo sai com `superaBaseline: false` e a rota responde
+  `recomendada: "baseline"`: a tela deve mostrar a persistência. A previsão do modelo segue na
+  resposta para a comparação ficar visível.
+- **Quando erra e por quê**: a placa está em bancada, em ambiente interno, e não num baú; a
+  série é quase estável e muda em degraus de resolução do DHT11. Não há nenhuma excursão real
+  na base, que é justamente o que o modelo deveria antecipar. Com poucas horas, persistência é
+  muito difícil de bater.
+- **Re-treinar** (um comando, baixa o canal de novo): `cd analise/sensor && python
+  modelo_previsao.py --baixar`. Se o MAE do modelo ficar abaixo do da persistência, a rota passa
+  a recomendar o modelo sem mudar código; publica-se a API com o novo `modelo_sensor.json`.
+- **Servido em** `GET /api/predict/sensor`. A exibição no dashboard e na tela do motorista é
+  do repositório do painel.
 
 ---
 
@@ -1282,6 +1336,13 @@ como são muito parecidas o resultado ia parecer melhor do que é."
 55% menos erro. Ele erra principalmente deixando passar hora quente: marca só 62% das horas que de
 fato passaram de 30 graus. Também não é previsão do tempo do dia, é o padrão histórico, e ainda não
 usa o sensor do baú, só a estação do INMET em Petrolina."
+
+**IA — E o modelo sobre as leituras do sensor?**
+"Prevê a temperatura do sensor 10 minutos à frente, para avisar antes de sair da faixa. O
+baseline é repetir a última leitura. Com as horas que temos, com a placa em bancada, o modelo
+teve erro médio de 0,34 grau contra 0,31 da persistência, então não ganhou, e a rota recomenda
+a persistência. O pipeline re-treina com um comando quando entrarem as 48 horas ou uma viagem
+de verdade."
 
 **UE Mobile — O que o app mostra quando está sem internet?**
 "O app abre, porque o service worker guarda a casca do site, mas a API nunca vai para o cache. Então

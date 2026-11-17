@@ -230,7 +230,7 @@ The `everson` branch stays as a deployment fallback and must not be deleted. Pro
 | [`docs/politica-de-privacidade.md`](docs/politica-de-privacidade.md) | privacy policy, data subject rights and how to request deletion |
 | [`docs/slides/previa-tecnica.pdf`](docs/slides/previa-tecnica.pdf) | technical preview slides (English pitch and presentation blocks) |
 | [`docs/pitch-en.md`](docs/pitch-en.md) | two-minute pitch script in English |
-| [`docs/model-card.md`](docs/model-card.md) | model card of the thermal risk model (English) |
+| [`docs/model-card.md`](docs/model-card.md) | model card of the thermal risk model and of the sensor forecast model (English) |
 | [`docs/implantacao.md`](docs/implantacao.md) | step-by-step guide to put a carrier into operation |
 | [`docs/memorial-descritivo.md`](docs/memorial-descritivo.md) | design report of the prototype |
 | [`cloud/function/README.md`](cloud/function/README.md) | API: run, test and publish |

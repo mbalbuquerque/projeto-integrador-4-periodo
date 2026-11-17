@@ -481,6 +481,49 @@ Atualizar o modelo: `cd analise && python exportar_modelo.py` (precisa de
 `dados/inmet_rota_horario.csv`, ver [`analise/README.md`](../analise/README.md)) e publicar a
 API com o novo `modelo_risco.json`.
 
+### `GET /predict/sensor?deviceId=<id>`
+
+Acesso: operador e gestor (com `deviceId` de um sensor da empresa do token); motorista (sempre o
+sensor do veículo vinculado a ele, `deviceId` ignorado).
+
+Temperatura do sensor prevista **10 min à frente** da última leitura, a partir das leituras dos
+últimos 20 min do próprio sensor. Modelo: regressão ridge de
+[`analise/sensor/modelo_previsao.py`](../analise/sensor/modelo_previsao.py), exportada em
+`cloud/function/modelo_sensor.json`; baseline: persistência (última leitura). Ficha do modelo:
+[`model-card.md`](model-card.md).
+
+Resposta `200`:
+
+```json
+{"deviceId": "coldtrack-01", "horizonteMin": 10,
+ "ultimaLeitura": {"medidoEm": "2026-11-17T06:17:05+00:00", "perfil": "demonstrativo", "temperatura": 32.8, "status": "CRITICO"},
+ "previsao": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
+ "baseline": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
+ "recomendada": "baseline", "antecipaExcursao": false, "motivo": null,
+ "modelo": {"versao": "sensor-ridge-10min-v1", "fonte": "ThingSpeak 3515173 (...)",
+            "treino": {"de", "ate", "amostras"}, "teste": {"de", "ate", "amostras"},
+            "maeModelo": 0.342, "maeBaseline": 0.3128, "rmseModelo": 0.4711, "rmseBaseline": 0.4941,
+            "superaBaseline": false, "usaLeiturasDoSensor": true}}
+```
+
+- `previsao`: valor do modelo; `baseline`: última leitura repetida. O `status` de cada uma é a
+  classificação no perfil de carga da última leitura.
+- `recomendada`: `modelo` ou `baseline`, a que teve menor MAE no teste temporal. É a que a tela
+  deve mostrar. Hoje é `baseline` (o modelo não superou a persistência).
+- `antecipaExcursao`: `true` quando a previsão recomendada cai num status pior que o da última
+  leitura.
+- `motivo`: `null`, ou `sem_leituras` (nada nos últimos 20 min), `sem_leitura_recente` (última
+  leitura há mais de 5 min; `previsao` e `baseline` saem `null`) ou `historico_insuficiente`
+  (menos de 10 min contínuos; só `previsao` sai `null`).
+
+Erros: `400` `informe ?deviceId=` (operador ou gestor sem o parâmetro); `401` sem token; `404`
+`dispositivo não encontrado` (sensor inexistente ou de outra empresa) ou `nenhum sensor
+vinculado a este motorista; fale com o gestor`; `429` mais de 30 chamadas por minuto do mesmo
+usuário; `503` `modelo indisponível`.
+
+Atualizar o modelo: `cd analise/sensor && python modelo_previsao.py --baixar` e publicar a API
+com o novo `modelo_sensor.json`.
+
 ## Sensores (`/dispositivos`)
 
 | método e rota | acesso | corpo | resposta |
