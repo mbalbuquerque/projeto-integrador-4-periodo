@@ -1,0 +1,12 @@
+# Uso: mesmo diagram.json desta pasta; secrets.h do Wokwi com
+#   #define TELA_OLED / LED_PLACA 8 / LED_PLACA_RGB e sem WIFI_SSID, DEVICE_ID e DEVICE_KEY
+# (placa nunca configurada). Rodar: wokwi-cli --timeout 120000 --scenario sem-config.yaml .
+name: Sem configuracao
+version: 1
+author: ColdTrack
+steps:
+  - set-control: { part-id: fio, control: pressed, value: 1 }
+  - wait-serial: "LED: sem_config"
+  - wait-serial: "Aguardando configuracao pelo cabo"
+  - delay: 4000ms
+  - take-screenshot: { part-id: oled1, save-to: shots/16-sem-config.png }

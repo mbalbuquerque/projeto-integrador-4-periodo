@@ -130,7 +130,7 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 
 ## 3. Firmware passo a passo
 
-Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.09.28"`).
+Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.11.17.1"`).
 
 ### 3.1 Hardware e variantes
 
@@ -139,7 +139,7 @@ Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.09.28"`).
 - **Sem tela** (Wokwi): três LEDs nos GPIO 5, 6 e 7 (`LED_VERDE`, `LED_AMARELO`, `LED_VERMELHO`).
 - **Com tela** (`TELA_OLED`, placa ESP32-C3 com OLED 0,42" embutido): os GPIO 5 e 6 viram o I2C
   da tela (72x40 pixels, `U8G2_SSD1306_72X40_ER_F_HW_I2C`), os LEDs saem e o status vai para a tela
-  (`mostrarNaTela`). Nessa placa a potência do rádio cai para 8,5 dBm (`ajustarRadio`), porque a
+  (`desenharTela`, seção 3.12). LED da própria placa só com `LED_PLACA` no `secrets.h` (3.12). Nessa placa a potência do rádio cai para 8,5 dBm (`ajustarRadio`), porque a
   antena de chip falhava no handshake com a potência padrão.
 - MQTT só é compilado se o `secrets.h` tiver `MQTT_CANAL`, `MQTT_CLIENT_ID`, `MQTT_USUARIO` e
   `MQTT_SENHA` (macro `COM_MQTT`).
@@ -167,14 +167,14 @@ flowchart TD
     A[lerSerial: chegou comando CT&lt;?] -->|sim| B[tratarComando]
     A --> M[mqtt.loop, se COM_MQTT]
     M --> C{tem Wi-Fi configurado<br/>e ID + chave?}
-    C -->|não| D[pisca amarelo / tela CONFIGURAR<br/>espera o cabo]
+    C -->|não| D[amarelo em dois toques / tela SEM CONFIG<br/>espera o cabo]
     C -->|sim| E{Wi-Fi conectado?}
     E -->|não| F[conectarWiFi: até 20 x 500 ms]
     E -->|sim| G
     F --> G{passaram 20 s?}
     G -->|não| A
     G -->|sim| H[lerSensor: 2 tentativas]
-    H -->|falhou| I[ERRO SENSOR: pisca vermelho<br/>nada é enviado]
+    H -->|falhou| I[FALHA SENSOR: três LEDs piscam<br/>nada é enviado]
     H -->|ok| J[classifica pela faixa<br/>acende LED / tela]
     J --> K[montarPayload com medidoEm]
     K --> L{conexaoDisponivel?}
@@ -198,8 +198,9 @@ watchdog do sistema reiniciava a placa em loop.
 - `lerSensor`: faz **duas tentativas** (a segunda depois de 1,1 s no DHT11 ou 2,1 s no DHT22),
   porque uma interrupção do Wi-Fi pode esticar um pulso e errar o checksum. Sem leitura válida,
   devolve `false` e `NAN` nos dois valores.
-- No `loop()`, `NAN` gera "ERRO: Falha na leitura do sensor!", pisca o vermelho por 300 ms (ou
-  mostra "ERRO SENSOR" na tela) e **retorna sem enviar e sem guardar na fila**. Leitura inválida
+- No `loop()`, `NAN` gera "ERRO: Falha na leitura do sensor!", mostra "FALHA SENSOR" na tela (com
+  `--.-°C`), faz os três LEDs piscarem juntos (seção 3.12) e **retorna sem enviar e sem guardar na
+  fila**. Leitura inválida
   nunca sai como válida. Mesmo que saísse, a API recusaria `NaN` e valores fora da faixa física
   (`contrato.validar`).
 - Autoteste da conversão: compilado com `-DTESTE_DHT`, `autotesteDht` confere 5 casos conhecidos
@@ -225,7 +226,7 @@ A cada `201` da API, `atualizarFaixa` lê o campo `faixa` da resposta e, **só s
 flash (poupa escrita). Sem sinal, a placa continua classificando pela última faixa recebida.
 
 Sinalização: `statusNormal` (verde), `statusAtencao` (amarelo), `statusCritico` (vermelho), ou o
-texto na tela OLED. Isso é a "classificação na borda": o motorista vê o semáforo mesmo sem
+texto na tela OLED; o piscar do LED da faixa conta a situação da conexão (seção 3.12). Isso é a "classificação na borda": o motorista vê o semáforo mesmo sem
 internet.
 
 ### 3.6 Envio HTTPS com `x-device-key` e TLS
@@ -290,7 +291,9 @@ Constantes: arquivo `/fila.jsonl` (uma leitura JSON por linha), `FILA_MAX 500` (
 `sincronizarRelogio` chama `configTime(0, 0, "pool.ntp.org", "time.google.com")` (UTC).
 `relogioOk` só considera o relógio válido depois de `EPOCH_VALIDO` (1700000000, nov/2023).
 Para testes há `SIMULAR_SEM_RELOGIO_S` e `SIMULAR_QUEDA_S`, que fingem relógio e rede fora nos
-primeiros N segundos.
+primeiros N segundos (`SIMULAR_QUEDA_INICIO_S` adia o começo da queda, para simular a rede caindo
+com a placa já enviando), e `SIMULAR_API_STATUS`, que faz o envio devolver esse status HTTP sem
+sair da placa (prova de tela e LED no simulador sem escrever na API de produção).
 
 ### 3.10 Reconexão
 
@@ -312,7 +315,8 @@ Wi-Fi nem chave (comandos em `README.md`, seção Firmware). O procedimento que 
 placa física, com um script de apoio mantido fora do repositório, é: (1) gravar 20 s da serial do
 firmware que está na placa; (2) copiar a flash inteira com `esptool read-flash` (dá para voltar
 com `write-flash`); (3) compilar com DHT11, tela OLED e, se houver, as credenciais do MQTT; (4)
-gravar com `arduino-cli upload`. Depois disso a placa pisca o amarelo esperando configuração.
+gravar com `arduino-cli upload`. Depois disso a placa mostra "SEM CONFIG / LIGUE O CABO" na tela
+esperando configuração (na simulação, o amarelo pisca em dois toques).
 
 **b) Configurar a placa pelo site** (Wi-Fi, ID e chave), sem recompilar. Feito na tela Sensores
 do painel, botão "Conectar sensor pelo cabo", só em Chrome ou Edge no computador (Web Serial).
@@ -414,6 +418,88 @@ atual o scan foi recusado duas vezes e a terceira devolveu a lista.
 
 A rede e a senha do Wi-Fi vão direto para a placa pelo cabo; o painel não as guarda. A chave do
 sensor sai da API uma única vez e vai para a placa sem o usuário copiar.
+
+### 3.12 Indicadores na placa (tela OLED e LED)
+
+Quem está do lado do sensor (motorista, operador) vê o que a placa está fazendo sem computador.
+Seção "INDICADORES" do `coldtrack.ino`.
+
+**Sem bloquear o loop.** O estado fica em variáveis (`indFaixa`, `indSensorFalhou`,
+`indConectando`, `indEnviando`, `indUltimoHttp`, `indCabo`...) e o piscar é calculado pelo
+`millis()`. `atualizarIndicadores()` roda a cada volta do `loop()` (no máximo a cada 50 ms) e a tela
+só é redesenhada quando o texto muda. Nenhuma animação usa `delay`. Os trechos que já esperavam
+(conexão do Wi-Fi, scan, teste da rede pelo cabo, segunda tentativa do sensor) trocaram o `delay`
+por `esperarAtualizando(ms)`, que continua animando durante a espera. A única coisa que segura a
+tela é a própria requisição HTTPS (até 5 s), e por isso "ENVIANDO..." é desenhado antes dela.
+
+**Tela 72x40** (placa física, `TELA_OLED`), três linhas:
+
+| linha | fonte | conteúdo |
+|---|---|---|
+| 1 | Helvetica negrito 14 px | temperatura (`12.4°C`; `--.-°C` sem leitura válida) |
+| 2 | 6x10 | carga e umidade (`NORMAL   81%`, `ATENCAO`, `CRITICO`), ou `FALHA SENSOR`, `CONFIG CABO`, `SEM CONFIG`, `INICIANDO`, `REINICIO WDT` |
+| 3 | 6x10 | fase da conexão (até 12 letras) |
+
+Linha 3, pela ordem de prioridade: `TESTANDO...` / nome da rede (teste pelo cabo), resultado do
+teste por 8 s (`REDE OK`, `SENHA ERRADA`, `REDE AUSENTE`, `SINAL FRACO`, `SEM IP`, `TEMPO ESGOT.`,
+`REDE CORPOR.`, `SEG. INCOMP.`...), `CONECTANDO` / nome da rede, `LIGUE O CABO` (sem configuração),
+`REINICIO WDT` (no primeiro minuto depois de um reinício por watchdog), `ENVIANDO...`,
+`SEM REDE` / `FILA n`, `FALHA ENVIO` (sem resposta da API), `ERRO API 401` (código devolvido),
+`ENVIADO` (4 s depois de um 201/200) e, no resto do tempo, `WIFI -58dBm` (`WIFI OK` no simulador,
+que não dá RSSI). Onde há duas informações (`/`), a linha alterna entre elas a cada 2 s.
+
+**LEDs.** Na simulação (sem tela) continuam os três LEDs da faixa; a fase da conexão muda **o
+jeito de piscar**, não a cor, então a cor da carga nunca se perde:
+
+| fase | LEDs da simulação | log na serial |
+|---|---|---|
+| iniciando, conectando sem leitura ainda, testando rede pelo cabo | verde, amarelo, vermelho em sequência (200 ms cada) | `LED: sequencia` |
+| online, último envio aceito | LED da faixa aceso fixo | `LED: fixo` |
+| sem rede (leituras indo para a fila) | LED da faixa pisca 1 vez por segundo (500 ms aceso, 500 ms apagado) | `LED: sem_rede` |
+| erro no envio (API recusou ou não respondeu) | LED da faixa pisca 4 vezes por segundo (125/125 ms) | `LED: erro_envio` |
+| falha do sensor | os três piscam juntos, 2 vezes por segundo (250/250 ms) | `LED: falha_sensor` |
+| sem configuração (espera o cabo) | amarelo em dois toques curtos a cada 1,5 s | `LED: sem_config` |
+
+O reinício por watchdog aparece na tela (`REINICIO WDT`) e na serial; o LED só faz a sequência de
+boot.
+
+**LED da placa física.** Na placa com OLED os GPIO 5 e 6 são da tela. O LED embutido não está
+confirmado: o projeto de referência da placa ESP32-C3 com OLED 0,42" (01Space) tem um LED RGB
+endereçável WS2812 no GPIO 2, e as placas no formato "SuperMini" têm LED azul simples no GPIO 8,
+aceso em nível baixo. Como a placa da equipe ainda não foi conferida, o LED fica desligado até o
+`secrets.h` dizer qual é:
+
+```c
+#define LED_PLACA 8              // LED simples no GPIO 8...
+#define LED_PLACA_ATIVO_BAIXO    // ...que acende com o pino em 0
+// ou
+#define LED_PLACA 2              // WS2812 no GPIO 2
+#define LED_PLACA_RGB            // mostra a cor da faixa (rgbLedWrite do core, sem biblioteca)
+```
+
+Os padrões são os mesmos da tabela. No LED RGB a cor é a da faixa (branco nos três juntos); no LED
+de uma cor só fica o padrão de piscar. O GPIO 8 também é pino de *strapping* (precisa estar em
+nível alto para gravar pela serial); o firmware só mexe nele depois do boot. Conferir na placa
+física qual LED existe antes de ligar a macro.
+
+**Prova no simulador** (`firmware/wokwi/indicadores/`). O Wokwi não tem tela 72x40: o diagrama de
+teste usa a `board-ssd1306` (128x64, I2C nos GPIO 5 e 6) com o mesmo driver
+`U8G2_SSD1306_72X40_ER_F_HW_I2C`; o desenho aparece nas colunas 28 a 99, a mesma janela que a
+placa física enxerga. O fio de dados do DHT passa por um botão (`fio`): pressionado é o fio ligado,
+solto é o fio puxado (o Wokwi não tem controle para desligar o DHT). O envio usa
+`SIMULAR_API_STATUS` (nada é escrito na API de produção) e a queda usa `SIMULAR_QUEDA_INICIO_S 30` +
+`SIMULAR_QUEDA_S 45` (rede cai com a placa já enviando e volta 45 s depois). Cenários:
+
+- `tela/fases.yaml`: iniciando, conectando, enviando, enviado, conectado, sem rede e fila, volta
+  com reenvio da fila, fio do sensor puxado, sensor de volta (atenção), teste pelo cabo com rede
+  boa (`REDE OK`) e com rede inexistente (`REDE AUSENTE`), com print da tela em cada fase;
+- `tela/sem-config.yaml`: placa sem rede e sem identidade (`SEM CONFIG` / `LIGUE O CABO`);
+- `tela/erro-wdt.yaml`: API recusando (401) e reinício por watchdog (`SIMULAR_TRAVAMENTO_S 25`,
+  `WATCHDOG_S 8`);
+- `leds/leds.yaml`: os padrões dos três LEDs (log `LED:` e `expect-pin`), com o analisador lógico
+  gravando os três pinos.
+
+Na placa física o teste fica para depois da coleta de 48 h em andamento (gravar reinicia a placa).
 
 ---
 

@@ -1,0 +1,65 @@
+# Uso: compilar o coldtrack.ino com o secrets.h do Wokwi (Wokwi-GUEST, DEVICE_ID e
+# DEVICE_KEY de teste) mais estas linhas:
+#   #define TELA_OLED / LED_PLACA 8 / LED_PLACA_RGB / SIMULAR_API_STATUS 201 /
+#   SIMULAR_QUEDA_INICIO_S 30 / SIMULAR_QUEDA_S 45
+# e rodar, na pasta com wokwi.toml e este diagram.json:
+#   wokwi-cli --timeout 400000 --scenario fases.yaml .
+# SIMULAR_API_STATUS: o envio nao sai da placa (nada e escrito na API).
+# Os prints saem em shots/ (take-screenshot da tela).
+# Indicadores na tela (issue 87). Firmware: TELA_OLED, SIMULAR_API_STATUS 201,
+# queda simulada de 30 s a 75 s. "fio" e um botao no fio de dados do DHT:
+# pressionado = fio ligado; solto = fio puxado.
+name: Indicadores na tela OLED
+version: 1
+author: ColdTrack
+steps:
+  - set-control: { part-id: fio, control: pressed, value: 1 }
+  - wait-serial: "COLDTRACK EDGE"
+  - take-screenshot: { part-id: oled1, save-to: shots/01-iniciando.png }
+  - wait-serial: "Conectando ao Wi-Fi"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/02-conectando.png }
+  - wait-serial: "Enviando telemetria"
+  - take-screenshot: { part-id: oled1, save-to: shots/03-enviando.png }
+  - wait-serial: "Azure (SIMULADO"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/04-enviado.png }
+  - delay: 6000ms
+  - take-screenshot: { part-id: oled1, save-to: shots/05-conectado.png }
+  - wait-serial: "FILA: leitura guardada offline (2 na fila)"
+  - delay: 100ms
+  - take-screenshot: { part-id: oled1, save-to: shots/06a-sem-rede.png }
+  - delay: 2000ms
+  - take-screenshot: { part-id: oled1, save-to: shots/06b-sem-rede-fila.png }
+  - wait-serial: "FILA: 2 reenviadas"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/07-volta-enviando.png }
+  - wait-serial: "Azure (SIMULADO"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/08-volta-enviado.png }
+  - set-control: { part-id: fio, control: pressed, value: 0 }
+  - wait-serial: "ERRO: Falha na leitura do sensor!"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/09-falha-sensor.png }
+  - set-control: { part-id: fio, control: pressed, value: 1 }
+  - set-control: { part-id: dht1, control: temperature, value: 18 }
+  - wait-serial: "STATUS DA CARGA: ATENCAO"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/10-sensor-volta-atencao.png }
+  - write-serial: "CT<{\"cmd\":\"wifi\",\"ssid\":\"Wokwi-GUEST\",\"senha\":\"\"}\n"
+  - wait-serial: "CONFIG: testando a rede"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/11-cabo-testando.png }
+  - wait-serial: "CT>{\"ok\":true,\"wifi\":\"conectado\""
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/12-cabo-ok.png }
+  - delay: 9000ms
+  - write-serial: "CT<{\"cmd\":\"wifi\",\"ssid\":\"RedeQueNaoExiste\",\"senha\":\"12345678\"}\n"
+  - wait-serial: "CONFIG: testando a rede RedeQueNaoExiste"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/13-cabo-testando-ruim.png }
+  - wait-serial: "CT>{\"ok\":false"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/14-cabo-erro.png }
+  - delay: 9000ms
+  - take-screenshot: { part-id: oled1, save-to: shots/15-depois-do-cabo.png }
