@@ -22,6 +22,8 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   GET  /api/motorista           leitura, faixa e viagem do veículo vinculado (motorista)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/predict             risco de passar de 30 °C por mês e hora (operador, gestor)
+  GET  /api/predict/sensor      temperatura do sensor prevista 10 min à frente, com baseline
+                                (operador e gestor pelo ?deviceId=; motorista, o do veículo)
   GET  /api/dispositivos        sensores da empresa, com último contato, online e estado do sensor
                                 (operador, gestor)
   POST/PUT/DELETE /api/dispositivos[/{id}]  registra, troca a chave, remove (gestor)
@@ -57,6 +59,7 @@ import assistente
 import chat
 import limites
 import predicao
+import previsao_sensor
 import push
 from cadastros import (
     EMAIL,
@@ -125,6 +128,10 @@ HEARTBEAT_POR_MINUTO = 6
 LIMITE_SINAL_MOTORISTA_S = 5 * 60
 # A tela consulta a cada 20 s (3 por minuto); 30 por minuto por usuário segura um laço.
 MOTORISTA_POR_MINUTO = 30
+# Previsão do sensor: o painel e a tela do motorista consultam a cada 20 s; mesma folga.
+PREVISAO_SENSOR_POR_MINUTO = 30
+# Leituras pedidas ao banco para a previsão (20 s de cadência x 30 min = 90; folga).
+PREVISAO_SENSOR_LEITURAS = 200
 
 # Limites de uso (contados no Cosmos, valem somando todas as instâncias):
 # chat do site: 10 perguntas por minuto por IP e 2000 por dia no total;
@@ -1114,6 +1121,54 @@ def predict(req: func.HttpRequest) -> func.HttpResponse:
         logging.exception("predict: modelo_risco.json ausente ou inválido no pacote")
         return resposta({"erros": ["modelo indisponível"]}, 503)
     return resposta(predicao.prever(modelo, mes, hora))
+
+
+def _sensor_do_motorista(usuario):
+    """deviceId do veículo vinculado ao motorista (do cadastro, nunca da URL), ou None."""
+    empresa, codigo = usuario["empresaId"], usuario.get("veiculo")
+    veiculo = ler("veiculos", id_interno(empresa, codigo)) if codigo else None
+    if veiculo is None or veiculo.get("empresaId") != empresa:
+        return None
+    return veiculo.get("deviceId") or None
+
+
+@app.route(route="predict/sensor", methods=["GET"])
+def predict_sensor(req: func.HttpRequest) -> func.HttpResponse:
+    """Temperatura do sensor prevista `horizonteMin` minutos à frente, com o baseline.
+
+    Usa as leituras recentes do próprio sensor (modelo de analise/sensor/modelo_previsao.py).
+    Operador e gestor escolhem o sensor por ?deviceId=; o motorista recebe o do veículo
+    vinculado a ele. Sensor de outra empresa responde igual a sensor inexistente.
+    """
+    usuario, erro = autorizar(req, CONTA)
+    if erro:
+        return erro
+    if not LIMITES.permitir(f"predict-sensor:usuario:{usuario['id']}",
+                            PREVISAO_SENSOR_POR_MINUTO, limites.MINUTO):
+        return resposta({"erros": ["muitas consultas seguidas. Tente de novo em 1 min."]}, 429)
+    empresa = usuario["empresaId"]
+    if usuario["perfil"] == "motorista":
+        device = _sensor_do_motorista(usuario)
+        if device is None:
+            return resposta({"erros": ["nenhum sensor vinculado a este motorista; "
+                                       "fale com o gestor"]}, 404)
+    else:
+        device = req.params.get("deviceId")
+        if not device:
+            return resposta({"erros": ["informe ?deviceId="]}, 400)
+    if _dispositivo_da_empresa(device, empresa) is None:
+        return resposta({"erros": ["dispositivo não encontrado"]}, 404)
+    device = device.lower()
+    try:
+        modelo = previsao_sensor.carregar()
+    except (OSError, ValueError):
+        logging.exception("predict/sensor: modelo_sensor.json ausente ou inválido no pacote")
+        return resposta({"erros": ["modelo indisponível"]}, 503)
+    agora = datetime.now(timezone.utc)
+    minutos = modelo["janelaMin"] + modelo["lacunaMaxS"] // 60 + 5
+    itens = consultar_leituras(device, empresa, PREVISAO_SENSOR_LEITURAS,
+                               agora.timestamp() - minutos * 60)
+    return resposta({"deviceId": device, **previsao_sensor.prever(modelo, itens, agora)})
 
 
 # ------------------------------------------------------------ dispositivos
