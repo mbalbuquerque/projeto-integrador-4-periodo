@@ -99,6 +99,9 @@ veículo usa `demonstrativo`). Dentro de `[min, max]` é `NORMAL`; até `margem`
 `ATENCAO`; além disso, `CRITICO`. `min` nulo significa sem limite inferior. O sensor usa a
 `faixa` devolvida para acender os LEDs.
 
+**Alerta push**: quando a leitura piora de faixa, os usuários inscritos da empresa recebem uma
+notificação (ver [Alertas push](#alertas-push-push)).
+
 ## Acesso
 
 ### `GET /perfis`
@@ -170,6 +173,46 @@ Acesso: operador, gestor. Troca a própria senha.
 Acesso: operador, gestor. Sem corpo. Encerra **todas** as sessões do usuário (todos os
 aparelhos): sobe a versão da sessão e todo token já emitido passa a receber `401`.
 Resposta: `204`. O painel deve chamar antes de apagar o token guardado no navegador.
+Também apaga as inscrições de alerta push do usuário.
+
+## Alertas push (`/push`)
+
+Web Push padrão (VAPID): o navegador do usuário (Chrome/Edge/Firefox no Android ou no
+computador; Safari no iPhone com o painel instalado na tela inicial, iOS 16.4 ou mais novo) cria
+uma inscrição no serviço de push dele e o painel a envia para a API. Sem serviço pago: a API
+assina cada envio com a chave privada VAPID e o serviço de push do navegador entrega.
+
+| método e rota | acesso | corpo | resposta |
+|---|---|---|---|
+| `GET /push/chave` | público | — | `200 {"chave"}` (chave pública VAPID, base64url); `503` sem chaves configuradas |
+| `POST /push/inscricao` | operador, gestor | `PushSubscription.toJSON()`: `{"endpoint", "keys": {"p256dh", "auth"}}` | `201 {"inscricoes": n}` |
+| `DELETE /push/inscricao` | operador, gestor | `{"endpoint"}` | `204` (também quando o endpoint não era do usuário) |
+
+- `endpoint` precisa ser `https` em um serviço de push conhecido (`fcm.googleapis.com`,
+  `*.push.services.mozilla.com`, `*.push.apple.com`, `*.notify.windows.com`); outro endereço dá
+  `400 endpoint: serviço de push não reconhecido`. A API só faz POST para esses hosts.
+- A inscrição fica no documento do usuário (campo `push`, até 10 aparelhos; o mais antigo sai).
+  O mesmo endpoint não se repete, e se estava em outra conta (aparelho compartilhado) sai de lá.
+- `POST /sair` apaga todas as inscrições do usuário; remover o usuário apaga junto.
+
+**Quando o push sai** (no `POST /telemetria`, depois de gravar a leitura nova):
+
+- só quando a faixa **piora** em relação à leitura anterior do mesmo sensor pelo horário da
+  medição: `NORMAL → ATENCAO`, `NORMAL → CRITICO`, `ATENCAO → CRITICO`. Mesma faixa ou melhora
+  não avisam; o reenvio duplicado (`200 duplicada`) não chega a esse ponto;
+- no máximo 1 push por sensor e faixa a cada 10 min (contador no container `limites`), para a
+  leitura que oscila na borda da faixa não virar uma notificação a cada 20 s;
+- leitura medida há mais de 30 min (fila offline do sensor chegando depois) não avisa;
+- vai para todas as inscrições dos usuários da **empresa do sensor**.
+
+Conteúdo da notificação (JSON cifrado de ponta a ponta, só o navegador lê):
+`{"titulo", "corpo", "url", "tag", "status", "deviceId"}`, com `url` `/alertas?veiculo=<código>`
+(ou `/alertas` se o sensor não está em veículo). Falha no envio nunca muda a resposta da
+telemetria (fica só no log, sem endereço nem chaves); o serviço de push respondendo `404` ou
+`410` (inscrição expirada) faz a API apagar a inscrição.
+
+Configuração (app settings da Function App): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` (só no app
+setting, nunca no repositório) e `VAPID_SUBJECT` (contato `https://` ou `mailto:`).
 
 ## Chat do site
 

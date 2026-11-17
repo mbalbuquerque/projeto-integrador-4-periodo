@@ -14,6 +14,7 @@ equipe para um uso real e não substituem revisão jurídica.
 | Temperatura, umidade, RSSI e identificador do sensor | Não é dado pessoal por si; associado a veículo e viagem da empresa | Cosmos DB | Monitorar a carga |
 | Origem, destino e carga de cada viagem | Empresa | Cosmos DB | Acompanhar a operação |
 | Endereço IP | Usuário e visitante | Contadores de limite no Cosmos (expiram sozinhos) | Limitar tentativas de login e de uso |
+| Inscrição de alerta push (endereço do serviço de push e chaves do navegador) | Usuário | Cosmos DB, no cadastro do usuário | Mandar alerta de temperatura ao aparelho; sai com `DELETE /push/inscricao`, `POST /sair` ou quando o serviço de push diz que expirou |
 | Perguntas ao chat e ao assistente | Usuário e visitante | Não são gravadas | Respondidas na hora; só contagem de uso |
 
 Não há coleta de localização do motorista, CPF, telefone ou dados sensíveis na API. O painel tem

@@ -379,7 +379,9 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | GET | `/api/docs`, `/api/openapi.json` | público | Swagger UI e a especificação |
 | GET | `/api/eu` | operador, gestor | Dados do usuário logado e nome da empresa |
 | POST | `/api/senha` | operador, gestor | Troca a própria senha (pede a atual) e devolve token novo |
-| POST | `/api/sair` | operador, gestor | Derruba todas as sessões do usuário (204) |
+| POST | `/api/sair` | operador, gestor | Derruba todas as sessões do usuário (204) e apaga as inscrições de push |
+| GET | `/api/push/chave` | público | Chave pública VAPID dos alertas push (503 sem configuração) |
+| POST / DELETE | `/api/push/inscricao` | operador, gestor | Inscreve ou remove o aparelho nos alertas push |
 | POST | `/api/assistente` | operador, gestor | Assistente do painel com os dados da empresa |
 | GET | `/api/leituras?deviceId=&limite=&horas=&status=` | operador, gestor | Últimas leituras de um sensor da empresa (até 500) |
 | GET | `/api/predict?mes=&hora=` | operador, gestor | Risco de passar de 30 °C no mês e hora |
@@ -407,6 +409,7 @@ sequenceDiagram
     A->>A: classificar(temperatura, perfil)
     A->>DB: create_item(leitura) com id = deviceId~medidoEm
     alt id novo
+        A->>A: piorou de faixa? → push aos inscritos da empresa (falha não muda a resposta)
         A-->>P: 201 {id, status, perfil, faixa}
     else id já existe, mesmos valores
         A-->>P: 200 {id, duplicada: true}
@@ -525,6 +528,49 @@ Toda resposta JSON (`resposta()`) leva `CABECALHOS_SEGURANCA`: `X-Content-Type-O
 e do script de inicialização pelo hash SHA-256, `frame-ancestors 'none'`, mais
 `X-Frame-Options: DENY`, `Permissions-Policy` e SRI nos arquivos do Swagger.
 
+### 4.10 Alertas push (`push.py`)
+
+Exigência do app: alerta no celular por limiar. Web Push padrão com VAPID, sem serviço pago:
+
+```mermaid
+sequenceDiagram
+    participant N as Navegador (painel)
+    participant A as API
+    participant DB as Cosmos DB
+    participant S as Serviço de push (FCM, Apple, Mozilla)
+    N->>A: GET /push/chave
+    N->>S: pushManager.subscribe(chave) → inscrição
+    N->>A: POST /push/inscricao (token)
+    A->>DB: usuarios/{email}.push += inscrição
+    Note over A: mais tarde, no POST /telemetria
+    A->>DB: leitura anterior do sensor (medidoEm < atual)
+    A->>A: piorou? (NORMAL→ATENCAO/CRITICO, ATENCAO→CRITICO)
+    A->>DB: limites: 1 por sensor e faixa a cada 10 min
+    A->>S: webpush (cifrado, assinado com a chave privada VAPID)
+    S-->>N: notificação → service worker mostra e abre /alertas
+```
+
+- **Modelo**: sem container novo. A inscrição (`endpoint`, `keys.p256dh`, `keys.auth`,
+  `criadaEm`) fica no campo `push` do documento do usuário, no container `usuarios`. Assim herda o
+  `empresaId` do usuário (o envio consulta `lista("usuarios", empresa_do_sensor, "c.id, c.push")`,
+  e uma empresa nunca recebe alerta da outra), e some junto com o usuário. `publico()` e as listas
+  de usuários escolhem os campos, então a inscrição nunca sai em resposta da API.
+- **Só na transição** (`avisar_por_push`): compara com a leitura anterior do mesmo sensor pelo
+  horário da medição; só a piora avisa. O reenvio duplicado responde antes e nunca avisa.
+  Leitura com mais de 30 min (fila offline) não avisa. O contador `push:<sensor>:<faixa>` no
+  container `limites` segura 1 push por sensor e faixa a cada 10 min.
+- **Nunca quebra a gravação**: a leitura já está gravada quando o push começa; `push.enviar`
+  nunca levanta exceção, e qualquer outro erro do push é pego em `telemetria` e só vai para o log.
+  Os envios saem em paralelo (até 8) com tempo limite de 5 s cada.
+- **Limpeza**: resposta `404`/`410` do serviço de push = inscrição expirada, apagada do usuário.
+- **Segurança**: o `endpoint` só é aceito em hosts de serviço de push conhecidos (`HOSTS_PUSH`),
+  então a API não vira um jeito de fazer POST para qualquer URL. O conteúdo vai cifrado
+  (`aes128gcm`, RFC 8291) para a chave do navegador; o log não guarda endereço nem chaves. A chave
+  privada VAPID fica só no app setting `VAPID_PRIVATE_KEY`.
+- **Biblioteca**: `pywebpush` (com `py-vapid`, `http-ece` e `aiohttp`; `cryptography` e
+  `requests` já vinham das outras dependências). Os testes (`test_push.py`) simulam a lib ou só o
+  POST HTTP; um deles deixa a criptografia real rodar e decifra o conteúdo como o navegador faria.
+
 ---
 
 ## 5. Banco de dados
@@ -536,7 +582,7 @@ Azure Cosmos DB for NoSQL, conta `cosmos-coldtrack-7319`, banco `coldtrack` (`in
 | container | chave de partição | conteúdo e campos principais |
 |---|---|---|
 | `empresas` | `/id` | `id` (`E-XXXXXXXX`), `nome`, `criadaEm` |
-| `usuarios` | `/id` (e-mail) | `id`, `nome`, `perfil`, `empresaId`, `senhaHash`, `sessao`, e no login `falhas`, `ultimaFalha`, `bloqueadoAte` |
+| `usuarios` | `/id` (e-mail) | `id`, `nome`, `perfil`, `empresaId`, `senhaHash`, `sessao`, e no login `falhas`, `ultimaFalha`, `bloqueadoAte`; `push` (inscrições de alerta push) |
 | `dispositivos` | `/id` (ID do sensor) | `id`, `empresaId`, `descricao`, `chaveHash` (SHA-256), `criadoEm` |
 | `veiculos` | `/id` (`<empresa>~<código>`) | `tipo`, `deviceId`, `dispositivo`, `perfil` |
 | `viagens` | `/id` (`<empresa>~<código>`) | `veiculo`, `origem`, `destino`, `carga`, `inicio`, `fim` |
