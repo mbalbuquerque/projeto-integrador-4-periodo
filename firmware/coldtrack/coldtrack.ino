@@ -93,19 +93,44 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.16"
+#define FW_VERSAO "2026.11.16.2"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
 #endif
 
-// Tempo para testar uma rede nova recebida pelo cabo, em ms.
+// Tempo para testar uma rede nova recebida pelo cabo, em ms. Rede que o scan
+// achou ganha mais tempo: em rede cheia (campus) o DHCP demora a responder.
 #define TESTE_WIFI_MS 15000
+#define TESTE_WIFI_ACHADA_MS 25000
+
+// Abaixo deste sinal (dBm), handshake que estoura e sinal fraco, nao senha errada.
+#define RSSI_FRACO -80
+
+// Intervalo entre tentativas de reconexao no loop, em ms. No meio delas o
+// proprio driver segue tentando; o loop continua medindo e guardando na fila.
+#define RECONEXAO_MS 30000
+
+// Maximo de redes na resposta do comando "redes".
+#define REDES_MAX 15
 
 String cfgSsid;
 String cfgSenha;
 String cfgId;
 String cfgChave;
+
+// Melhor AP com o nome pedido, visto no scan antes do teste de rede. Fica
+// aqui no topo porque o Arduino gera os prototipos antes da primeira funcao.
+struct ApVisto {
+  bool escaneou;
+  bool achou;
+  int32_t rssi;
+  int32_t canal;
+  wifi_auth_mode_t seguranca;
+};
+
+ApVisto ultimoAp = { false, false, 0, 0, WIFI_AUTH_OPEN };
+
 
 // Tempo maximo de espera da requisicao HTTPS, em ms.
 #define HTTP_TIMEOUT_MS 5000
@@ -601,9 +626,57 @@ bool lerSerial();
 
 // ESP32-C3 com OLED 0.42": a antena de chip nao aguenta a potencia padrao e o
 // handshake com o roteador falha (sai como senha errada). Potencia menor resolve.
+// O setTxPower so vale com o modo estacao ja ligado (WiFi.mode no setup).
 void ajustarRadio() {
 #ifdef TELA_OLED
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
+#endif
+}
+
+
+// Motivo da ultima queda do Wi-Fi (vem do evento do driver; 0 = nenhum) e se
+// a placa chegou a se associar ao AP (WPA concluido) na tentativa atual.
+volatile uint8_t motivoQueda = 0;
+volatile bool associou = false;
+unsigned long ultimaTentativaWiFi = 0;
+
+
+void logMotivo(const char *contexto) {
+
+  if (motivoQueda == 0) {
+    return;
+  }
+
+  Serial.printf("WIFI: %s, motivo %u (%s)\n", contexto, motivoQueda,
+                WiFi.disconnectReasonName((wifi_err_reason_t)motivoQueda));
+}
+
+
+// Comeca uma tentativa do zero. Sem o disconnect antes, um begin no meio de
+// outra tentativa e recusado pelo driver ("sta is connecting, cannot set
+// config") e a tentativa em curso e atropelada a cada ciclo do loop.
+// Scan em todos os canais e escolha pelo sinal: o padrao (fast scan) entra no
+// primeiro AP com o nome, e no campus ha varios APs com o mesmo SSID.
+void iniciarWiFi(const char *ssid, const char *senha) {
+
+  WiFi.disconnect();
+  delay(100);
+
+  motivoQueda = 0;
+  associou = false;
+  ultimaTentativaWiFi = millis();
+
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+
+  // Potencia antes do begin (vale ja para a associacao) e de novo depois, caso
+  // o driver reaplique a potencia padrao ao conectar.
+  ajustarRadio();
+  WiFi.begin(ssid, senha);
+  ajustarRadio();
+
+#ifdef TELA_OLED
+  Serial.printf("RADIO: potencia maxima %.1f dBm\n", WiFi.getTxPower() / 4.0);
 #endif
 }
 
@@ -620,8 +693,7 @@ void conectarWiFi() {
   Serial.print("Conectando ao Wi-Fi ");
   Serial.print(cfgSsid);
 
-  WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
-  ajustarRadio();
+  iniciarWiFi(cfgSsid.c_str(), cfgSenha.c_str());
 
   int tentativas = 0;
 
@@ -655,7 +727,8 @@ void conectarWiFi() {
   } else {
 
     Serial.println();
-    Serial.println("Falha na conexão Wi-Fi.");
+    Serial.println("Falha na conexão Wi-Fi. O driver segue tentando em segundo plano.");
+    logMotivo("sem conexao");
   }
 }
 
@@ -1260,10 +1333,15 @@ void reenviarFila() {
 //   CT<{"cmd":"info"}
 //   CT<{"cmd":"wifi","ssid":"..","senha":".."}                      troca so a rede
 //   CT<{"cmd":"config","ssid":"..","senha":"..","id":"..","chave":".."}
+//   CT<{"cmd":"redes"}                                              redes 2.4 GHz vistas
 //
 // A placa testa a rede antes de gravar e responde
-//   CT>{"ok":true,"wifi":"conectado","rssi":-55}
-//   CT>{"ok":false,"erro":"senha|rede_nao_encontrada|tempo|..."}
+//   CT>{"ok":true,"wifi":"conectado","rssi":-55,"canal":6,"seguranca":"wpa2","id":".."}
+//   CT>{"ok":false,"erro":"..","motivo":15,"rssi":-84,"canal":6,"seguranca":"wpa2"}
+// erro: senha | rede_nao_encontrada | rede_corporativa | seguranca_incompativel |
+//       sinal_fraco | sem_ip | tempo | rede_invalida | ...; motivo = codigo do
+//       driver (wifi_err_reason_t); rssi/canal/seguranca so quando o scan achou a rede.
+//   CT>{"ok":true,"redes":[{"ssid":"..","rssi":-60,"canal":6,"seguranca":"wpa2"}]}
 // Senha e chave nunca voltam pela serial nem aparecem no log.
 
 String bufferSerial;
@@ -1383,29 +1461,143 @@ void responder(const String &json) {
 }
 
 
-// Motivo da ultima queda do Wi-Fi (vem do evento do driver; 0 = nenhum).
-volatile uint8_t motivoQueda = 0;
-
 void aoCairWiFi(WiFiEvent_t evento, WiFiEventInfo_t info) {
 
-  motivoQueda = info.wifi_sta_disconnected.reason;
+  associou = false;
+
+  // ASSOC_LEAVE e STA_LEAVING vem do disconnect da propria placa: nao e falha.
+  uint8_t motivo = info.wifi_sta_disconnected.reason;
+
+  if (motivo != WIFI_REASON_ASSOC_LEAVE && motivo != WIFI_REASON_STA_LEAVING) {
+    motivoQueda = info.wifi_sta_disconnected.reason;
+  }
 }
 
 
+void aoAssociarWiFi(WiFiEvent_t evento, WiFiEventInfo_t info) {
+
+  associou = true;
+}
+
+
+// Nome curto do tipo de seguranca do AP, como vai para o painel.
+const char *nomeSeguranca(wifi_auth_mode_t modo) {
+
+  switch (modo) {
+    case WIFI_AUTH_OPEN:                 return "aberta";
+    case WIFI_AUTH_WEP:                  return "wep";
+    case WIFI_AUTH_WPA_PSK:              return "wpa";
+    case WIFI_AUTH_WPA2_PSK:             return "wpa2";
+    case WIFI_AUTH_WPA_WPA2_PSK:         return "wpa_wpa2";
+    case WIFI_AUTH_WPA3_PSK:             return "wpa3";
+    case WIFI_AUTH_WPA2_WPA3_PSK:        return "wpa2_wpa3";
+    case WIFI_AUTH_OWE:                  return "owe";
+    case WIFI_AUTH_WPA_ENTERPRISE:
+    case WIFI_AUTH_WPA2_ENTERPRISE:
+    case WIFI_AUTH_WPA3_ENTERPRISE:
+    case WIFI_AUTH_WPA2_WPA3_ENTERPRISE:
+    case WIFI_AUTH_WPA3_ENT_192:         return "enterprise";
+    default:                             return "outra";
+  }
+}
+
+
+// WPA-Enterprise (802.1X, login com usuario): a placa so tem SSID e senha.
+bool redeCorporativa(wifi_auth_mode_t modo) {
+
+  return modo == WIFI_AUTH_WPA_ENTERPRISE || modo == WIFI_AUTH_WPA2_ENTERPRISE ||
+         modo == WIFI_AUTH_WPA3_ENTERPRISE || modo == WIFI_AUTH_WPA2_WPA3_ENTERPRISE ||
+         modo == WIFI_AUTH_WPA3_ENT_192;
+}
+
+
+// Scan bloqueante; se o driver estiver no meio de uma tentativa de conexao
+// (scan recusado) e a placa nao estiver conectada, para a tentativa e repete.
+int16_t escanear(const char *ssid) {
+
+  int16_t n = WiFi.scanNetworks(false, true, false, 300, 0, ssid);
+
+  if (n == WIFI_SCAN_FAILED && WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect();
+    delay(200);
+    ultimaTentativaWiFi = 0;   // o loop reconecta logo depois
+    n = WiFi.scanNetworks(false, true, false, 300, 0, ssid);
+  }
+
+  return n;
+}
+
+
+// Scan dirigido ao nome (acha tambem rede oculta), guardando o AP de sinal
+// mais forte. O ESP32-C3 so tem radio 2.4 GHz: rede so 5 GHz nao aparece.
+// Resultado em ultimoAp (o Arduino nao aceita a struct no prototipo gerado).
+void procurarRede(const String &ssid) {
+
+  ApVisto &ap = ultimoAp;
+  ap = { false, false, 0, 0, WIFI_AUTH_OPEN };
+
+  int16_t n = escanear(ssid.c_str());
+
+  if (n < 0) {
+    Serial.printf("WIFI: scan falhou (%d); testando sem ele.\n", n);
+    return;
+  }
+
+  ap.escaneou = true;
+
+  for (int i = 0; i < n; i++) {
+
+    if (WiFi.SSID(i) != ssid) {
+      continue;
+    }
+
+    if (!ap.achou || WiFi.RSSI(i) > ap.rssi) {
+      ap.achou = true;
+      ap.rssi = WiFi.RSSI(i);
+      ap.canal = WiFi.channel(i);
+      ap.seguranca = WiFi.encryptionType(i);
+    }
+  }
+
+  WiFi.scanDelete();
+
+  if (ap.achou) {
+    Serial.printf("WIFI: rede achada no canal %ld, sinal %ld dBm, seguranca %s.\n",
+                  (long)ap.canal, (long)ap.rssi, nomeSeguranca(ap.seguranca));
+  } else {
+    Serial.println("WIFI: rede nao apareceu no scan 2.4 GHz.");
+  }
+}
+
+
+// Codigo de erro para o painel a partir do motivo do driver ("" = sem
+// conclusao). Handshake que estoura com sinal fraco e sinal, nao senha.
 String traduzirMotivo(uint8_t motivo) {
+
+  bool sinalFraco = ultimoAp.achou && ultimoAp.rssi < RSSI_FRACO;
 
   switch (motivo) {
 
     case WIFI_REASON_NO_AP_FOUND:
-    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
-    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
     case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
       return "rede_nao_encontrada";
 
-    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+      return "seguranca_incompativel";
+
+    case WIFI_REASON_802_1X_AUTH_FAILED:
+      return "rede_corporativa";
+
+    case WIFI_REASON_BEACON_TIMEOUT:
+      return "sinal_fraco";
+
     case WIFI_REASON_AUTH_EXPIRE:
     case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
     case WIFI_REASON_HANDSHAKE_TIMEOUT:
+      return sinalFraco ? "sinal_fraco" : "senha";
+
+    case WIFI_REASON_AUTH_FAIL:
     case WIFI_REASON_MIC_FAILURE:
       return "senha";
   }
@@ -1414,20 +1606,53 @@ String traduzirMotivo(uint8_t motivo) {
 }
 
 
-// Tenta a rede; devolve "" se conectou ou o motivo da falha.
-String testarWiFi(const String &ssid, const String &senha) {
+// Erro que nao melhora esperando mais (o sinal fraco pode passar na proxima tentativa).
+bool erroDefinitivo(const String &erro) {
+
+  return erro.length() > 0 && erro != "sinal_fraco";
+}
+
+
+// Tenta a rede; devolve "" se conectou ou o motivo da falha. Rede aberta
+// zera a senha (com senha o driver exige WPA2 e nao acha a rede).
+String testarWiFi(const String &ssid, String &senha) {
 
   WiFi.disconnect();
   delay(200);
 
   motivoQueda = 0;
-  WiFi.begin(ssid.c_str(), senha.c_str());
-  ajustarRadio();
+  procurarRede(ssid);
 
+  if (ultimoAp.escaneou && !ultimoAp.achou) {
+    return "rede_nao_encontrada";
+  }
+
+  if (ultimoAp.achou) {
+
+    if (redeCorporativa(ultimoAp.seguranca)) {
+      return "rede_corporativa";
+    }
+
+    if (ultimoAp.seguranca == WIFI_AUTH_WEP || ultimoAp.seguranca == WIFI_AUTH_WPA_PSK) {
+      return "seguranca_incompativel";
+    }
+
+    bool aberta = ultimoAp.seguranca == WIFI_AUTH_OPEN || ultimoAp.seguranca == WIFI_AUTH_OWE;
+
+    if (aberta) {
+      senha = "";
+    } else if (senha.length() == 0) {
+      return "senha";
+    }
+  }
+
+  iniciarWiFi(ssid.c_str(), senha.c_str());
+
+  unsigned long limite = ultimoAp.achou ? TESTE_WIFI_ACHADA_MS : TESTE_WIFI_MS;
   unsigned long inicio = millis();
   wl_status_t status = WiFi.status();
 
-  while (millis() - inicio < TESTE_WIFI_MS) {
+  while (millis() - inicio < limite) {
 
     status = WiFi.status();
 
@@ -1437,7 +1662,7 @@ String testarWiFi(const String &ssid, const String &senha) {
     }
 
     // O driver ja disse por que caiu: nao precisa esperar o tempo todo.
-    if (traduzirMotivo(motivoQueda).length() > 0 && millis() - inicio > 3000) {
+    if (erroDefinitivo(traduzirMotivo(motivoQueda)) && millis() - inicio > 3000) {
       break;
     }
 
@@ -1445,8 +1670,16 @@ String testarWiFi(const String &ssid, const String &senha) {
     alimentarWatchdog();
   }
 
+  logMotivo("teste da rede");
+
   if (status == WL_CONNECTED) {
     return "";
+  }
+
+  String motivo = traduzirMotivo(motivoQueda);
+
+  if (motivo.length() > 0) {
+    return motivo;
   }
 
   if (status == WL_NO_SSID_AVAIL) {
@@ -1457,9 +1690,104 @@ String testarWiFi(const String &ssid, const String &senha) {
     return "senha";
   }
 
-  String motivo = traduzirMotivo(motivoQueda);
+  // Associou (WPA ok) mas o DHCP nao deu endereco no tempo.
+  if (associou) {
+    return "sem_ip";
+  }
 
-  return motivo.length() > 0 ? motivo : "tempo";
+  return "tempo";
+}
+
+
+// Sinal, canal e seguranca do AP visto no scan, para a resposta CT>.
+String dadosDoAp() {
+
+  if (!ultimoAp.achou) {
+    return "";
+  }
+
+  return String(",\"rssi\":") + ultimoAp.rssi + ",\"canal\":" + ultimoAp.canal +
+         ",\"seguranca\":\"" + nomeSeguranca(ultimoAp.seguranca) + "\"";
+}
+
+
+// CT<{"cmd":"redes"}: redes 2.4 GHz que a placa enxerga, uma por nome (o AP
+// de sinal mais forte), da mais forte para a mais fraca. Nenhuma senha.
+void listarRedes() {
+
+  Serial.println("REDES: procurando redes 2.4 GHz...");
+
+  int16_t n = escanear(nullptr);
+
+  if (n < 0) {
+    Serial.printf("REDES: scan falhou (%d).\n", n);
+    responder("{\"ok\":false,\"erro\":\"scan_falhou\"}");
+    return;
+  }
+
+  const int MAX_VISTAS = 64;
+  int ordem[MAX_VISTAS];
+  int total = 0;
+
+  for (int i = 0; i < n && i < MAX_VISTAS; i++) {
+
+    String nome = WiFi.SSID(i);
+
+    if (nome.length() == 0) {
+      continue;   // rede oculta: sem nome para mostrar
+    }
+
+    // Mesmo nome ja listado: fica o AP de sinal mais forte.
+    int repetida = -1;
+    for (int j = 0; j < total; j++) {
+      if (WiFi.SSID(ordem[j]) == nome) {
+        repetida = j;
+        break;
+      }
+    }
+
+    if (repetida >= 0) {
+      if (WiFi.RSSI(i) > WiFi.RSSI(ordem[repetida])) {
+        ordem[repetida] = i;
+      }
+      continue;
+    }
+
+    ordem[total++] = i;
+  }
+
+  // Ordena pelo sinal (insercao; sao poucas).
+  for (int i = 1; i < total; i++) {
+    int atual = ordem[i];
+    int j = i - 1;
+    while (j >= 0 && WiFi.RSSI(ordem[j]) < WiFi.RSSI(atual)) {
+      ordem[j + 1] = ordem[j];
+      j--;
+    }
+    ordem[j + 1] = atual;
+  }
+
+  String json = "{\"ok\":true,\"redes\":[";
+
+  for (int k = 0; k < total && k < REDES_MAX; k++) {
+
+    int i = ordem[k];
+
+    if (k > 0) {
+      json += ",";
+    }
+
+    json += String("{\"ssid\":") + emJson(WiFi.SSID(i)) + ",\"rssi\":" + WiFi.RSSI(i) +
+            ",\"canal\":" + WiFi.channel(i) + ",\"seguranca\":\"" +
+            nomeSeguranca(WiFi.encryptionType(i)) + "\"}";
+  }
+
+  json += "]}";
+
+  WiFi.scanDelete();
+
+  Serial.printf("REDES: %d rede(s) vista(s), %d na resposta.\n", total, min(total, REDES_MAX));
+  responder(json);
 }
 
 
@@ -1485,6 +1813,12 @@ void tratarComando() {
               ",\"ssid\":" + emJson(cfgSsid) +
               ",\"wifi\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
               ",\"fw\":" + emJson(FW_VERSAO) + "}");
+    return;
+  }
+
+  if (tipo == "redes") {
+
+    listarRedes();
     return;
   }
 
@@ -1528,14 +1862,20 @@ void tratarComando() {
     Serial.print(erro);
     Serial.print("). Motivo do Wi-Fi: ");
     Serial.print(motivoQueda);
+    if (motivoQueda > 0) {
+      Serial.print(" (");
+      Serial.print(WiFi.disconnectReasonName((wifi_err_reason_t)motivoQueda));
+      Serial.print(")");
+    }
     Serial.println(". Nada foi gravado; voltando para a rede anterior.");
 
-    responder("{\"ok\":false,\"erro\":\"" + erro + "\",\"motivo\":" + String(motivoQueda) + "}");
+    responder("{\"ok\":false,\"erro\":\"" + erro + "\",\"motivo\":" + String(motivoQueda) +
+              dadosDoAp() + "}");
 
-    WiFi.disconnect();
     if (cfgSsid.length() > 0) {
-      WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
-      ajustarRadio();
+      iniciarWiFi(cfgSsid.c_str(), cfgSenha.c_str());
+    } else {
+      WiFi.disconnect();
     }
     return;
   }
@@ -1568,8 +1908,10 @@ void tratarComando() {
   Serial.print(" na rede ");
   Serial.println(cfgSsid);
 
+  String seguranca = ultimoAp.achou ? String(",\"seguranca\":\"") + nomeSeguranca(ultimoAp.seguranca) + "\"" : "";
+
   responder(String("{\"ok\":true,\"wifi\":\"conectado\",\"rssi\":") + WiFi.RSSI() +
-            ",\"id\":" + emJson(cfgId) + "}");
+            ",\"canal\":" + WiFi.channel() + seguranca + ",\"id\":" + emJson(cfgId) + "}");
 
   sincronizarRelogio();
 
@@ -1636,6 +1978,7 @@ void setup() {
   // Modo estacao antes de tudo: o MAC (ID sugerido) so aparece com o radio ligado.
   WiFi.mode(WIFI_STA);
   WiFi.onEvent(aoCairWiFi, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  WiFi.onEvent(aoAssociarWiFi, ARDUINO_EVENT_WIFI_STA_CONNECTED);
 
   Serial.print("SENSOR: ");
   Serial.print(temIdentidade() ? cfgId : String("sem identidade (chip ") + idDoChip() + ")");
@@ -1729,7 +2072,10 @@ void loop() {
   // Verifica conexão Wi-Fi
   // --------------------------------------------------------
 
-  if (WiFi.status() != WL_CONNECTED) {
+  // Uma tentativa nova a cada RECONEXAO_MS: no meio delas o driver segue
+  // tentando sozinho, e a leitura e a fila continuam andando.
+  if (WiFi.status() != WL_CONNECTED &&
+      (ultimaTentativaWiFi == 0 || millis() - ultimaTentativaWiFi >= RECONEXAO_MS)) {
 
     Serial.println("Wi-Fi desconectado.");
     Serial.println("Tentando reconectar...");
