@@ -23,7 +23,8 @@ import time
 
 import jwt
 
-PERFIS = ("operador", "gestor")
+# motorista: só vê o veículo vinculado a ele (GET /motorista) e a própria conta.
+PERFIS = ("operador", "gestor", "motorista")
 VALIDADE_TOKEN_S = 8 * 3600
 MAX_FALHAS = 5
 ESPERA_BASE_S = 60

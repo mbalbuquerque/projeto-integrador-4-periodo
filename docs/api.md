@@ -48,6 +48,7 @@ acrescenta; os anteriores podem ter sido escritos pelo cliente).
 | `POST /senha` | por conta, junto com o login: espera de 1 min a partir da 5ª senha atual errada seguida, dobrando até 15 min | `429` |
 | `POST /chat` | 10 perguntas por minuto por IP; 2000 por dia no site todo | `429` |
 | `POST /assistente` | 15 perguntas por minuto por usuário; 300 por dia por empresa | `429` |
+| `GET /motorista` | 30 consultas por minuto por usuário (a tela consulta a cada 20 s) | `429` |
 
 As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 
@@ -61,7 +62,9 @@ As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 | `403` | perfil sem permissão | `seu perfil não tem acesso a esta ação` |
 | `404` | item inexistente ou de outra empresa (as duas respondem igual) | `não encontrado` / `dispositivo não encontrado` |
 
-Perfis: `operador` (consulta) e `gestor` (consulta e cadastra).
+Perfis: `operador` (consulta), `gestor` (consulta e cadastra) e `motorista` (só `GET /motorista`,
+com o veículo vinculado à conta, e a própria conta: `GET /eu`, `POST /senha`, `POST /sair`; as
+demais rotas do painel respondem `403`).
 
 ## Sensor
 
@@ -155,11 +158,13 @@ o gestor também tira a conta da espera ao redefinir a senha (`PUT /usuarios/{em
 
 ### `GET /eu`
 
-Acesso: operador, gestor. Resposta `200`: `{"id", "nome", "perfil", "empresaId", "empresa"}`.
+Acesso: operador, gestor, motorista. Resposta `200`: `{"id", "nome", "perfil", "empresaId", "empresa"}`,
+mais `veiculo` (código do veículo vinculado) quando o perfil é `motorista`. A resposta do login
+traz o mesmo objeto em `usuario`.
 
 ### `POST /senha`
 
-Acesso: operador, gestor. Troca a própria senha.
+Acesso: operador, gestor, motorista. Troca a própria senha.
 
 ```json
 {"atual": "********", "nova": "********"}
@@ -170,7 +175,7 @@ Acesso: operador, gestor. Troca a própria senha.
 
 ### `POST /sair`
 
-Acesso: operador, gestor. Sem corpo. Encerra **todas** as sessões do usuário (todos os
+Acesso: operador, gestor, motorista. Sem corpo. Encerra **todas** as sessões do usuário (todos os
 aparelhos): sobe a versão da sessão e todo token já emitido passa a receber `401`.
 Resposta: `204`. O painel deve chamar antes de apagar o token guardado no navegador.
 Também apaga as inscrições de alerta push do usuário.
@@ -295,6 +300,39 @@ Os textos do retrato (nomes, tipos, cargas, cidades) foram digitados por usuári
 trazer instruções maliciosas. O prompt manda o modelo tratar o bloco como dado, nunca como
 instrução, e não escrever links nem pedir login ou credencial; e a resposta passa pelo mesmo
 filtro de links do `POST /chat`.
+
+## Motorista
+
+### `GET /motorista`
+
+Acesso: só `motorista` (operador e gestor recebem `403`). Somente leitura. Alimenta a tela do
+motorista no celular e devolve **apenas o veículo vinculado à conta**: o veículo vem do cadastro
+do usuário, relido do banco a cada chamada, nunca da URL.
+
+```json
+{
+  "veiculo": {"id": "CT-001", "tipo": "Caminhão baú refrigerado", "perfil": "manga"},
+  "faixa": {"nome": "Manga", "min": 10.0, "max": 13.0, "margem": 3.0},
+  "leitura": {"temperatura": 11.8, "umidade": 87.0, "status": "NORMAL",
+              "medidoEm": "2026-11-10T21:30:00+00:00"},
+  "status": "NORMAL",
+  "minutosSemLeitura": 1,
+  "viagem": {"origem": "Petrolina - PE", "destino": "Suape - PE",
+             "carga": "Manga Tommy, 12 paletes", "inicio": "2026-11-10T06:00:00-03:00", "fim": null}
+}
+```
+
+- `leitura`: a mais nova do sensor do veículo, ou `null` se ele nunca enviou (ou o veículo está
+  sem sensor). `leitura.status` é a classificação gravada com ela.
+- `status`: `NORMAL`, `ATENCAO`, `CRITICO` (os mesmos da telemetria) ou `SEM_LEITURA`, quando
+  não há leitura ou a última foi medida há mais de 5 min (o sensor envia a cada 20 s). Sem
+  sinal, `leitura` continua com o último valor, para a tela mostrá-lo como antigo.
+- `minutosSemLeitura`: minutos inteiros desde a medição da última leitura; `null` sem leitura.
+- `viagem`: a viagem do veículo em curso (começou e não tem fim, ou o fim ainda não chegou); com
+  mais de uma, a que começou por último. `null` quando não há.
+
+Erros: `401`; `403` para outro perfil; `404` `nenhum veículo vinculado a este motorista; fale com o
+gestor` (o veículo saiu da frota); `429` `muitas consultas seguidas. Tente de novo em 1 min.`
 
 ## Leituras
 
@@ -428,13 +466,16 @@ Todas as operações exigem perfil gestor e valem só para a empresa dele.
 
 | método e rota | corpo | resposta |
 |---|---|---|
-| `GET /usuarios` | — | `200 {"usuarios": [{"id", "nome", "perfil"}]}` |
-| `POST /usuarios` | `{"email", "nome", "perfil", "senha"}` | `201 {"id", "nome", "perfil", "empresaId"}` |
-| `PUT /usuarios/{email}` | `{"senha"}` | `200 {"id", "nome", "perfil", "empresaId"}`: redefine a senha de outro usuário, derruba as sessões dele e tira a conta da espera do login |
+| `GET /usuarios` | — | `200 {"usuarios": [{"id", "nome", "perfil", "veiculo"?}]}` |
+| `POST /usuarios` | `{"email", "nome", "perfil", "senha", "veiculo"?}` | `201 {"id", "nome", "perfil", "empresaId", "veiculo"?}` |
+| `PUT /usuarios/{email}` | `{"senha"}` e/ou `{"veiculo"}` | `200 {"id", "nome", "perfil", "empresaId", "veiculo"?}`: com `senha`, redefine a senha de outro usuário, derruba as sessões dele e tira a conta da espera do login; com `veiculo`, troca o veículo de um motorista (sem mexer na senha nem nas sessões) |
 | `DELETE /usuarios/{email}` | — | `204` |
 
-Regras do `POST` iguais às de `POST /empresas` (sem `empresa`), com `perfil` `operador` ou
-`gestor`. Erros: `400` validação, `você não pode remover o próprio usuário` ou, no `PUT`
+Regras do `POST` iguais às de `POST /empresas` (sem `empresa`), com `perfil` `operador`,
+`gestor` ou `motorista`. `veiculo` é obrigatório no perfil `motorista` e proibido nos outros, e
+precisa ser um veículo da frota da empresa (de outra empresa responde igual a inexistente):
+`veiculo: obrigatório para o perfil motorista`, `veiculo: só o perfil motorista tem veículo
+vinculado`, `veiculo: CT-999 não está cadastrado na frota`. Erros: `400` validação, `você não pode remover o próprio usuário` ou, no `PUT`
 com o próprio e-mail, `para trocar a própria senha use Configurações → Trocar senha` (a
 própria senha só muda com a atual, em `POST /senha`); `404`
 `não encontrado`; `409` `já existe um usuário com esse e-mail`.

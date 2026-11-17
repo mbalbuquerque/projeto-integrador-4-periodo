@@ -12,11 +12,12 @@ Público:
   POST /api/chat                pergunta ao assistente do site (Azure OpenAI)
 
 Painel (token do login no header `Authorization: Bearer <token>`):
-  GET  /api/eu                  dados do usuário logado
+  GET  /api/eu                  dados do usuário logado                 (todos os perfis)
   POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
-  POST /api/senha               troca a própria senha                   (operador, gestor)
-  POST /api/sair                encerra todas as sessões do usuário     (operador, gestor)
+  POST /api/senha               troca a própria senha                   (todos os perfis)
+  POST /api/sair                encerra todas as sessões do usuário     (todos os perfis)
   POST/DELETE /api/push/inscricao  inscreve ou remove o aparelho nos alertas push (operador, gestor)
+  GET  /api/motorista           leitura, faixa e viagem do veículo vinculado (motorista)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/predict             risco de passar de 30 °C por mês e hora (operador, gestor)
   GET  /api/dispositivos        sensores da empresa, com último contato e online (operador, gestor)
@@ -63,6 +64,7 @@ from cadastros import (
     validar_usuario,
     validar_veiculo,
     validar_viagem,
+    validar_vinculo,
 )
 from contrato import (
     PERFIL_PADRAO,
@@ -100,10 +102,19 @@ HASH_FALSO = gerar_hash(uuid.uuid4().hex)
 
 TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
+MOTORISTA = ("motorista",)
+# A própria conta (ver, trocar a senha, sair) vale para todo perfil; o resto do
+# painel continua só de operador e gestor (o motorista recebe 403).
+CONTA = TODOS + MOTORISTA
 SEP = "~"
 
 # Sensor sem leitura recebida há mais que isso aparece como offline (6 ciclos de 20 s).
 LIMITE_ONLINE_S = 120
+
+# Tela do motorista: última leitura mais velha que isso vira SEM_LEITURA (15 ciclos de 20 s).
+LIMITE_SINAL_MOTORISTA_S = 5 * 60
+# A tela consulta a cada 20 s (3 por minuto); 30 por minuto por usuário segura um laço.
+MOTORISTA_POR_MINUTO = 30
 
 # Limites de uso (contados no Cosmos, valem somando todas as instâncias):
 # chat do site: 10 perguntas por minuto por IP e 2000 por dia no total;
@@ -208,7 +219,8 @@ def autorizar(req, perfis):
 
 
 def publico(usuario):
-    return {k: usuario[k] for k in ("id", "nome", "perfil", "empresaId") if k in usuario}
+    return {k: usuario[k] for k in ("id", "nome", "perfil", "empresaId", "veiculo")
+            if k in usuario}
 
 
 def com_empresa(usuario):
@@ -549,13 +561,13 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="eu", methods=["GET"])
 def eu(req: func.HttpRequest) -> func.HttpResponse:
-    usuario, erro = autorizar(req, TODOS)
+    usuario, erro = autorizar(req, CONTA)
     return erro or resposta(com_empresa(usuario))
 
 
 @app.route(route="senha", methods=["POST"])
 def senha(req: func.HttpRequest) -> func.HttpResponse:
-    usuario, erro = autorizar(req, TODOS)
+    usuario, erro = autorizar(req, CONTA)
     if erro:
         return erro
     dados, erro = corpo_json(req)
@@ -596,7 +608,7 @@ def sair(req: func.HttpRequest) -> func.HttpResponse:
 
     Também tira as inscrições de push: aparelho sem sessão não recebe alerta da empresa.
     """
-    usuario, erro = autorizar(req, TODOS)
+    usuario, erro = autorizar(req, CONTA)
     if erro:
         return erro
     _patch_usuario(usuario["id"], [{"op": "incr", "path": "/sessao", "value": 1},
@@ -782,6 +794,78 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
     return resposta(corpo)
 
 
+# ------------------------------------------------------------ tela do motorista
+
+def _instante(texto):
+    """datetime de um ISO 8601 gravado no banco, ou None se faltar ou estiver quebrado."""
+    try:
+        return datetime.fromisoformat(str(texto).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def viagem_ativa(empresa, codigo, agora):
+    """Viagem do veículo em curso: começou e não terminou (sem fim ou fim no futuro).
+
+    Com mais de uma em curso (cadastro sobreposto), vale a que começou por último.
+    """
+    ativas = []
+    for v in lista("viagens", empresa):
+        inicio, fim = _instante(v.get("inicio")), _instante(v.get("fim"))
+        if (v.get("veiculo") == codigo and inicio is not None and inicio <= agora
+                and (v.get("fim") is None or (fim is not None and fim > agora))):
+            ativas.append((inicio, v))
+    if not ativas:
+        return None
+    v = max(ativas, key=lambda par: par[0])[1]
+    return {k: v.get(k) for k in ("origem", "destino", "carga", "inicio", "fim")}
+
+
+@app.route(route="motorista", methods=["GET"])
+def motorista(req: func.HttpRequest) -> func.HttpResponse:
+    """Só o veículo vinculado ao motorista: última leitura, faixa e viagem em curso.
+
+    Somente leitura. O veículo vem do cadastro do usuário (relido do banco a cada
+    chamada), nunca da URL: um motorista não tem como pedir o veículo de outro.
+    """
+    usuario, erro = autorizar(req, MOTORISTA)
+    if erro:
+        return erro
+    if not LIMITES.permitir(f"motorista:usuario:{usuario['id']}", MOTORISTA_POR_MINUTO,
+                            limites.MINUTO):
+        return resposta({"erros": ["muitas consultas seguidas. Tente de novo em 1 min."]}, 429)
+    empresa = usuario["empresaId"]
+    codigo = usuario.get("veiculo")
+    veiculo = ler("veiculos", id_interno(empresa, codigo)) if codigo else None
+    if veiculo is None or veiculo.get("empresaId") != empresa:
+        return resposta({"erros": ["nenhum veículo vinculado a este motorista; "
+                                   "fale com o gestor"]}, 404)
+
+    perfil = veiculo.get("perfil", PERFIL_PADRAO)
+    agora = datetime.now(timezone.utc)
+    ultima = consultar_leituras(veiculo["deviceId"], empresa, 1) if veiculo.get("deviceId") else []
+    leitura, minutos, status = None, None, "SEM_LEITURA"
+    if ultima:
+        u = ultima[0]
+        leitura = {"temperatura": u["temperatura"], "umidade": u["umidade"],
+                   "status": u["status"], "medidoEm": u["medidoEm"]}
+        medido = _instante(u["medidoEm"])
+        if medido is not None:
+            minutos = max(0, int((agora - medido).total_seconds() // 60))
+            if (agora - medido).total_seconds() <= LIMITE_SINAL_MOTORISTA_S:
+                status = u["status"]
+
+    return resposta({
+        "veiculo": {"id": codigo, "tipo": veiculo.get("tipo", ""), "perfil": perfil},
+        "faixa": {"nome": PERFIS_CARGA.get(perfil, PERFIS_CARGA[PERFIL_PADRAO])["nome"],
+                  **faixa(perfil)},
+        "leitura": leitura,
+        "status": status,
+        "minutosSemLeitura": minutos,
+        "viagem": viagem_ativa(empresa, codigo, agora),
+    })
+
+
 # ------------------------------------------------------------ risco térmico (modelo)
 
 @app.route(route="predict", methods=["GET"])
@@ -964,6 +1048,13 @@ def viagens(req: func.HttpRequest) -> func.HttpResponse:
                      gerar_id=lambda: "V-" + uuid.uuid4().hex[:6].upper())
 
 
+def _veiculo_inexistente(empresa, codigo):
+    """Erro se o veículo do motorista não está na frota da empresa (outra empresa = inexistente)."""
+    if ler("veiculos", id_interno(empresa, codigo)) is None:
+        return [f"veiculo: {codigo} não está cadastrado na frota"]
+    return []
+
+
 @app.route(route="usuarios/{id?}", methods=["GET", "POST", "PUT", "DELETE"])
 def usuarios(req: func.HttpRequest) -> func.HttpResponse:
     gestor, erro = autorizar(req, GESTOR)
@@ -975,7 +1066,8 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
     item_id = (req.route_params.get("id") or "").lower()
 
     if metodo == "GET":
-        return resposta({"usuarios": lista("usuarios", empresa, "c.id, c.nome, c.perfil")})
+        return resposta({"usuarios": lista("usuarios", empresa,
+                                           "c.id, c.nome, c.perfil, c.veiculo")})
 
     if metodo in ("PUT", "DELETE"):
         alvo = ler("usuarios", item_id) if item_id else None
@@ -1000,23 +1092,39 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
         if item_id == gestor["id"]:
             return resposta({"erros": [
                 "para trocar a própria senha use Configurações → Trocar senha"]}, 400)
+        dados = dados if isinstance(dados, dict) else {}
+        operacoes = []
+        # Troca do veículo do motorista (só esse perfil tem veículo).
+        if "veiculo" in dados:
+            erros = []
+            codigo = validar_vinculo(dados, alvo.get("perfil"), erros)
+            erros = erros or _veiculo_inexistente(empresa, codigo)
+            if erros:
+                return resposta({"erros": erros}, 400)
+            operacoes.append({"op": "set", "path": "/veiculo", "value": codigo})
         # Gestor redefine a senha de quem esqueceu: derruba as sessões abertas
         # e tira a conta da espera do login.
-        nova = (dados or {}).get("senha") if isinstance(dados, dict) else None
-        if not isinstance(nova, str) or not SENHA_MIN <= len(nova) <= 128:
-            return resposta({"erros": [f"senha: no mínimo {SENHA_MIN} caracteres"]}, 400)
-        atualizado = _patch_usuario(item_id, [
-            {"op": "set", "path": "/senhaHash", "value": gerar_hash(nova)},
-            {"op": "incr", "path": "/sessao", "value": 1},
-            *OPERACOES_DE_SUCESSO,
-        ])
+        if "senha" in dados or not operacoes:
+            nova = dados.get("senha")
+            if not isinstance(nova, str) or not SENHA_MIN <= len(nova) <= 128:
+                return resposta({"erros": [f"senha: no mínimo {SENHA_MIN} caracteres"]}, 400)
+            operacoes += [
+                {"op": "set", "path": "/senhaHash", "value": gerar_hash(nova)},
+                {"op": "incr", "path": "/sessao", "value": 1},
+                *OPERACOES_DE_SUCESSO,
+            ]
+        atualizado = _patch_usuario(item_id, operacoes)
         if atualizado is None:
             return resposta({"erros": ["não encontrado"]}, 404)
-        logging.info("%s redefiniu a senha de %s", mascarar_email(gestor["id"]),
+        logging.info("%s alterou %s de %s", mascarar_email(gestor["id"]),
+                     " e ".join(o["path"].lstrip("/") for o in operacoes
+                                if o["path"] in ("/veiculo", "/senhaHash")),
                      mascarar_email(item_id))
         return resposta(publico(atualizado))
 
     erros, doc = validar_usuario(dados)
+    if not erros and "veiculo" in doc:
+        erros = _veiculo_inexistente(empresa, doc["veiculo"])
     if erros:
         return resposta({"erros": erros}, 400)
 
