@@ -131,8 +131,73 @@ void test_payload_com_seq() {
     PASS();
 }
 
+void test_heartbeat() {
+    TEST("montarHeartbeatCore com e sem seq/RSSI");
+    char buffer[200];
+    montarHeartbeatCore(buffer, sizeof(buffer), "coldtrack-01", "sensor_falha",
+                        "2026.11.17.2", -61, 42);
+    ASSERT(std::string(buffer) ==
+           "{\"deviceId\":\"coldtrack-01\",\"motivo\":\"sensor_falha\","
+           "\"fw\":\"2026.11.17.2\",\"rssi\":-61,\"seq\":42}");
+
+    // Simulador (RSSI >= 0) e placa que ainda nao leu nada (seq 0).
+    montarHeartbeatCore(buffer, sizeof(buffer), "coldtrack-01", "sensor_falha",
+                        "2026.11.17.2", 0, 0);
+    ASSERT(std::string(buffer) ==
+           "{\"deviceId\":\"coldtrack-01\",\"motivo\":\"sensor_falha\","
+           "\"fw\":\"2026.11.17.2\",\"rssi\":null}");
+    PASS();
+}
+
+void test_url_do_heartbeat() {
+    TEST("urlHeartbeatCore troca /telemetria por /heartbeat");
+    ASSERT(urlHeartbeatCore("https://x.azurewebsites.net/api/telemetria") ==
+           "https://x.azurewebsites.net/api/heartbeat");
+    ASSERT(urlHeartbeatCore("https://x/api/telemetria?code=1") == "https://x/api/heartbeat?code=1");
+    ASSERT(urlHeartbeatCore("https://x/api/outra").empty());
+    PASS();
+}
+
+void test_agenda_fixa_de_20_s() {
+    TEST("proximoCicloCore conta do inicio ao inicio");
+    // Envio de 15 s nao empurra o ciclo: o proximo continua 20 s depois do inicio.
+    unsigned long previsto = 20000;
+    ASSERT(proximoCicloCore(20000, previsto, 20000, false) == 40000);
+    // Comecou 3 s atrasado (prints, sensor): o seguinte nao herda o atraso.
+    ASSERT(proximoCicloCore(43000, 40000, 20000, false) == 60000);
+    // Parado mais de um intervalo inteiro: recomeca de agora, sem rajada.
+    ASSERT(proximoCicloCore(130000, 60000, 20000, false) == 150000);
+    // Pedido de leitura ja (configuracao pelo cabo).
+    ASSERT(proximoCicloCore(5000, 60000, 20000, true) == 25000);
+    // Volta do millis() (~49 dias).
+    unsigned long quase = 0xFFFFFFFFUL - 1000;
+    unsigned long depois = proximoCicloCore(quase, quase, 20000, false);
+    ASSERT(depois == quase + 20000UL);
+    ASSERT(!cicloVencidoCore(quase + 19999UL, depois));
+    ASSERT(cicloVencidoCore(quase + 20000UL, depois));
+    ASSERT(cicloVencidoCore(18999, 18999));
+    ASSERT(!cicloVencidoCore(18998, 18999));
+    PASS();
+}
+
+void test_linha_da_fila_sem_relogio() {
+    TEST("linhaComMsCore le e tira o campo ms");
+    unsigned long ms = 0;
+    std::string sem;
+    ASSERT(linhaComMsCore("{\"deviceId\":\"x\",\"temperatura\":1.0,\"seq\":7,\"ms\":123456}", &ms, &sem));
+    ASSERT(ms == 123456UL);
+    ASSERT(sem == "{\"deviceId\":\"x\",\"temperatura\":1.0,\"seq\":7}");
+    ASSERT(!linhaComMsCore("{\"deviceId\":\"x\",\"seq\":7,\"medidoEm\":1790000000}", &ms, &sem));
+    ASSERT(!linhaComMsCore("{\"deviceId\":\"x\",\"ms\":}", &ms, &sem));
+    PASS();
+}
+
 int main() {
     std::cout << "=== Executando Testes Unitarios do Firmware (C++) ===\n";
+    test_agenda_fixa_de_20_s();
+    test_linha_da_fila_sem_relogio();
+    test_heartbeat();
+    test_url_do_heartbeat();
     test_payload_com_rssi_negativo_e_medido_em();
     test_payload_com_rssi_positivo_vira_null();
     test_payload_com_seq();

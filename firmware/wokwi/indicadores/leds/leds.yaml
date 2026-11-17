@@ -1,0 +1,38 @@
+# Uso: compilar o coldtrack.ino com o secrets.h do Wokwi (Wokwi-GUEST, DEVICE_ID e
+# DEVICE_KEY de teste) mais estas linhas:
+#   #define SIMULAR_API_STATUS 201 / SIMULAR_QUEDA_INICIO_S 30 / SIMULAR_QUEDA_S 45
+# e rodar, na pasta com wokwi.toml e este diagram.json:
+#   wokwi-cli --timeout 400000 --scenario leds.yaml .
+# SIMULAR_API_STATUS: o envio nao sai da placa (nada e escrito na API).
+# Padroes dos LEDs na simulacao (issue 87). Firmware sem TELA_OLED,
+# SIMULAR_API_STATUS 201, queda simulada de 30 s a 75 s. O analisador logico
+# grava os tres LEDs no VCD para medir o piscar.
+name: Padroes dos LEDs
+version: 1
+author: ColdTrack
+steps:
+  - set-control: { part-id: fio, control: pressed, value: 1 }
+  - wait-serial: "LED: sequencia"
+  - wait-serial: "STATUS DA CARGA: NORMAL"
+  - wait-serial: "LED: fixo"
+  - expect-pin: { part-id: ledGreen, pin: A, value: 1 }
+  - expect-pin: { part-id: ledYellow, pin: A, value: 0 }
+  - expect-pin: { part-id: ledRed, pin: A, value: 0 }
+  - wait-serial: "LED: sem_rede"
+  - wait-serial: "FILA: leitura guardada offline (2 na fila)"
+  - wait-serial: "LED: fixo"
+  - wait-serial: "FILA: 2 reenviadas"
+  - set-control: { part-id: fio, control: pressed, value: 0 }
+  - wait-serial: "LED: falha_sensor"
+  - set-control: { part-id: fio, control: pressed, value: 1 }
+  - set-control: { part-id: dht1, control: temperature, value: 18 }
+  - wait-serial: "STATUS DA CARGA: ATENCAO"
+  - wait-serial: "LED: fixo"
+  - expect-pin: { part-id: ledGreen, pin: A, value: 0 }
+  - expect-pin: { part-id: ledYellow, pin: A, value: 1 }
+  - write-serial: "CT<{\"cmd\":\"wifi\",\"ssid\":\"Wokwi-GUEST\",\"senha\":\"\"}\n"
+  - wait-serial: "CONFIG: testando a rede"
+  - wait-serial: "LED: sequencia"
+  - wait-serial: "LED: fixo"
+  - wait-serial: "CT>{\"ok\":true"
+  - delay: 2000ms

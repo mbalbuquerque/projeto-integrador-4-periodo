@@ -7,7 +7,7 @@ São Francisco. Alimenta as [entrevistas simuladas](entrevistas-simuladas.md) e 
 [persona e jornada](persona-jornada-proposta.md).
 
 > **Este documento não é pesquisa com usuários.** É leitura de fontes públicas. A validação com
-> pessoas reais segue pendente (ver [Limitações](#limitações)).
+> pessoas reais segue pendente (ver [Lacunas encontradas](#lacunas-encontradas)).
 
 ## Método
 

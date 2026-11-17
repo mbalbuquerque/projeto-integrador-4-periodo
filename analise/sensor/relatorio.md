@@ -7,18 +7,18 @@ Gerado por `descrever.py` a partir de `dados/thingspeak_3515173.csv` (canal púb
 | item | valor |
 |---|---|
 | primeira leitura (UTC) | 2026-09-29 18:36:01 |
-| última leitura (UTC) | 2026-11-09 23:15:37 |
-| período entre a primeira e a última | 41.19 dias |
-| leituras | 1588 |
-| leituras esperadas no período (a cada 20 s) | 177959 |
-| completude em relação ao esperado | 0.89% |
-| dias de calendário (UTC-3) com ao menos uma leitura | 6 |
-| **horas cobertas** (soma dos trechos sem lacuna) | **8.55 h** |
+| última leitura (UTC) | 2026-11-17 06:16:09 |
+| período entre a primeira e a última | 48.49 dias |
+| leituras | 1899 |
+| leituras esperadas no período (a cada 20 s) | 209461 |
+| completude em relação ao esperado | 0.91% |
+| dias de calendário (UTC-3) com ao menos uma leitura | 8 |
+| **horas cobertas** (soma dos trechos sem lacuna) | **9.09 h** |
 | **maior janela contínua** | **1.19 h** (2026-10-08 21:20 a 2026-10-08 22:32 UTC, 212 leituras) |
 
 ## Veredito sobre a meta de 48 h
 
-**Não atendida como trecho contínuo.** A maior janela sem lacuna tem 1.19 h, abaixo das 48 h. A soma das horas cobertas é 8.55 h (também abaixo das 48 h), mas isso são trechos separados por lacunas, não 48 h seguidas. O período total (primeira a última leitura) é muito maior que a cobertura real: há semanas sem leitura entre as sessões (placa desligada ou sem rede; a causa não consta nos dados).
+**Não atendida como trecho contínuo.** A maior janela sem lacuna tem 1.19 h, abaixo das 48 h. A soma das horas cobertas é 9.09 h (também abaixo das 48 h), mas isso são trechos separados por lacunas, não 48 h seguidas. O período total (primeira a última leitura) é muito maior que a cobertura real: há semanas sem leitura entre as sessões (placa desligada ou sem rede; a causa não consta nos dados).
 
 ## Intervalo entre leituras
 
@@ -26,7 +26,7 @@ Gerado por `descrever.py` a partir de `dados/thingspeak_3515173.csv` (canal púb
 |---|---|
 | esperado | 20 s |
 | mediana real | 20.00 s |
-| p95 real | 40.00 s |
+| p95 real | 79.00 s |
 
 ## Faltantes (lacunas)
 
@@ -34,26 +34,26 @@ Lacuna = intervalo entre duas leituras consecutivas maior que 2x o esperado (40 
 
 | item | valor |
 |---|---|
-| lacunas | 76 |
-| duração total das lacunas | 40.84 dias |
-| fração do período em lacuna | 99.13% |
-| trechos contínuos | 77 |
-| leituras ausentes no período (esperadas menos presentes) | 176371 (99.11% das esperadas) |
+| lacunas | 289 |
+| duração total das lacunas | 48.11 dias |
+| fração do período em lacuna | 99.22% |
+| trechos contínuos | 290 |
+| leituras ausentes no período (esperadas menos presentes) | 207562 (99.09% das esperadas) |
 
 Dez maiores lacunas:
 
 | de (UTC) | até (UTC) | duração |
 |---|---|---|
 | 2026-10-09 00:49:59 | 2026-11-08 22:04:56 | 30.89 dias |
+| 2026-11-09 23:15:37 | 2026-11-16 22:03:19 | 6.95 dias |
 | 2026-09-29 20:06:15 | 2026-10-04 20:05:57 | 5.00 dias |
 | 2026-10-06 15:46:08 | 2026-10-08 17:46:31 | 2.08 dias |
 | 2026-10-04 20:29:29 | 2026-10-06 14:57:24 | 1.77 dias |
 | 2026-11-08 22:12:18 | 2026-11-09 22:50:37 | 1.03 dias |
+| 2026-11-16 22:34:15 | 2026-11-17 01:32:14 | 2.97 h |
 | 2026-10-08 19:26:03 | 2026-10-08 19:32:05 | 0.10 h |
 | 2026-09-29 19:06:53 | 2026-09-29 19:12:52 | 0.10 h |
 | 2026-09-29 18:45:02 | 2026-09-29 18:50:50 | 0.10 h |
-| 2026-11-08 22:08:46 | 2026-11-08 22:12:18 | 0.06 h |
-| 2026-11-08 22:06:07 | 2026-11-08 22:08:46 | 0.04 h |
 
 Maiores trechos contínuos:
 
@@ -66,9 +66,9 @@ Maiores trechos contínuos:
 | 2026-10-08 19:32:05 | 2026-10-08 20:22:59 | 0.85 h | 151 |
 | 2026-10-08 20:34:40 | 2026-10-08 21:19:59 | 0.76 h | 134 |
 | 2026-10-06 14:57:24 | 2026-10-06 15:24:59 | 0.46 h | 82 |
+| 2026-11-17 03:10:32 | 2026-11-17 03:30:51 | 0.34 h | 62 |
 | 2026-10-04 20:11:29 | 2026-10-04 20:29:29 | 0.30 h | 54 |
 | 2026-10-06 15:30:01 | 2026-10-06 15:46:08 | 0.27 h | 49 |
-| 2026-10-08 18:00:04 | 2026-10-08 18:14:43 | 0.24 h | 43 |
 
 ## Inválidos
 
@@ -85,9 +85,9 @@ Faixa física do DHT11: temperatura 0 a 50 °C, umidade 20 a 90 %. Faixa aceita 
 
 | variável | n | mín | Q1 | mediana | Q3 | máx | média | desvio |
 |---|---|---|---|---|---|---|---|---|
-| temperatura (°C) | 1588 | 21.40 | 33.80 | 34.20 | 34.70 | 36.30 | 34.25 | 1.41 |
-| umidade (%) | 1588 | 48.00 | 49.00 | 50.00 | 51.00 | 60.00 | 50.36 | 2.18 |
-| rssi (dBm) | 1587 | -67.00 | -53.00 | -52.00 | -48.00 | -16.00 | -50.06 | 5.94 |
+| temperatura (°C) | 1899 | 21.40 | 33.80 | 34.20 | 34.70 | 37.40 | 34.17 | 1.57 |
+| umidade (%) | 1899 | 48.00 | 49.00 | 50.00 | 51.00 | 77.00 | 50.86 | 2.62 |
+| rssi (dBm) | 1898 | -78.00 | -54.00 | -52.00 | -49.00 | -16.00 | -50.97 | 6.30 |
 
 ![série](figuras/serie.png)
 

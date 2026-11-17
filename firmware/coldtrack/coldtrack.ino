@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include <Preferences.h>
 #include <esp_task_wdt.h>
+#include <esp_sntp.h>
 #include "secrets.h"
 #include "azure_ca.h"
 // Montagem do payload, leitura de numero no JSON e classificacao da faixa:
@@ -25,7 +26,7 @@
 // Cliente TLS que conta os bytes de aplicacao que passam por ele (antes da
 // criptografia): o que o HTTP ou o MQTT escreveu e leu. Cada envio vira uma
 // linha na serial, lida pelo .specs/ferramentas/medir.py:
-//   MEDIDA;<https|mqtt|mqtt-conexao>;<ms>;<bytes enviados>;<bytes recebidos>;<ok 1/0>
+//   MEDIDA;<https|heartbeat|mqtt|mqtt-conexao>;<ms>;<bytes enviados>;<bytes recebidos>;<ok 1/0>
 
 class ClienteContado : public WiFiClientSecure {
 
@@ -83,6 +84,8 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 
  Envio: POST JSON via HTTPS (TLS validado) na Azure Function
  {"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58,"medidoEm":1790000000}
+ Sem leitura valida (sensor em falha): POST /api/heartbeat
+ {"deviceId":"coldtrack-01","motivo":"sensor_falha","fw":"2026.11.17.2","rssi":-58,"seq":42}
  ==========================================================
 */
 
@@ -93,35 +96,130 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.16"
+#define FW_VERSAO "2026.11.17.3"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
 #endif
 
-// Tempo para testar uma rede nova recebida pelo cabo, em ms.
+// Heartbeat (POST /api/heartbeat): enviado no ciclo em que nao ha leitura valida
+// (sensor em falha), para o painel ver a placa viva. Por padrao, a mesma URL da
+// telemetria com /heartbeat no lugar de /telemetria. Nao vai para a fila
+// offline: um sinal de vida atrasado nao diz nada sobre agora.
+#ifndef AZURE_HEARTBEAT_URL
+#define AZURE_HEARTBEAT_URL urlHeartbeatCore(AZURE_FUNCTION_URL).c_str()
+#endif
+
+// Tempo para testar uma rede nova recebida pelo cabo, em ms. Rede que o scan
+// achou ganha mais tempo: em rede cheia (campus) o DHCP demora a responder.
 #define TESTE_WIFI_MS 15000
+#define TESTE_WIFI_ACHADA_MS 25000
+
+// Abaixo deste sinal (dBm), handshake que estoura e sinal fraco, nao senha errada.
+#define RSSI_FRACO -80
+
+// Intervalo entre tentativas de reconexao no loop, em ms. No meio delas o
+// proprio driver segue tentando; o loop continua medindo e guardando na fila.
+#define RECONEXAO_MS 30000
+
+// Maximo de redes na resposta do comando "redes".
+#define REDES_MAX 15
+
+// Scan recusado pelo driver (estacao no meio de uma conexao): quantas vezes
+// tentar, e a espera antes da proxima (cresce a cada tentativa), em ms.
+#define SCAN_TENTATIVAS 4
+#define SCAN_ESPERA_MS 500
 
 String cfgSsid;
 String cfgSenha;
 String cfgId;
 String cfgChave;
 
-// Tempo maximo de espera da requisicao HTTPS, em ms.
-#define HTTP_TIMEOUT_MS 5000
+// ID e chave sao lidos pela tarefa de envio e trocados pela configuracao pelo
+// cabo (loop): a troca e a leitura passam por esta trava.
+SemaphoreHandle_t cfgTrava = nullptr;
+
+
+String copiarCfg(const String &campo) {
+
+  if (cfgTrava) {
+    xSemaphoreTake(cfgTrava, portMAX_DELAY);
+  }
+  String copia = campo;
+  if (cfgTrava) {
+    xSemaphoreGive(cfgTrava);
+  }
+  return copia;
+}
+
+// Melhor AP com o nome pedido, visto no scan antes do teste de rede. Fica
+// aqui no topo porque o Arduino gera os prototipos antes da primeira funcao.
+struct ApVisto {
+  bool escaneou;
+  bool achou;
+  int32_t rssi;
+  int32_t canal;
+  wifi_auth_mode_t seguranca;
+};
+
+ApVisto ultimoAp = { false, false, 0, 0, WIFI_AUTH_OPEN };
+
+
+// Limites de cada envio. Somados, o pior caso de uma requisicao HTTPS fica
+// em ~17 s, bem abaixo do watchdog. O envio roda em tarefa propria: nem esse
+// pior caso atrasa a proxima medicao.
+#define HTTP_TIMEOUT_MS     5000   // resposta do servidor, em ms
+#define CONEXAO_TIMEOUT_MS  4000   // conexao TCP, em ms
+#define TLS_HANDSHAKE_S     8      // handshake TLS, em s (o padrao do core e 120 s)
+
+// Serial USB (ESP32-C3): com o cabo num computador que nao esta lendo a porta,
+// cada escrita esperava ate 2 s (20 x 100 ms) e um ciclo com ~25 prints levava
+// ~58 s a mais (ciclo de 78 s medido em 17/11). Com 5 ms, o que nao cabe no
+// buffer e descartado: o log se perde, a medicao nao atrasa.
+#define SERIAL_TX_TIMEOUT_MS 5
 
 // ================= STORE-AND-FORWARD =================
 //
 // Sem conexao (estrada sem sinal), a leitura fica guardada na flash
 // e e reenviada quando a conexao volta, com o horario da medicao.
 
+// Toda leitura entra na fila ANTES do envio (gravada logo depois de ganhar o
+// numero de sequencia) e so sai quando a nuvem confirma. Um reinicio no meio
+// do envio (watchdog, gravacao, porta serial aberta com DTR) nao perde a
+// leitura: ela sai depois do boot com o mesmo seq e medidoEm, e a nuvem
+// responde 200 se ja tinha gravado.
+
 #define FILA_ARQUIVO      "/fila.jsonl"
 #define FILA_MAX          500   // ~2h45 de leituras a cada 20 s
-#define REENVIO_POR_CICLO 10    // limita o tempo gasto reenviando por ciclo
+#define REENVIO_POR_LOTE  10    // linhas lidas da flash por vez
 
-// Teste: finge conexao caida nos primeiros N segundos (0 = desligado).
+// Leitura sem relogio (NTP ainda nao respondeu) sai sem medidoEm se for
+// recente (a nuvem usa a hora da chegada); mais velha, espera o relogio.
+#define SEM_RELOGIO_RECENTE_MS 40000
+
+// Teste: finge conexao caida por N segundos (0 = desligado), a partir de
+// SIMULAR_QUEDA_INICIO_S segundos ligado (padrao 0: desde o boot).
 #ifndef SIMULAR_QUEDA_S
 #define SIMULAR_QUEDA_S 0
+#endif
+#ifndef SIMULAR_QUEDA_INICIO_S
+#define SIMULAR_QUEDA_INICIO_S 0
+#endif
+
+// Teste (simulador): com SIMULAR_API_STATUS definido, o envio nao sai da
+// placa e devolve esse status HTTP (201 = gravado, 401 = chave recusada...).
+// Serve para provar a tela e o LED sem escrever na API de producao.
+// SIMULAR_ENVIO_MS: quanto o envio simulado demora (padrao 800 ms, uma
+// requisicao normal; 35000 prova que envio lento nao empurra a medicao).
+#ifndef SIMULAR_ENVIO_MS
+#define SIMULAR_ENVIO_MS 800
+#endif
+
+// Teste: reinicia a placa no meio do primeiro envio depois de N segundos
+// ligada (0 = desligado), para provar que a leitura em curso nao se perde.
+// Depois desse reinicio (por software) nao reinicia de novo.
+#ifndef SIMULAR_REINICIO_ENVIO_S
+#define SIMULAR_REINICIO_ENVIO_S 0
 #endif
 
 // Teste: finge relogio sem sincronizar nos primeiros N segundos (0 = desligado).
@@ -272,7 +370,7 @@ bool lerDhtUmaVez(float *temperatura, float *umidade) {
     gpio_set_pull_mode((gpio_num_t)DHT_PIN, GPIO_PULLUP_ONLY);
     gpio_set_level((gpio_num_t)DHT_PIN, 1);
     preparado = true;
-    delay(1000);  // o sensor precisa de ~1 s depois de ligado
+    esperarAtualizando(1000);  // o sensor precisa de ~1 s depois de ligado
   }
 
   // Pedido de leitura: linha em baixo (DHT11 pede 18 ms; DHT22, ~1 ms).
@@ -304,7 +402,7 @@ bool lerSensor(float *temperatura, float *umidade) {
   for (int tentativa = 0; tentativa < 2; tentativa++) {
 
     if (tentativa > 0) {
-      delay(DHT_TYPE == DHT11 ? 1100 : 2100);
+      esperarAtualizando(DHT_TYPE == DHT11 ? 1100 : 2100);
     }
 
     if (lerDhtUmaVez(temperatura, umidade)) {
@@ -407,9 +505,10 @@ uint32_t proximaSeq() {
 // Watchdog de tarefa (TWDT) no loop: se o loop passar WATCHDOG_S sem
 // alimentar o watchdog (travou em rede, flash ou sensor), a placa reinicia.
 // A fila (LittleFS) e a sequencia (Preferences) estao na flash, entao o
-// envio retoma sozinho depois do reinicio. Os trechos longos (Wi-Fi, reenvio
-// da fila) alimentam o watchdog no meio; o pior caso legitimo entre duas
-// alimentacoes e uma requisicao HTTPS (conexao + TLS + 5 s de resposta).
+// envio retoma sozinho depois do reinicio. Vigia as duas tarefas: o loop
+// (medicao) e a tarefa de envio. Os trechos longos alimentam o watchdog no
+// meio; o pior caso legitimo entre duas alimentacoes e uma requisicao HTTPS
+// ou uma conexao MQTT (4 s de TCP + 8 s de TLS + 5 s de resposta).
 
 #ifndef WATCHDOG_S
 #define WATCHDOG_S 60
@@ -460,38 +559,335 @@ bool reiniciouPorWatchdog() {
 // Sensor mudo (DHT sem resposta) para de enviar e aparece offline no painel:
 // sem medicao nao ha garantia da carga, e esse e o alerta certo.
 
+// Agenda fixa: 20 s do inicio de um ciclo ao inicio do seguinte. O envio
+// (HTTPS, MQTT, fila) roda na tarefa de envio e nao empurra a medicao.
 const unsigned long INTERVALO_ENVIO = 20000;
 
-unsigned long ultimoEnvio = 0;
+unsigned long proximoCiclo = 0;     // millis() marcado para o proximo ciclo
+bool cicloImediato = true;          // mede ja (boot, configuracao pelo cabo)
+
+
+// ================= TAREFA DE ENVIO =================
+//
+// O loop mede, numera, grava na fila e avisa; esta tarefa esvazia a fila
+// (HTTPS), manda o heartbeat e publica no MQTT. Rede lenta ou fora do ar
+// atrasa so o envio, nunca o proximo ciclo.
+
+TaskHandle_t tarefaEnvioHandle = nullptr;
+SemaphoreHandle_t filaTrava = nullptr;   // fila na flash: o loop grava, a tarefa de envio le e apaga
+
+volatile bool pausaEnvio = false;        // configuracao pelo cabo mexendo na rede/identidade
+volatile bool envioOcupado = false;      // tarefa de envio no meio de uma requisicao
+volatile bool heartbeatPendente = false;
+volatile unsigned long heartbeatPedidoEm = 0;
+
+// Ultima leitura para o MQTT (so a do ciclo, feita com rede).
+portMUX_TYPE mqttLeituraTrava = portMUX_INITIALIZER_UNLOCKED;
+struct LeituraMqtt {
+  bool pendente;
+  float temperatura;
+  float umidade;
+  long rssi;
+  unsigned long em;
+};
+LeituraMqtt leituraMqtt = { false, 0, 0, 0, 0 };
+
+
+// Trava da fila enquanto o objeto existe (recursiva: uma funcao com a trava
+// pode chamar outra que tambem trava).
+class TravaFila {
+public:
+  TravaFila() {
+    if (filaTrava) {
+      xSemaphoreTakeRecursive(filaTrava, portMAX_DELAY);
+    }
+  }
+  ~TravaFila() {
+    if (filaTrava) {
+      xSemaphoreGiveRecursive(filaTrava);
+    }
+  }
+};
+
+
+void avisarEnvio() {
+
+  if (tarefaEnvioHandle) {
+    xTaskNotifyGive(tarefaEnvioHandle);
+  }
+}
 
 
 // ==========================================================
-// CONTROLE DOS LEDs
+// INDICADORES (tela OLED e LEDs)
 // ==========================================================
+//
+// Mostram o que a placa esta fazendo, sem computador por perto.
+//
+// Tela 72x40 (placa fisica, TELA_OLED):
+//   linha 1, fonte grande: temperatura (--.- sem leitura valida)
+//   linha 2: status da carga e umidade ("NORMAL   81%"), ou FALHA SENSOR,
+//            CONFIG CABO, SEM CONFIG, INICIANDO, REINICIO WDT
+//   linha 3: fase da conexao: CONECTANDO, WIFI -58dBm, SEM REDE, FILA 12,
+//            ENVIANDO..., ENVIADO, ERRO API 401, FALHA ENVIO, TESTANDO...
+// Linha com duas informacoes (SEM REDE e FILA n; CONECTANDO e o nome da
+// rede) alterna a cada 2 s.
+//
+// LEDs: os tres LEDs de faixa (simulacao) e, se o secrets.h definir, o LED da
+// placa (LED_PLACA). Padroes em docs/como-funciona.md (3.12).
+//
+// Nada aqui espera: o estado vem de variaveis e o piscar vem do millis().
+// Quem precisa esperar (Wi-Fi, scan, sensor) chama esperarAtualizando(), que
+// segue animando durante a espera.
+
+// LED da placa fisica (opcional, no secrets.h):
+//   #define LED_PLACA 8                 // GPIO do LED
+//   #define LED_PLACA_ATIVO_BAIXO       // LED acende com o pino em 0
+//   #define LED_PLACA_RGB               // LED RGB enderecavel (WS2812)
+
+#define FAIXA_NENHUMA -1
+#define FAIXA_NORMAL   0
+#define FAIXA_ATENCAO  1
+#define FAIXA_CRITICO  2
+
+#define CABO_NADA      0
+#define CABO_TESTANDO  1
+#define CABO_RESULTADO 2
+
+#define CABO_RESULTADO_MS 8000   // tempo do resultado do teste na tela
+#define ENVIADO_MS        4000   // tempo do "ENVIADO" na tela
+#define PAGINA_MS         2000   // troca da informacao alternada
+#define AVISO_WDT_MS      60000  // aviso de reinicio por watchdog depois do boot
+
+int indFaixa = FAIXA_NENHUMA;     // ultima leitura valida
+float indTemperatura = NAN;
+float indUmidade = NAN;
+bool indSensorFalhou = false;
+bool indIniciando = true;         // ate o fim do setup
+bool indConectando = false;       // esperando o Wi-Fi em conectarWiFi()
+bool indEnviando = false;
+int indUltimoHttp = 0;            // 0 = nada enviado ainda; <0 falha de rede
+unsigned long indEnviadoEm = 0;
+bool indReinicioWdt = false;
+int indCabo = CABO_NADA;
+String indCaboSsid;
+String indCaboResultado;
+unsigned long indCaboEm = 0;
+unsigned long indUltimaAtualizacao = 0;
+
+
+bool semConfiguracao() {
+
+  return cfgSsid.length() == 0 || !temIdentidade();
+}
+
+
+bool erroNoEnvio() {
+
+  return indUltimoHttp != 0 && indUltimoHttp != 200 && indUltimoHttp != 201;
+}
+
+
+// Resultado do teste de rede pelo cabo, em ate 12 letras.
+const char *resumoCabo(const String &erro) {
+
+  if (erro.length() == 0)               return "REDE OK";
+  if (erro == "senha")                  return "SENHA ERRADA";
+  if (erro == "rede_nao_encontrada")    return "REDE AUSENTE";
+  if (erro == "rede_corporativa")       return "REDE CORPOR.";
+  if (erro == "seguranca_incompativel") return "SEG. INCOMP.";
+  if (erro == "sinal_fraco")            return "SINAL FRACO";
+  if (erro == "sem_ip")                 return "SEM IP";
+  if (erro == "tempo")                  return "TEMPO ESGOT.";
+  if (erro == "sem_identidade")         return "SEM ID";
+  if (erro == "identidade_invalida")    return "ID INVALIDO";
+  if (erro == "rede_invalida")          return "REDE INVALID";
+  return "ERRO";
+}
+
+
+// Liga cada cor. Simulacao: um LED por cor. LED da placa: RGB mostra a cor;
+// LED de uma cor so acende (perde a cor, mantem o padrao de piscar).
+void escreverLeds(bool verde, bool amarelo, bool vermelho) {
+
+  static int anterior = -1;
+  int estado = (verde ? 1 : 0) | (amarelo ? 2 : 0) | (vermelho ? 4 : 0);
+
+  if (estado == anterior) {
+    return;
+  }
+
+  anterior = estado;
+
+#ifndef TELA_OLED
+  digitalWrite(LED_VERDE, verde ? HIGH : LOW);
+  digitalWrite(LED_AMARELO, amarelo ? HIGH : LOW);
+  digitalWrite(LED_VERMELHO, vermelho ? HIGH : LOW);
+#endif
+
+#ifdef LED_PLACA
+#ifdef LED_PLACA_RGB
+  if (estado == 7) {
+    rgbLedWrite(LED_PLACA, 40, 40, 40);    // todas: branco
+  } else if (amarelo) {
+    rgbLedWrite(LED_PLACA, 60, 35, 0);
+  } else if (vermelho) {
+    rgbLedWrite(LED_PLACA, 60, 0, 0);
+  } else if (verde) {
+    rgbLedWrite(LED_PLACA, 0, 50, 0);
+  } else {
+    rgbLedWrite(LED_PLACA, 0, 0, 0);
+  }
+#else
+  bool aceso = estado != 0;
+#ifdef LED_PLACA_ATIVO_BAIXO
+  aceso = !aceso;
+#endif
+  digitalWrite(LED_PLACA, aceso ? HIGH : LOW);
+#endif
+#endif
+}
+
+
+// Padrao de piscar pela fase. Devolve o nome (vai para a serial quando muda).
+const char *atualizarLeds(unsigned long t) {
+
+  bool aceso = true;
+  const char *nome;
+
+  if (indCabo == CABO_TESTANDO ||
+      (indFaixa == FAIXA_NENHUMA && !indSensorFalhou && (indIniciando || !semConfiguracao()))) {
+
+    // Iniciando, conectando sem leitura ainda, ou testando rede pelo cabo:
+    // verde, amarelo, vermelho em sequencia (200 ms cada).
+    int passo = (t / 200) % 3;
+    escreverLeds(passo == 0, passo == 1, passo == 2);
+    return "sequencia";
+  }
+
+  if (semConfiguracao()) {
+
+    // Sem rede ou sem identidade salvas: amarelo, dois toques a cada 1,5 s.
+    unsigned long f = t % 1500;
+    escreverLeds(false, f < 150 || (f >= 300 && f < 450), false);
+    return "sem_config";
+  }
+
+  if (indSensorFalhou) {
+
+    // Sem leitura valida: os tres juntos, 2 vezes por segundo.
+    aceso = (t / 250) % 2 == 0;
+    escreverLeds(aceso, aceso, aceso);
+    return "falha_sensor";
+  }
+
+  if (!conexaoDisponivel()) {
+    aceso = (t / 500) % 2 == 0;       // 1 piscada por segundo
+    nome = "sem_rede";
+  } else if (erroNoEnvio()) {
+    aceso = (t / 125) % 2 == 0;       // 4 piscadas por segundo
+    nome = "erro_envio";
+  } else {
+    nome = "fixo";
+  }
+
+  escreverLeds(aceso && indFaixa == FAIXA_NORMAL,
+               aceso && indFaixa == FAIXA_ATENCAO,
+               aceso && indFaixa == FAIXA_CRITICO);
+  return nome;
+}
+
+
+// Textos das linhas 2 e 3 (no maximo 12 letras cada, fonte 6x10).
+void montarStatus(unsigned long t, char *l2, char *l3, size_t n) {
+
+  bool pagina = (t / PAGINA_MS) % 2 == 1;
+
+  // ---- linha 2: carga ou situacao da placa ----
+  if (indCabo != CABO_NADA) {
+    snprintf(l2, n, "CONFIG CABO");
+  } else if (indSensorFalhou) {
+    snprintf(l2, n, "FALHA SENSOR");
+  } else if (indFaixa != FAIXA_NENHUMA) {
+    const char *faixa = indFaixa == FAIXA_NORMAL ? "NORMAL" :
+                        indFaixa == FAIXA_ATENCAO ? "ATENCAO" : "CRITICO";
+    snprintf(l2, n, "%-7s %3.0f%%", faixa, indUmidade);
+  } else if (indReinicioWdt) {
+    snprintf(l2, n, "REINICIO WDT");
+  } else if (!indIniciando && semConfiguracao()) {
+    snprintf(l2, n, "SEM CONFIG");
+  } else {
+    snprintf(l2, n, "INICIANDO");
+  }
+
+  // ---- linha 3: conexao ----
+  if (indCabo == CABO_TESTANDO) {
+    snprintf(l3, n, "%.12s", pagina ? indCaboSsid.c_str() : "TESTANDO...");
+  } else if (indCabo == CABO_RESULTADO) {
+    snprintf(l3, n, "%s", indCaboResultado.c_str());
+  } else if (indConectando) {
+    snprintf(l3, n, "%.12s", pagina ? cfgSsid.c_str() : "CONECTANDO");
+  } else if (indIniciando) {
+    l3[0] = '\0';
+  } else if (semConfiguracao()) {
+    snprintf(l3, n, "LIGUE O CABO");
+  } else if (indReinicioWdt && pagina && t < AVISO_WDT_MS && indFaixa != FAIXA_NENHUMA) {
+    snprintf(l3, n, "REINICIO WDT");
+  } else if (indEnviando) {
+    snprintf(l3, n, "ENVIANDO...");
+  } else if (!conexaoDisponivel()) {
+    if (pagina && filaTamanho > 0) {
+      snprintf(l3, n, "FILA %d", filaTamanho);
+    } else {
+      snprintf(l3, n, "SEM REDE");
+    }
+  } else if (indUltimoHttp < 0) {
+    snprintf(l3, n, "FALHA ENVIO");
+  } else if (erroNoEnvio()) {
+    snprintf(l3, n, "ERRO API %d", indUltimoHttp);
+  } else if (indEnviadoEm != 0 && t - indEnviadoEm < ENVIADO_MS) {
+    snprintf(l3, n, "ENVIADO");
+  } else {
+    long rssi = WiFi.RSSI();
+    if (rssi < 0) {
+      snprintf(l3, n, "WIFI %lddBm", rssi);
+    } else {
+      snprintf(l3, n, "WIFI OK");   // simulador: sem RSSI
+    }
+  }
+}
+
 
 #ifdef TELA_OLED
 
-// 72x40 pixels: temperatura grande em cima, umidade e status embaixo.
-void mostrarNaTela(float temperatura, float umidade, const char *status) {
+// Redesenha so quando o texto muda (o I2C leva alguns ms por quadro).
+void desenharTela(const char *l2, const char *l3) {
 
-  char linha[16];
+  static char anterior[3][16] = { "?", "?", "?" };
+  char l1[16];
+
+  if (isnan(indTemperatura)) {
+    snprintf(l1, sizeof(l1), "--.-\xb0" "C");
+  } else {
+    snprintf(l1, sizeof(l1), "%.1f\xb0" "C", indTemperatura);
+  }
+
+  if (!strcmp(l1, anterior[0]) && !strcmp(l2, anterior[1]) && !strcmp(l3, anterior[2])) {
+    return;
+  }
+
+  strncpy(anterior[0], l1, 15);
+  strncpy(anterior[1], l2, 15);
+  strncpy(anterior[2], l3, 15);
 
   tela.clearBuffer();
 
-  tela.setFont(u8g2_font_7x14B_tf);
-  if (isnan(temperatura)) {
-    tela.drawStr(0, 13, "--.- C");
-  } else {
-    snprintf(linha, sizeof(linha), "%.1f C", temperatura);
-    tela.drawStr(0, 13, linha);
-  }
+  tela.setFont(u8g2_font_helvB14_tf);
+  tela.drawStr(0, 15, l1);
 
   tela.setFont(u8g2_font_6x10_tf);
-  if (!isnan(umidade)) {
-    snprintf(linha, sizeof(linha), "U %.0f%%", umidade);
-    tela.drawStr(0, 26, linha);
-  }
-  tela.drawStr(0, 39, status);
+  tela.drawStr(0, 28, l2);
+  tela.drawStr(0, 39, l3);
 
   tela.sendBuffer();
 }
@@ -499,48 +895,73 @@ void mostrarNaTela(float temperatura, float umidade, const char *status) {
 #endif
 
 
-void desligarLeds() {
+void desenharIndicadores() {
 
-#ifndef TELA_OLED
-  digitalWrite(LED_VERDE, LOW);
-  digitalWrite(LED_AMARELO, LOW);
-  digitalWrite(LED_VERMELHO, LOW);
+  unsigned long t = millis();
+
+  if (indCabo == CABO_RESULTADO && t - indCaboEm >= CABO_RESULTADO_MS) {
+    indCabo = CABO_NADA;
+  }
+
+  static const char *ledAnterior = "";
+  const char *led = atualizarLeds(t);
+
+  if (strcmp(led, ledAnterior) != 0) {
+    ledAnterior = led;
+    Serial.print("LED: ");
+    Serial.println(led);
+  }
+
+#ifdef TELA_OLED
+  char l2[16];
+  char l3[16];
+  montarStatus(t, l2, l3, sizeof(l2));
+  desenharTela(l2, l3);
 #endif
+
+  indUltimaAtualizacao = t;
+}
+
+
+// Chamada a cada volta do loop: no maximo a cada 50 ms.
+void atualizarIndicadores() {
+
+  if (millis() - indUltimaAtualizacao >= 50) {
+    desenharIndicadores();
+  }
+}
+
+
+// delay() que continua animando a tela e o LED.
+void esperarAtualizando(unsigned long ms) {
+
+  unsigned long inicio = millis();
+
+  while (millis() - inicio < ms) {
+    atualizarIndicadores();
+    unsigned long falta = ms - (millis() - inicio);
+    delay(falta < 20 ? falta : 20);
+  }
 }
 
 
 void statusNormal() {
 
-  desligarLeds();
-
-#ifndef TELA_OLED
-  digitalWrite(LED_VERDE, HIGH);
-#endif
-
+  indFaixa = FAIXA_NORMAL;
   Serial.println("STATUS DA CARGA: NORMAL");
 }
 
 
 void statusAtencao() {
 
-  desligarLeds();
-
-#ifndef TELA_OLED
-  digitalWrite(LED_AMARELO, HIGH);
-#endif
-
+  indFaixa = FAIXA_ATENCAO;
   Serial.println("STATUS DA CARGA: ATENCAO");
 }
 
 
 void statusCritico() {
 
-  desligarLeds();
-
-#ifndef TELA_OLED
-  digitalWrite(LED_VERMELHO, HIGH);
-#endif
-
+  indFaixa = FAIXA_CRITICO;
   Serial.println("STATUS DA CARGA: CRITICO");
 }
 
@@ -601,9 +1022,57 @@ bool lerSerial();
 
 // ESP32-C3 com OLED 0.42": a antena de chip nao aguenta a potencia padrao e o
 // handshake com o roteador falha (sai como senha errada). Potencia menor resolve.
+// O setTxPower so vale com o modo estacao ja ligado (WiFi.mode no setup).
 void ajustarRadio() {
 #ifdef TELA_OLED
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
+#endif
+}
+
+
+// Motivo da ultima queda do Wi-Fi (vem do evento do driver; 0 = nenhum) e se
+// a placa chegou a se associar ao AP (WPA concluido) na tentativa atual.
+volatile uint8_t motivoQueda = 0;
+volatile bool associou = false;
+unsigned long ultimaTentativaWiFi = 0;
+
+
+void logMotivo(const char *contexto) {
+
+  if (motivoQueda == 0) {
+    return;
+  }
+
+  Serial.printf("WIFI: %s, motivo %u (%s)\n", contexto, motivoQueda,
+                WiFi.disconnectReasonName((wifi_err_reason_t)motivoQueda));
+}
+
+
+// Comeca uma tentativa do zero. Sem o disconnect antes, um begin no meio de
+// outra tentativa e recusado pelo driver ("sta is connecting, cannot set
+// config") e a tentativa em curso e atropelada a cada ciclo do loop.
+// Scan em todos os canais e escolha pelo sinal: o padrao (fast scan) entra no
+// primeiro AP com o nome, e no campus ha varios APs com o mesmo SSID.
+void iniciarWiFi(const char *ssid, const char *senha) {
+
+  WiFi.disconnect();
+  delay(100);
+
+  motivoQueda = 0;
+  associou = false;
+  ultimaTentativaWiFi = millis();
+
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+
+  // Potencia antes do begin (vale ja para a associacao) e de novo depois, caso
+  // o driver reaplique a potencia padrao ao conectar.
+  ajustarRadio();
+  WiFi.begin(ssid, senha);
+  ajustarRadio();
+
+#ifdef TELA_OLED
+  Serial.printf("RADIO: potencia maxima %.1f dBm\n", WiFi.getTxPower() / 4.0);
 #endif
 }
 
@@ -620,14 +1089,14 @@ void conectarWiFi() {
   Serial.print("Conectando ao Wi-Fi ");
   Serial.print(cfgSsid);
 
-  WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
-  ajustarRadio();
+  iniciarWiFi(cfgSsid.c_str(), cfgSenha.c_str());
 
   int tentativas = 0;
+  indConectando = true;
 
   while (WiFi.status() != WL_CONNECTED && tentativas < 20) {
 
-    delay(500);
+    esperarAtualizando(500);
     alimentarWatchdog();
 
     Serial.print(".");
@@ -639,6 +1108,8 @@ void conectarWiFi() {
       break;
     }
   }
+
+  indConectando = false;
 
   if (WiFi.status() == WL_CONNECTED) {
 
@@ -655,7 +1126,8 @@ void conectarWiFi() {
   } else {
 
     Serial.println();
-    Serial.println("Falha na conexão Wi-Fi.");
+    Serial.println("Falha na conexão Wi-Fi. O driver segue tentando em segundo plano.");
+    logMotivo("sem conexao");
   }
 }
 
@@ -709,12 +1181,14 @@ void atualizarFaixa(const String &resposta) {
   faixaMax = novoMax;
   faixaMargem = novaMargem;
 
-  // Grava so quando muda: poupa a flash.
-  preferencias.begin("coldtrack", false);
-  preferencias.putFloat("min", faixaMin);
-  preferencias.putFloat("max", faixaMax);
-  preferencias.putFloat("margem", faixaMargem);
-  preferencias.end();
+  // Grava so quando muda: poupa a flash. Objeto proprio: roda na tarefa de
+  // envio, ao mesmo tempo que o loop grava o seq no `preferencias`.
+  Preferences flash;
+  flash.begin("coldtrack", false);
+  flash.putFloat("min", faixaMin);
+  flash.putFloat("max", faixaMax);
+  flash.putFloat("margem", faixaMargem);
+  flash.end();
 
   Serial.print("FAIXA: nova faixa da carga ");
   Serial.print(isnan(faixaMin) ? String("-") : String(faixaMin, 1));
@@ -729,10 +1203,26 @@ void atualizarFaixa(const String &resposta) {
 // Retorna o status HTTP (201 = gravado) ou um codigo negativo de falha de rede.
 int postarAzure(const char *payload) {
 
+  if (SIMULAR_REINICIO_ENVIO_S > 0 && millis() > SIMULAR_REINICIO_ENVIO_S * 1000UL &&
+      esp_reset_reason() != ESP_RST_SW) {
+    Serial.println("TESTE: reiniciando a placa no meio do envio.");
+    Serial.flush();
+    ESP.restart();
+  }
+
+#ifdef SIMULAR_API_STATUS
+  delay(SIMULAR_ENVIO_MS);   // tempo da requisicao (tarefa de envio: nao desenha a tela)
+  Serial.print("Azure (SIMULADO, nada saiu da placa): status ");
+  Serial.println(SIMULAR_API_STATUS);
+  return SIMULAR_API_STATUS;
+#endif
+
   ClienteContado clienteSeguro;
   clienteSeguro.setCACert(AZURE_ROOT_CA);
+  clienteSeguro.setHandshakeTimeout(TLS_HANDSHAKE_S);
 
   HTTPClient http;
+  http.setConnectTimeout(CONEXAO_TIMEOUT_MS);
   http.setTimeout(HTTP_TIMEOUT_MS);
 
   // Tempo e bytes do envio inteiro: conexao TCP + TLS + requisicao + resposta.
@@ -746,7 +1236,7 @@ int postarAzure(const char *payload) {
   }
 
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("x-device-key", cfgChave);
+  http.addHeader("x-device-key", copiarCfg(cfgChave));
 
   int status = http.POST(payload);
 
@@ -785,6 +1275,69 @@ int postarAzure(const char *payload) {
 }
 
 
+// Heartbeat: placa viva sem leitura valida. Retorna o status HTTP (200 = aceito)
+// ou um codigo negativo de falha de rede. Falha nao vai para a fila.
+int enviarHeartbeat(const char *motivo) {
+
+  char payload[160];
+  String id = copiarCfg(cfgId);
+  montarHeartbeatCore(payload, sizeof(payload), id.c_str(), motivo, FW_VERSAO,
+                      WiFi.RSSI(), seqAtual);
+
+  Serial.print("HEARTBEAT: ");
+  Serial.println(payload);
+
+#ifdef SIMULAR_API_STATUS
+  delay(800);
+  // A rota de heartbeat responde 200 (nao cria nada); 201 simulado vira 200.
+  int simulado = SIMULAR_API_STATUS == 201 ? 200 : SIMULAR_API_STATUS;
+  Serial.print("HEARTBEAT (SIMULADO, nada saiu da placa): status ");
+  Serial.println(simulado);
+  return simulado;
+#endif
+
+  String url = AZURE_HEARTBEAT_URL;
+  if (url.length() == 0) {
+    Serial.println("HEARTBEAT: URL da telemetria sem /telemetria; heartbeat desligado.");
+    return -1;
+  }
+
+  ClienteContado clienteSeguro;
+  clienteSeguro.setCACert(AZURE_ROOT_CA);
+  clienteSeguro.setHandshakeTimeout(TLS_HANDSHAKE_S);
+
+  HTTPClient http;
+  http.setConnectTimeout(CONEXAO_TIMEOUT_MS);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+
+  unsigned long inicio = millis();
+
+  if (!http.begin(clienteSeguro, url)) {
+
+    Serial.println("HEARTBEAT: falha ao iniciar conexao HTTPS.");
+    registrarMedida("heartbeat", millis() - inicio, 0, 0, false);
+    return -1;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-device-key", copiarCfg(cfgChave));
+
+  int status = http.POST(payload);
+
+  Serial.print("HEARTBEAT: status ");
+  Serial.print(status);
+  Serial.print(" ");
+  Serial.println(status > 0 ? http.getString() : http.errorToString(status));
+
+  http.end();
+
+  registrarMedida("heartbeat", millis() - inicio, clienteSeguro.enviados, clienteSeguro.recebidos,
+                  status == 200);
+
+  return status;
+}
+
+
 // ==========================================================
 // MQTT (ThingSpeak)
 // ==========================================================
@@ -799,8 +1352,8 @@ int postarAzure(const char *payload) {
 
 #define MQTT_HOST       "mqtt3.thingspeak.com"
 #define MQTT_PORTA      8883
-#define MQTT_KEEPALIVE  120   // s; maior que o pior ciclo (Azure + 10 reenvios)
-#define MQTT_TIMEOUT    5     // s
+#define MQTT_KEEPALIVE  120   // s
+#define MQTT_TIMEOUT    5     // s (resposta do broker)
 
 ClienteContado clienteMqtt;
 PubSubClient mqtt(clienteMqtt);
@@ -853,6 +1406,8 @@ bool garantirMqtt() {
   }
 
   clienteMqtt.setCACert(AZURE_ROOT_CA);
+  clienteMqtt.setConnectionTimeout(CONEXAO_TIMEOUT_MS);
+  clienteMqtt.setHandshakeTimeout(TLS_HANDSHAKE_S);
   clienteMqtt.zerar();
 
   mqtt.setServer(MQTT_HOST, MQTT_PORTA);
@@ -931,8 +1486,23 @@ bool falhaTemporaria(int status) {
 // RELOGIO (NTP)
 // ==========================================================
 
+// Relogio so vale depois do NTP responder neste boot. Num reinicio que nao
+// e por falta de energia (watchdog, gravacao, porta aberta com DTR), o ESP32
+// devolve a hora a partir do oscilador RC interno, que deriva: em 17/11 a
+// leitura 266 saiu ~1 min adiantada e chegou "depois" da 270. Ate o NTP, a
+// leitura e guardada com o millis() e ganha o horario quando ele responde.
+volatile bool relogioSincronizado = false;
+
+
+void aoSincronizarRelogio(struct timeval *tv) {
+
+  relogioSincronizado = true;
+}
+
+
 void sincronizarRelogio() {
 
+  sntp_set_time_sync_notification_cb(aoSincronizarRelogio);
   configTime(0, 0, "pool.ntp.org", "time.google.com");
 }
 
@@ -943,7 +1513,7 @@ bool relogioOk() {
     return false;
   }
 
-  return time(nullptr) >= EPOCH_VALIDO;
+  return relogioSincronizado && time(nullptr) >= EPOCH_VALIDO;
 }
 
 
@@ -953,7 +1523,8 @@ bool relogioOk() {
 
 bool conexaoDisponivel() {
 
-  if (SIMULAR_QUEDA_S > 0 && millis() < SIMULAR_QUEDA_S * 1000UL) {
+  if (SIMULAR_QUEDA_S > 0 && millis() >= SIMULAR_QUEDA_INICIO_S * 1000UL &&
+      millis() < (SIMULAR_QUEDA_INICIO_S + SIMULAR_QUEDA_S) * 1000UL) {
     return false;
   }
 
@@ -964,8 +1535,14 @@ bool conexaoDisponivel() {
 // ==========================================================
 // FILA EM FLASH (STORE-AND-FORWARD)
 // ==========================================================
+//
+// Uma linha JSON por leitura, da mais antiga para a mais nova. O loop grava
+// no fim (enfileirar); a tarefa de envio le o inicio e apaga o que a nuvem
+// confirmou (descartarEnviadas). TravaFila em toda funcao que abre o arquivo.
 
 int contarFila() {
+
+  TravaFila trava;
 
   File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
 
@@ -991,8 +1568,10 @@ int contarFila() {
 }
 
 
-// Reescreve a fila pulando as `pular` primeiras linhas.
+// Reescreve a fila pulando as `pular` primeiras linhas (fila cheia).
 void descartarInicioDaFila(int pular) {
+
+  TravaFila trava;
 
   File origem = LittleFS.open(FILA_ARQUIVO, "r");
   File destino = LittleFS.open("/fila.tmp", "w");
@@ -1028,8 +1607,63 @@ void descartarInicioDaFila(int pular) {
 }
 
 
+// Reescreve a fila sem as linhas que a nuvem confirmou. Compara pelo texto
+// (cada linha tem seu seq): se o loop gravou linha nova, ou a fila cheia
+// descartou a mais antiga, no meio do envio, nada que nao saiu e apagado.
+void descartarEnviadas(const String lote[], const bool enviada[], int quantas) {
+
+  TravaFila trava;
+
+  bool tirada[REENVIO_POR_LOTE] = { false };
+
+  File origem = LittleFS.open(FILA_ARQUIVO, "r");
+
+  if (!origem) {
+    filaTamanho = 0;
+    return;
+  }
+
+  File destino = LittleFS.open("/fila.tmp", "w");
+
+  int restantes = 0;
+
+  while (origem.available()) {
+
+    String linha = origem.readStringUntil('\n');
+    linha.trim();
+
+    if (linha.length() == 0) {
+      continue;
+    }
+
+    bool pular = false;
+
+    for (int i = 0; i < quantas; i++) {
+      if (enviada[i] && !tirada[i] && linha == lote[i]) {
+        tirada[i] = true;
+        pular = true;
+        break;
+      }
+    }
+
+    if (!pular) {
+      destino.println(linha);
+      restantes++;
+    }
+  }
+
+  origem.close();
+  destino.close();
+
+  LittleFS.remove(FILA_ARQUIVO);
+  LittleFS.rename("/fila.tmp", FILA_ARQUIVO);
+
+  filaTamanho = restantes;
+}
+
+
 // Linhas guardadas sem relogio levam "ms" (millis da medicao) no lugar do medidoEm.
-bool filaTemMs = false;
+volatile bool filaTemMs = false;
 
 
 bool linhaTemMs(const String &linha) {
@@ -1042,6 +1676,8 @@ bool linhaTemMs(const String &linha) {
 //   converter = true: troca "ms" pelo medidoEm (agora - tempo desde a medicao);
 //   converter = false: descarta (vieram de antes de um reinicio, o millis zerou).
 void reescreverFilaMs(bool converter) {
+
+  TravaFila trava;
 
   File origem = LittleFS.open(FILA_ARQUIVO, "r");
 
@@ -1112,6 +1748,8 @@ void reescreverFilaMs(bool converter) {
 // Procura linhas com "ms" (so no boot; depois o flag acompanha).
 bool filaTemLinhaMs() {
 
+  TravaFila trava;
+
   File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
 
   if (!arquivo) {
@@ -1130,14 +1768,17 @@ bool filaTemLinhaMs() {
 }
 
 
-void enfileirar(const char *payload) {
+// Grava uma linha no fim da fila. false = flash indisponivel.
+bool enfileirar(const char *payload, bool offline) {
+
+  TravaFila trava;
 
   File arquivo = LittleFS.open(FILA_ARQUIVO, "a");
 
   if (!arquivo) {
 
-    Serial.println("FILA: erro ao abrir a flash. Leitura perdida.");
-    return;
+    Serial.println("FILA: erro ao abrir a flash.");
+    return false;
   }
 
   arquivo.println(payload);
@@ -1151,18 +1792,20 @@ void enfileirar(const char *payload) {
     descartarInicioDaFila(filaTamanho - FILA_MAX);
   }
 
-  Serial.print("FILA: leitura guardada offline (");
+  Serial.print(offline ? "FILA: leitura guardada offline (" : "FILA: leitura guardada antes do envio (");
   Serial.print(filaTamanho);
   Serial.println(" na fila).");
+
+  return true;
 }
 
 
-// Guarda a leitura para reenvio. Sem relogio, guarda o millis da medicao.
-void guardarOffline(const char *payload, time_t medidoEm, unsigned long msMedicao) {
+// Guarda a leitura na fila (com ou sem rede: o envio sai da fila). Sem
+// relogio, guarda o millis da medicao. false = flash indisponivel.
+bool guardarLeitura(const char *payload, time_t medidoEm, unsigned long msMedicao, bool offline) {
 
   if (medidoEm > 0) {
-    enfileirar(payload);
-    return;
+    return enfileirar(payload, offline);
   }
 
   String linha = payload;
@@ -1171,13 +1814,72 @@ void guardarOffline(const char *payload, time_t medidoEm, unsigned long msMedica
   linha = linha.substring(0, fim) + ",\"ms\":" + String(msMedicao) + "}";
 
   Serial.println("FILA: sem relogio; guardando com o tempo desde que a placa ligou.");
-  enfileirar(linha.c_str());
-  filaTemMs = true;
+
+  TravaFila trava;
+
+  bool ok = enfileirar(linha.c_str(), offline);
+
+  if (ok) {
+    filaTemMs = true;
+  }
+
+  return ok;
 }
 
 
-// Envia as leituras guardadas, da mais antiga para a mais nova.
-// Para na primeira falha temporaria para manter a ordem.
+// Flash indisponivel: a leitura do ciclo vai direto, uma tentativa so.
+portMUX_TYPE envioDiretoTrava = portMUX_INITIALIZER_UNLOCKED;
+char envioDireto[160];
+bool envioDiretoPendente = false;
+
+
+void pedirEnvioDireto(const char *payload) {
+
+  portENTER_CRITICAL(&envioDiretoTrava);
+  strncpy(envioDireto, payload, sizeof(envioDireto) - 1);
+  envioDireto[sizeof(envioDireto) - 1] = '\0';
+  envioDiretoPendente = true;
+  portEXIT_CRITICAL(&envioDiretoTrava);
+}
+
+
+void registrarResultado(int status) {
+
+  indUltimoHttp = status;
+
+  if (status == 201 || status == 200) {
+    indEnviadoEm = millis();
+  }
+}
+
+
+void enviarDireto() {
+
+  char copia[160];
+  bool tem;
+
+  portENTER_CRITICAL(&envioDiretoTrava);
+  tem = envioDiretoPendente;
+  if (tem) {
+    memcpy(copia, envioDireto, sizeof(copia));
+    envioDiretoPendente = false;
+  }
+  portEXIT_CRITICAL(&envioDiretoTrava);
+
+  if (!tem) {
+    return;
+  }
+
+  Serial.println("Enviando telemetria ao Azure (sem fila: flash indisponivel)...");
+  alimentarWatchdog();
+  registrarResultado(postarAzure(copia));
+}
+
+
+// Envia as leituras da fila, da mais antiga para a mais nova, ate esvaziar ou
+// ate a primeira falha temporaria (para manter a ordem). Roda na tarefa de
+// envio. A trava da fila fica presa so para ler e para reescrever o arquivo,
+// nunca durante a requisicao: o loop grava a leitura nova sem esperar a rede.
 void reenviarFila() {
 
   if (filaTamanho == 0) {
@@ -1188,64 +1890,196 @@ void reenviarFila() {
     reescreverFilaMs(true);
   }
 
-  if (filaTamanho == 0) {
-    return;
+  // Aviso de espera pelo relogio: uma vez so, ate o relogio chegar.
+  static bool avisouRelogio = false;
+
+  if (relogioOk()) {
+    avisouRelogio = false;
   }
 
-  Serial.print("FILA: reenviando (");
-  Serial.print(filaTamanho);
-  Serial.println(" pendentes)...");
+  // Limite de voltas: protege contra reenviar sem fim se o descarte falhar.
+  for (int volta = 0; volta <= FILA_MAX / REENVIO_POR_LOTE &&
+                      filaTamanho > 0 && !pausaEnvio && conexaoDisponivel(); volta++) {
 
-  File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
+    String lote[REENVIO_POR_LOTE];
+    bool enviada[REENVIO_POR_LOTE] = { false };
+    int lidas = 0;
+    int pendentes = 0;
 
-  if (!arquivo) {
+    {
+      TravaFila trava;
 
-    filaTamanho = 0;
-    return;
+      File arquivo = LittleFS.open(FILA_ARQUIVO, "r");
+
+      if (!arquivo) {
+        filaTamanho = 0;
+        return;
+      }
+
+      while (arquivo.available() && lidas < REENVIO_POR_LOTE) {
+
+        String linha = arquivo.readStringUntil('\n');
+        linha.trim();
+
+        if (linha.length() > 0) {
+          lote[lidas++] = linha;
+        }
+      }
+
+      arquivo.close();
+      pendentes = filaTamanho;
+    }
+
+    if (lidas == 0) {
+      break;
+    }
+
+    int enviadas = 0;
+    bool avisouEnvio = false;
+    bool falhou = false;
+
+    for (int i = 0; i < lidas && !pausaEnvio; i++) {
+
+      String corpo = lote[i];
+      unsigned long ms = 0;
+      std::string semMs;
+
+      // Sem relogio ainda: recente sai sem medidoEm (a nuvem usa a hora da
+      // chegada); mais velha espera o NTP (reescreverFilaMs da o horario).
+      if (linhaComMsCore(lote[i].c_str(), &ms, &semMs)) {
+
+        if (millis() - ms > SEM_RELOGIO_RECENTE_MS) {
+          if (!avisouRelogio) {
+            Serial.println("FILA: aguardando o relogio para reenviar leituras sem horario.");
+            avisouRelogio = true;
+          }
+          continue;
+        }
+
+        corpo = semMs.c_str();
+      }
+
+      alimentarWatchdog();
+
+      if (!avisouEnvio) {
+        Serial.print("Enviando telemetria ao Azure (");
+        Serial.print(pendentes);
+        Serial.println(" na fila)...");
+        avisouEnvio = true;
+      }
+
+      Serial.print("FILA: enviando ");
+      Serial.println(corpo);
+
+      int status = postarAzure(corpo.c_str());
+      registrarResultado(status);
+
+      if (falhaTemporaria(status)) {
+        falhou = true;
+        break;
+      }
+
+      // Enviada, ou recusada de vez (4xx): nao adianta reenviar.
+      enviada[i] = true;
+      enviadas++;
+    }
+
+    if (enviadas > 0) {
+
+      descartarEnviadas(lote, enviada, lidas);
+
+      Serial.print("FILA: ");
+      Serial.print(enviadas);
+      Serial.print(" reenviadas, ");
+      Serial.print(filaTamanho);
+      Serial.println(" restantes.");
+    }
+
+    if (falhou || enviadas == 0) {
+      break;
+    }
   }
+}
 
-  int processadas = 0;
 
-  while (arquivo.available() && processadas < REENVIO_POR_CICLO) {
+// ==========================================================
+// TAREFA DE ENVIO
+// ==========================================================
 
-    String linha = arquivo.readStringUntil('\n');
-    linha.trim();
+#define TAREFA_ENVIO_PILHA 12288   // bytes; TLS (mbedTLS) + HTTPClient
+#define TAREFA_ENVIO_ESPERA_MS 1000
 
-    if (linha.length() == 0) {
+
+void tarefaEnvio(void *parametro) {
+
+  esp_task_wdt_add(NULL);
+
+  for (;;) {
+
+    esp_task_wdt_reset();
+
+    // Acorda quando o loop grava uma leitura, ou a cada 1 s (fila antiga,
+    // rede que voltou, keep-alive do MQTT).
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(TAREFA_ENVIO_ESPERA_MS));
+
+    esp_task_wdt_reset();
+
+    if (pausaEnvio || !conexaoDisponivel()) {
       continue;
     }
 
-    // Leitura sem horario so sai depois do relogio (a API nao aceita "ms").
-    if (linhaTemMs(linha)) {
-      Serial.println("FILA: aguardando o relogio para reenviar leituras sem horario.");
-      break;
+#ifdef COM_MQTT
+    // Mantem a conexao viva (PINGREQ) e processa o que o broker mandar.
+    mqtt.loop();
+#endif
+
+    // Heartbeat velho nao diz nada sobre agora: so vale o do ultimo ciclo.
+    bool heartbeat = heartbeatPendente;
+    if (heartbeat && millis() - heartbeatPedidoEm > INTERVALO_ENVIO) {
+      heartbeatPendente = false;
+      heartbeat = false;
     }
 
-    alimentarWatchdog();
+    if (filaTamanho > 0 || heartbeat || envioDiretoPendente) {
 
-    Serial.print("FILA: reenviando ");
-    Serial.println(linha);
+      indEnviando = true;
 
-    int status = postarAzure(linha.c_str());
+      // Primeiro o que ficou guardado, para manter a ordem no banco.
+      reenviarFila();
+      enviarDireto();
 
-    if (falhaTemporaria(status)) {
-      break;
+      if (heartbeat && !pausaEnvio && conexaoDisponivel()) {
+        heartbeatPendente = false;
+        esp_task_wdt_reset();
+        indUltimoHttp = enviarHeartbeat("sensor_falha");
+      }
+
+      indEnviando = false;
     }
 
-    processadas++;
+#ifdef COM_MQTT
+    LeituraMqtt leitura;
+
+    portENTER_CRITICAL(&mqttLeituraTrava);
+    leitura = leituraMqtt;
+    leituraMqtt.pendente = false;
+    portEXIT_CRITICAL(&mqttLeituraTrava);
+
+    // So a leitura deste ciclo (a fila offline e so do HTTPS).
+    if (leitura.pendente && millis() - leitura.em < INTERVALO_ENVIO && !pausaEnvio) {
+      esp_task_wdt_reset();
+      publicarMqtt(leitura.temperatura, leitura.umidade, leitura.rssi);
+    }
+#endif
   }
+}
 
-  arquivo.close();
 
-  if (processadas > 0) {
+void iniciarTarefaEnvio() {
 
-    descartarInicioDaFila(processadas);
-
-    Serial.print("FILA: ");
-    Serial.print(processadas);
-    Serial.print(" reenviadas, ");
-    Serial.print(filaTamanho);
-    Serial.println(" restantes.");
+  if (xTaskCreate(tarefaEnvio, "envio", TAREFA_ENVIO_PILHA, nullptr, 1, &tarefaEnvioHandle) != pdPASS) {
+    Serial.println("ENVIO: sem memoria para a tarefa de envio; nada sera enviado.");
+    tarefaEnvioHandle = nullptr;
   }
 }
 
@@ -1260,10 +2094,16 @@ void reenviarFila() {
 //   CT<{"cmd":"info"}
 //   CT<{"cmd":"wifi","ssid":"..","senha":".."}                      troca so a rede
 //   CT<{"cmd":"config","ssid":"..","senha":"..","id":"..","chave":".."}
+//   CT<{"cmd":"redes"}                                              redes 2.4 GHz vistas
 //
 // A placa testa a rede antes de gravar e responde
-//   CT>{"ok":true,"wifi":"conectado","rssi":-55}
-//   CT>{"ok":false,"erro":"senha|rede_nao_encontrada|tempo|..."}
+//   CT>{"ok":true,"wifi":"conectado","rssi":-55,"canal":6,"seguranca":"wpa2","id":".."}
+//   CT>{"ok":false,"erro":"..","motivo":15,"rssi":-84,"canal":6,"seguranca":"wpa2"}
+// erro: senha | rede_nao_encontrada | rede_corporativa | seguranca_incompativel |
+//       sinal_fraco | sem_ip | tempo | rede_invalida | ...; motivo = codigo do
+//       driver (wifi_err_reason_t); rssi/canal/seguranca so quando o scan achou a rede.
+//   CT>{"ok":true,"redes":[{"ssid":"..","rssi":-60,"canal":6,"seguranca":"wpa2"}]}
+//   CT>{"pronto":true,"fw":".."}     uma vez, ao fim do setup (placa pronta para comandos)
 // Senha e chave nunca voltam pela serial nem aparecem no log.
 
 String bufferSerial;
@@ -1383,29 +2223,165 @@ void responder(const String &json) {
 }
 
 
-// Motivo da ultima queda do Wi-Fi (vem do evento do driver; 0 = nenhum).
-volatile uint8_t motivoQueda = 0;
-
 void aoCairWiFi(WiFiEvent_t evento, WiFiEventInfo_t info) {
 
-  motivoQueda = info.wifi_sta_disconnected.reason;
+  associou = false;
+
+  // ASSOC_LEAVE e STA_LEAVING vem do disconnect da propria placa: nao e falha.
+  uint8_t motivo = info.wifi_sta_disconnected.reason;
+
+  if (motivo != WIFI_REASON_ASSOC_LEAVE && motivo != WIFI_REASON_STA_LEAVING) {
+    motivoQueda = info.wifi_sta_disconnected.reason;
+  }
 }
 
 
+void aoAssociarWiFi(WiFiEvent_t evento, WiFiEventInfo_t info) {
+
+  associou = true;
+}
+
+
+// Nome curto do tipo de seguranca do AP, como vai para o painel.
+const char *nomeSeguranca(wifi_auth_mode_t modo) {
+
+  switch (modo) {
+    case WIFI_AUTH_OPEN:                 return "aberta";
+    case WIFI_AUTH_WEP:                  return "wep";
+    case WIFI_AUTH_WPA_PSK:              return "wpa";
+    case WIFI_AUTH_WPA2_PSK:             return "wpa2";
+    case WIFI_AUTH_WPA_WPA2_PSK:         return "wpa_wpa2";
+    case WIFI_AUTH_WPA3_PSK:             return "wpa3";
+    case WIFI_AUTH_WPA2_WPA3_PSK:        return "wpa2_wpa3";
+    case WIFI_AUTH_OWE:                  return "owe";
+    case WIFI_AUTH_WPA_ENTERPRISE:
+    case WIFI_AUTH_WPA2_ENTERPRISE:
+    case WIFI_AUTH_WPA3_ENTERPRISE:
+    case WIFI_AUTH_WPA2_WPA3_ENTERPRISE:
+    case WIFI_AUTH_WPA3_ENT_192:         return "enterprise";
+    default:                             return "outra";
+  }
+}
+
+
+// WPA-Enterprise (802.1X, login com usuario): a placa so tem SSID e senha.
+bool redeCorporativa(wifi_auth_mode_t modo) {
+
+  return modo == WIFI_AUTH_WPA_ENTERPRISE || modo == WIFI_AUTH_WPA2_ENTERPRISE ||
+         modo == WIFI_AUTH_WPA3_ENTERPRISE || modo == WIFI_AUTH_WPA2_WPA3_ENTERPRISE ||
+         modo == WIFI_AUTH_WPA3_ENT_192;
+}
+
+
+// Scan bloqueante. O driver recusa o scan enquanto a estacao esta no meio de
+// uma tentativa de conexao (logo depois do boot, por exemplo): nesse caso
+// para a tentativa, espera o estado assentar e repete, ate SCAN_TENTATIVAS.
+int16_t escanear(const char *ssid) {
+
+  int16_t n = WIFI_SCAN_FAILED;
+
+  for (int tentativa = 1; tentativa <= SCAN_TENTATIVAS; tentativa++) {
+
+    n = WiFi.scanNetworks(false, true, false, 300, 0, ssid);
+
+    if (n >= 0) {
+      return n;
+    }
+
+    Serial.printf("WIFI: scan recusado (%d), tentativa %d de %d.\n", n, tentativa, SCAN_TENTATIVAS);
+    WiFi.scanDelete();
+
+    if (tentativa == SCAN_TENTATIVAS) {
+      break;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+      WiFi.disconnect();
+      ultimaTentativaWiFi = 0;   // o loop reconecta logo depois
+    }
+
+    // Espera crescente, alimentando o watchdog, para o driver sair do "connecting".
+    unsigned long inicio = millis();
+    while (millis() - inicio < SCAN_ESPERA_MS * (unsigned long)tentativa) {
+      esperarAtualizando(50);
+      alimentarWatchdog();
+    }
+  }
+
+  return n;
+}
+
+
+// Scan dirigido ao nome (acha tambem rede oculta), guardando o AP de sinal
+// mais forte. O ESP32-C3 so tem radio 2.4 GHz: rede so 5 GHz nao aparece.
+// Resultado em ultimoAp (o Arduino nao aceita a struct no prototipo gerado).
+void procurarRede(const String &ssid) {
+
+  ApVisto &ap = ultimoAp;
+  ap = { false, false, 0, 0, WIFI_AUTH_OPEN };
+
+  int16_t n = escanear(ssid.c_str());
+
+  if (n < 0) {
+    Serial.printf("WIFI: scan falhou (%d); testando sem ele.\n", n);
+    return;
+  }
+
+  ap.escaneou = true;
+
+  for (int i = 0; i < n; i++) {
+
+    if (WiFi.SSID(i) != ssid) {
+      continue;
+    }
+
+    if (!ap.achou || WiFi.RSSI(i) > ap.rssi) {
+      ap.achou = true;
+      ap.rssi = WiFi.RSSI(i);
+      ap.canal = WiFi.channel(i);
+      ap.seguranca = WiFi.encryptionType(i);
+    }
+  }
+
+  WiFi.scanDelete();
+
+  if (ap.achou) {
+    Serial.printf("WIFI: rede achada no canal %ld, sinal %ld dBm, seguranca %s.\n",
+                  (long)ap.canal, (long)ap.rssi, nomeSeguranca(ap.seguranca));
+  } else {
+    Serial.println("WIFI: rede nao apareceu no scan 2.4 GHz.");
+  }
+}
+
+
+// Codigo de erro para o painel a partir do motivo do driver ("" = sem
+// conclusao). Handshake que estoura com sinal fraco e sinal, nao senha.
 String traduzirMotivo(uint8_t motivo) {
+
+  bool sinalFraco = ultimoAp.achou && ultimoAp.rssi < RSSI_FRACO;
 
   switch (motivo) {
 
     case WIFI_REASON_NO_AP_FOUND:
-    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
-    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
     case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
       return "rede_nao_encontrada";
 
-    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+      return "seguranca_incompativel";
+
+    case WIFI_REASON_802_1X_AUTH_FAILED:
+      return "rede_corporativa";
+
+    case WIFI_REASON_BEACON_TIMEOUT:
+      return "sinal_fraco";
+
     case WIFI_REASON_AUTH_EXPIRE:
     case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
     case WIFI_REASON_HANDSHAKE_TIMEOUT:
+      return sinalFraco ? "sinal_fraco" : "senha";
+
+    case WIFI_REASON_AUTH_FAIL:
     case WIFI_REASON_MIC_FAILURE:
       return "senha";
   }
@@ -1414,20 +2390,53 @@ String traduzirMotivo(uint8_t motivo) {
 }
 
 
-// Tenta a rede; devolve "" se conectou ou o motivo da falha.
-String testarWiFi(const String &ssid, const String &senha) {
+// Erro que nao melhora esperando mais (o sinal fraco pode passar na proxima tentativa).
+bool erroDefinitivo(const String &erro) {
+
+  return erro.length() > 0 && erro != "sinal_fraco";
+}
+
+
+// Tenta a rede; devolve "" se conectou ou o motivo da falha. Rede aberta
+// zera a senha (com senha o driver exige WPA2 e nao acha a rede).
+String testarWiFi(const String &ssid, String &senha) {
 
   WiFi.disconnect();
   delay(200);
 
   motivoQueda = 0;
-  WiFi.begin(ssid.c_str(), senha.c_str());
-  ajustarRadio();
+  procurarRede(ssid);
 
+  if (ultimoAp.escaneou && !ultimoAp.achou) {
+    return "rede_nao_encontrada";
+  }
+
+  if (ultimoAp.achou) {
+
+    if (redeCorporativa(ultimoAp.seguranca)) {
+      return "rede_corporativa";
+    }
+
+    if (ultimoAp.seguranca == WIFI_AUTH_WEP || ultimoAp.seguranca == WIFI_AUTH_WPA_PSK) {
+      return "seguranca_incompativel";
+    }
+
+    bool aberta = ultimoAp.seguranca == WIFI_AUTH_OPEN || ultimoAp.seguranca == WIFI_AUTH_OWE;
+
+    if (aberta) {
+      senha = "";
+    } else if (senha.length() == 0) {
+      return "senha";
+    }
+  }
+
+  iniciarWiFi(ssid.c_str(), senha.c_str());
+
+  unsigned long limite = ultimoAp.achou ? TESTE_WIFI_ACHADA_MS : TESTE_WIFI_MS;
   unsigned long inicio = millis();
   wl_status_t status = WiFi.status();
 
-  while (millis() - inicio < TESTE_WIFI_MS) {
+  while (millis() - inicio < limite) {
 
     status = WiFi.status();
 
@@ -1437,16 +2446,24 @@ String testarWiFi(const String &ssid, const String &senha) {
     }
 
     // O driver ja disse por que caiu: nao precisa esperar o tempo todo.
-    if (traduzirMotivo(motivoQueda).length() > 0 && millis() - inicio > 3000) {
+    if (erroDefinitivo(traduzirMotivo(motivoQueda)) && millis() - inicio > 3000) {
       break;
     }
 
-    delay(250);
+    esperarAtualizando(250);
     alimentarWatchdog();
   }
 
+  logMotivo("teste da rede");
+
   if (status == WL_CONNECTED) {
     return "";
+  }
+
+  String motivo = traduzirMotivo(motivoQueda);
+
+  if (motivo.length() > 0) {
+    return motivo;
   }
 
   if (status == WL_NO_SSID_AVAIL) {
@@ -1457,16 +2474,124 @@ String testarWiFi(const String &ssid, const String &senha) {
     return "senha";
   }
 
-  String motivo = traduzirMotivo(motivoQueda);
+  // Associou (WPA ok) mas o DHCP nao deu endereco no tempo.
+  if (associou) {
+    return "sem_ip";
+  }
 
-  return motivo.length() > 0 ? motivo : "tempo";
+  return "tempo";
+}
+
+
+// Sinal, canal e seguranca do AP visto no scan, para a resposta CT>.
+String dadosDoAp() {
+
+  if (!ultimoAp.achou) {
+    return "";
+  }
+
+  return String(",\"rssi\":") + ultimoAp.rssi + ",\"canal\":" + ultimoAp.canal +
+         ",\"seguranca\":\"" + nomeSeguranca(ultimoAp.seguranca) + "\"";
+}
+
+
+// CT<{"cmd":"redes"}: redes 2.4 GHz que a placa enxerga, uma por nome (o AP
+// de sinal mais forte), da mais forte para a mais fraca. Nenhuma senha.
+void listarRedes() {
+
+  Serial.println("REDES: procurando redes 2.4 GHz...");
+
+  int16_t n = escanear(nullptr);
+
+  if (n < 0) {
+    Serial.printf("REDES: scan falhou (%d).\n", n);
+    responder("{\"ok\":false,\"erro\":\"scan_falhou\"}");
+    return;
+  }
+
+  const int MAX_VISTAS = 64;
+  int ordem[MAX_VISTAS];
+  int total = 0;
+
+  for (int i = 0; i < n && i < MAX_VISTAS; i++) {
+
+    String nome = WiFi.SSID(i);
+
+    if (nome.length() == 0) {
+      continue;   // rede oculta: sem nome para mostrar
+    }
+
+    // Mesmo nome ja listado: fica o AP de sinal mais forte.
+    int repetida = -1;
+    for (int j = 0; j < total; j++) {
+      if (WiFi.SSID(ordem[j]) == nome) {
+        repetida = j;
+        break;
+      }
+    }
+
+    if (repetida >= 0) {
+      if (WiFi.RSSI(i) > WiFi.RSSI(ordem[repetida])) {
+        ordem[repetida] = i;
+      }
+      continue;
+    }
+
+    ordem[total++] = i;
+  }
+
+  // Ordena pelo sinal (insercao; sao poucas).
+  for (int i = 1; i < total; i++) {
+    int atual = ordem[i];
+    int j = i - 1;
+    while (j >= 0 && WiFi.RSSI(ordem[j]) < WiFi.RSSI(atual)) {
+      ordem[j + 1] = ordem[j];
+      j--;
+    }
+    ordem[j + 1] = atual;
+  }
+
+  String json = "{\"ok\":true,\"redes\":[";
+
+  for (int k = 0; k < total && k < REDES_MAX; k++) {
+
+    int i = ordem[k];
+
+    if (k > 0) {
+      json += ",";
+    }
+
+    json += String("{\"ssid\":") + emJson(WiFi.SSID(i)) + ",\"rssi\":" + WiFi.RSSI(i) +
+            ",\"canal\":" + WiFi.channel(i) + ",\"seguranca\":\"" +
+            nomeSeguranca(WiFi.encryptionType(i)) + "\"}";
+  }
+
+  json += "]}";
+
+  WiFi.scanDelete();
+
+  Serial.printf("REDES: %d rede(s) vista(s), %d na resposta.\n", total, min(total, REDES_MAX));
+  responder(json);
 }
 
 
 void apagarFila() {
 
+  TravaFila trava;
+
   LittleFS.remove(FILA_ARQUIVO);
   filaTamanho = 0;
+  filaTemMs = false;
+}
+
+
+// Resultado do comando de rede na tela (fica CABO_RESULTADO_MS).
+void mostrarResultadoCabo(const String &erro) {
+
+  indCabo = CABO_RESULTADO;
+  indCaboResultado = resumoCabo(erro);
+  indCaboEm = millis();
+  desenharIndicadores();
 }
 
 
@@ -1488,6 +2613,12 @@ void tratarComando() {
     return;
   }
 
+  if (tipo == "redes") {
+
+    listarRedes();
+    return;
+  }
+
   if (tipo != "wifi" && tipo != "config") {
 
     responder("{\"ok\":false,\"erro\":\"comando_desconhecido\"}");
@@ -1502,25 +2633,38 @@ void tratarComando() {
   if (ssid.length() == 0 || ssid.length() > 32 || senha.length() > 63) {
 
     responder("{\"ok\":false,\"erro\":\"rede_invalida\"}");
+    mostrarResultadoCabo("rede_invalida");
     return;
   }
 
   if (tipo == "wifi" && !temIdentidade()) {
 
     responder("{\"ok\":false,\"erro\":\"sem_identidade\"}");
+    mostrarResultadoCabo("sem_identidade");
     return;
   }
 
   if (tipo == "config" && (id.length() < 3 || id.length() > 40 || chave.length() < 16)) {
 
     responder("{\"ok\":false,\"erro\":\"identidade_invalida\"}");
+    mostrarResultadoCabo("identidade_invalida");
     return;
   }
 
   Serial.print("CONFIG: testando a rede ");
   Serial.println(ssid);
 
+  // A tarefa de envio para enquanto a rede e a identidade mudam (a requisicao
+  // em curso cai junto com o Wi-Fi e a leitura segue na fila).
+  pausaEnvio = true;
+
+  indCabo = CABO_TESTANDO;
+  indCaboSsid = ssid;
+  desenharIndicadores();
+
   String erro = testarWiFi(ssid, senha);
+
+  mostrarResultadoCabo(erro);
 
   if (erro.length() > 0) {
 
@@ -1528,15 +2672,22 @@ void tratarComando() {
     Serial.print(erro);
     Serial.print("). Motivo do Wi-Fi: ");
     Serial.print(motivoQueda);
+    if (motivoQueda > 0) {
+      Serial.print(" (");
+      Serial.print(WiFi.disconnectReasonName((wifi_err_reason_t)motivoQueda));
+      Serial.print(")");
+    }
     Serial.println(". Nada foi gravado; voltando para a rede anterior.");
 
-    responder("{\"ok\":false,\"erro\":\"" + erro + "\",\"motivo\":" + String(motivoQueda) + "}");
+    responder("{\"ok\":false,\"erro\":\"" + erro + "\",\"motivo\":" + String(motivoQueda) +
+              dadosDoAp() + "}");
 
-    WiFi.disconnect();
     if (cfgSsid.length() > 0) {
-      WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
-      ajustarRadio();
+      iniciarWiFi(cfgSsid.c_str(), cfgSenha.c_str());
+    } else {
+      WiFi.disconnect();
     }
+    pausaEnvio = false;
     return;
   }
 
@@ -1554,8 +2705,10 @@ void tratarComando() {
 
     preferencias.putString("id", id);
     preferencias.putString("chave", chave);
+    xSemaphoreTake(cfgTrava, portMAX_DELAY);
     cfgId = id;
     cfgChave = chave;
+    xSemaphoreGive(cfgTrava);
   }
 
   preferencias.end();
@@ -1568,13 +2721,17 @@ void tratarComando() {
   Serial.print(" na rede ");
   Serial.println(cfgSsid);
 
+  String seguranca = ultimoAp.achou ? String(",\"seguranca\":\"") + nomeSeguranca(ultimoAp.seguranca) + "\"" : "";
+
   responder(String("{\"ok\":true,\"wifi\":\"conectado\",\"rssi\":") + WiFi.RSSI() +
-            ",\"id\":" + emJson(cfgId) + "}");
+            ",\"canal\":" + WiFi.channel() + seguranca + ",\"id\":" + emJson(cfgId) + "}");
 
   sincronizarRelogio();
 
+  pausaEnvio = false;
+
   // Proxima leitura sai ja, para o painel mostrar "online" logo.
-  ultimoEnvio = 0;
+  cicloImediato = true;
 }
 
 
@@ -1588,22 +2745,34 @@ void setup() {
   Serial.setRxBufferSize(1024);
   Serial.begin(115200);
 
+#if ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE
+  // USB nativo (placa fisica): porta que ninguem le nao segura o firmware.
+  Serial.setTxTimeoutMs(SERIAL_TX_TIMEOUT_MS);
+#endif
+
+  filaTrava = xSemaphoreCreateRecursiveMutex();
+  cfgTrava = xSemaphoreCreateMutex();
+
   iniciarWatchdog();
 
-  delay(1000);
+  indReinicioWdt = reiniciouPorWatchdog();
 
 #ifdef TELA_OLED
   Wire.begin(TELA_SDA, TELA_SCL);
   tela.begin();
   tela.setContrast(255);
-  mostrarNaTela(NAN, NAN, "INICIANDO");
 #else
   pinMode(LED_VERDE, OUTPUT);
   pinMode(LED_AMARELO, OUTPUT);
   pinMode(LED_VERMELHO, OUTPUT);
-
-  desligarLeds();
 #endif
+
+#if defined(LED_PLACA) && !defined(LED_PLACA_RGB)
+  pinMode(LED_PLACA, OUTPUT);
+#endif
+
+  // INICIANDO na tela e LEDs em sequencia desde o primeiro segundo.
+  esperarAtualizando(1000);
 
 #ifdef TESTE_DHT
   autotesteDht();
@@ -1636,6 +2805,7 @@ void setup() {
   // Modo estacao antes de tudo: o MAC (ID sugerido) so aparece com o radio ligado.
   WiFi.mode(WIFI_STA);
   WiFi.onEvent(aoCairWiFi, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  WiFi.onEvent(aoAssociarWiFi, ARDUINO_EVENT_WIFI_STA_CONNECTED);
 
   Serial.print("SENSOR: ");
   Serial.print(temIdentidade() ? cfgId : String("sem identidade (chip ") + idDoChip() + ")");
@@ -1657,8 +2827,17 @@ void setup() {
 
   sincronizarRelogio();
 
+  iniciarTarefaEnvio();
+
   Serial.println();
   Serial.println("Sistema iniciado.");
+
+  indIniciando = false;
+  desenharIndicadores();
+
+  // Linha de prontidao: o painel espera por ela (ou por um "info" respondido)
+  // antes de mandar comandos, porque abrir a porta pode reiniciar a placa.
+  responder(String("{\"pronto\":true,\"fw\":") + emJson(FW_VERSAO) + "}");
 }
 
 
@@ -1669,6 +2848,8 @@ void setup() {
 void loop() {
 
   alimentarWatchdog();
+
+  atualizarIndicadores();
 
   // Teste do watchdog: para de alimentar e espera o reinicio.
   if (SIMULAR_TRAVAMENTO_S > 0 && millis() > SIMULAR_TRAVAMENTO_S * 1000UL &&
@@ -1687,11 +2868,6 @@ void loop() {
     tratarComando();
   }
 
-#ifdef COM_MQTT
-  // Mantem a conexao viva (PINGREQ) e processa o que o broker mandar.
-  mqtt.loop();
-#endif
-
 
   // --------------------------------------------------------
   // Sem Wi-Fi ou sem ID/chave: pisca o amarelo e espera o cabo
@@ -1706,13 +2882,10 @@ void loop() {
     static unsigned long ultimaLeitura = 0;
     if (millis() - ultimaLeitura >= 3000 || ultimaLeitura == 0) {
       ultimaLeitura = millis();
-      float t, u;
-      lerSensor(&t, &u);
-      mostrarNaTela(t, u, "CONFIGURAR");
+      lerSensor(&indTemperatura, &indUmidade);
     }
-#else
-    digitalWrite(LED_AMARELO, (millis() / 500) % 2);
 #endif
+    // LED: amarelo em dois toques (atualizarIndicadores).
 
     if (millis() - ultimoAviso >= 10000 || ultimoAviso == 0) {
 
@@ -1729,12 +2902,15 @@ void loop() {
   // Verifica conexão Wi-Fi
   // --------------------------------------------------------
 
-  if (WiFi.status() != WL_CONNECTED) {
+  // Uma tentativa nova a cada RECONEXAO_MS, sem esperar por ela: no meio
+  // delas o driver segue tentando sozinho, e a medicao segue na agenda.
+  if (WiFi.status() != WL_CONNECTED &&
+      (ultimaTentativaWiFi == 0 || millis() - ultimaTentativaWiFi >= RECONEXAO_MS)) {
 
-    Serial.println("Wi-Fi desconectado.");
-    Serial.println("Tentando reconectar...");
+    Serial.println("Wi-Fi desconectado. Tentando reconectar em segundo plano...");
+    logMotivo("sem conexao");
 
-    conectarWiFi();
+    iniciarWiFi(cfgSsid.c_str(), cfgSenha.c_str());
   }
 
 
@@ -1742,10 +2918,18 @@ void loop() {
   // Controla intervalo de envio
   // --------------------------------------------------------
 
-  if (millis() - ultimoEnvio >= INTERVALO_ENVIO ||
-      ultimoEnvio == 0) {
+  unsigned long agora = millis();
 
-    ultimoEnvio = millis();
+  if (cicloImediato || cicloVencidoCore(agora, proximoCiclo)) {
+
+    // Agenda fixa: o proximo ciclo conta do horario marcado deste, nao do
+    // fim do envio (que roda na tarefa de envio).
+    proximoCiclo = proximoCicloCore(agora, proximoCiclo, INTERVALO_ENVIO, cicloImediato);
+    cicloImediato = false;
+
+    Serial.print("CICLO: ");
+    Serial.print(agora);
+    Serial.println(" ms");
 
 
     // ======================================================
@@ -1769,16 +2953,31 @@ void loop() {
 
       Serial.println("ERRO: Falha na leitura do sensor!");
 
-      desligarLeds();
+      // Leitura invalida nunca sai como valida: nada vai para a telemetria nem
+      // para a fila. Tela: FALHA SENSOR; LEDs: os tres piscando juntos.
+      indSensorFalhou = true;
+      indTemperatura = NAN;
+      indUmidade = NAN;
+      desenharIndicadores();
 
-#ifdef TELA_OLED
-      mostrarNaTela(NAN, NAN, "ERRO SENSOR");
-#else
-      digitalWrite(LED_VERMELHO, HIGH);
-      delay(300);
-      digitalWrite(LED_VERMELHO, LOW);
-#endif
+      // Heartbeat (R7): a placa avisa que esta viva e que o sensor falhou, para
+      // o painel nao confundir com placa sem rede. So com conexao: heartbeat
+      // nao entra na fila offline. A fila de leituras validas de antes segue
+      // sendo reenviada.
+      if (conexaoDisponivel()) {
 
+        // A tarefa de envio manda depois de esvaziar a fila.
+        heartbeatPedidoEm = millis();
+        heartbeatPendente = true;
+        avisarEnvio();
+      }
+
+      else {
+
+        Serial.println("Sem conexao. Heartbeat nao enviado (heartbeat nao vai para a fila).");
+      }
+
+      Serial.println("----------------------------------------");
       return;
     }
 
@@ -1801,31 +3000,25 @@ void loop() {
     // ======================================================
 
     // Mesma regra da nuvem (contrato.py): sem limite inferior quando faixaMin e NAN.
-    const char *statusTela;
-
     switch (classificarFaixa(temperatura, faixaMin, faixaMax, faixaMargem)) {
 
       case StatusTermico::NORMAL:
         statusNormal();
-        statusTela = "NORMAL";
         break;
 
       case StatusTermico::ATENCAO:
         statusAtencao();
-        statusTela = "ATENCAO";
         break;
 
       default:
         statusCritico();
-        statusTela = "CRITICO";
         break;
     }
 
-#ifdef TELA_OLED
-    mostrarNaTela(temperatura, umidade, statusTela);
-#else
-    (void)statusTela;
-#endif
+    indSensorFalhou = false;
+    indTemperatura = temperatura;
+    indUmidade = umidade;
+    desenharIndicadores();
 
 
     // ======================================================
@@ -1859,40 +3052,31 @@ void loop() {
 
 
     // ======================================================
-    // ENVIO (Azure com store-and-forward)
+    // FILA E ENVIO (store-and-forward)
     // ======================================================
 
-    if (conexaoDisponivel()) {
+    // A leitura vai para a fila na flash logo depois de ganhar o numero, com
+    // ou sem rede: um reinicio daqui em diante nao a perde. A tarefa de envio
+    // tira da fila quando a nuvem confirma. Nada aqui espera a rede.
+    bool online = conexaoDisponivel();
 
-      Serial.println();
+    if (!online) {
+      Serial.println("Sem conexao. Telemetria nao enviada agora.");
+    }
 
-      // Primeiro o que ficou guardado, para manter a ordem no banco.
-      reenviarFila();
-
-      Serial.println("Enviando telemetria ao Azure...");
-
-      alimentarWatchdog();
-
-      int status = postarAzure(payload);
+    if (!guardarLeitura(payload, medidoEm, msMedicao, !online) && online) {
+      pedirEnvioDireto(payload);
+    }
 
 #ifdef COM_MQTT
-      alimentarWatchdog();
-      publicarMqtt(temperatura, umidade, rssi);
+    if (online) {
+      portENTER_CRITICAL(&mqttLeituraTrava);
+      leituraMqtt = { true, temperatura, umidade, rssi, millis() };
+      portEXIT_CRITICAL(&mqttLeituraTrava);
+    }
 #endif
 
-      if (falhaTemporaria(status)) {
-
-        guardarOffline(payload, medidoEm, msMedicao);
-      }
-
-    }
-
-    else {
-
-      Serial.println("Sem conexao. Telemetria nao enviada agora.");
-
-      guardarOffline(payload, medidoEm, msMedicao);
-    }
+    avisarEnvio();
 
 
     Serial.println("----------------------------------------");

@@ -38,8 +38,8 @@ O endereço IP não é gravado em texto: o contador de limite usa um hash e expi
 
 | dado | quanto tempo |
 |---|---|
-| Cadastros (usuários, empresa, veículos, sensores, viagens) | até a empresa ou o gestor removê-los, ou até a exclusão da empresa (ver abaixo) |
-| Leituras dos sensores | sem prazo definido hoje: o container não tem expiração e as leituras só saem por exclusão manual |
+| Cadastros (usuários, empresa, veículos, sensores, viagens) | até o gestor removê-los, ou até a exclusão da empresa (ver abaixo) |
+| Leituras dos sensores | sem prazo definido hoje: o container não tem expiração e as leituras só saem com a exclusão da empresa |
 | Contadores de limite (IP hasheado) | expiram sozinhos, em até 2 dias |
 | Logs do Application Insights (sem senha, token nem texto das perguntas; e-mail mascarado) | 90 dias |
 | Perguntas ao chat e ao assistente | não são gravadas |
@@ -65,7 +65,7 @@ controlador:
 |---|---|
 | Confirmação de que há tratamento e acesso aos dados | o próprio usuário vê nome, e-mail, perfil e empresa no painel (`GET /eu`); o gestor lista os usuários da empresa. Não há rota de exportação: pedidos de cópia completa são atendidos pela equipe, por consulta manual ao banco |
 | Correção de dados incompletos ou desatualizados | o gestor corrige o cadastro de usuário (`PUT /usuarios/{id}`) e o próprio usuário troca a senha (`POST /senha`) |
-| Anonimização, bloqueio ou eliminação de dados desnecessários ou tratados em desconformidade | exclusão de usuário pelo gestor (`DELETE /usuarios/{id}`); demais casos, por pedido à equipe |
+| Anonimização, bloqueio ou eliminação de dados desnecessários ou tratados em desconformidade | exclusão de usuário pelo gestor (`DELETE /usuarios/{id}`) e da empresa inteira pelo gestor (`DELETE /empresa`); demais casos, por pedido à equipe |
 | Portabilidade | não há exportação automática; atendida sob pedido, por extração manual em formato JSON |
 | Eliminação dos dados tratados com consentimento | o sistema não usa consentimento como base; vale o procedimento de exclusão abaixo |
 | Informação sobre com quem os dados são compartilhados | esta política (seção anterior) |
@@ -87,41 +87,40 @@ procedimento manual abaixo.
 
 ### Exclusão da empresa inteira
 
-**A API não tem rota para excluir uma empresa.** `POST /empresas` cria, mas não existe
-`DELETE /empresas`; as rotas de exclusão (`DELETE /usuarios`, `/dispositivos`, `/veiculos`,
-`/viagens`) removem um item por vez e não apagam as leituras dos sensores. Isso está registrado
-como limitação em [`seguranca.md`](seguranca.md) e nos pontos em aberto de [`lgpd.md`](lgpd.md).
+O gestor da empresa exclui a empresa e todos os dados dela pela API, com `DELETE /empresa`
+(detalhe em [`api.md`](api.md#delete-empresa)). O pedido leva:
 
-Procedimento manual, executado pela equipe (quem tem acesso ao Cosmos DB `cosmos-coldtrack-7319`,
-banco `coldtrack`, pelo portal do Azure, em *Data Explorer*):
+- `confirmacao`: o nome da empresa como foi cadastrado (ou o código dela, `E-XXXXXXXX`, que
+  aparece em `GET /eu`), digitado pelo gestor;
+- `senha`: a senha atual do gestor. A senha errada conta na mesma espera do login.
 
-1. Abrir uma issue pedindo a exclusão, sem dados pessoais, e confirmar a identidade de um
-   gestor da empresa por um meio privado. Só gestor da empresa pode pedir a exclusão dela.
-2. Anotar o código da empresa (`E-XXXXXXXX`), que aparece no cadastro do gestor.
-3. Em cada container abaixo, executar `SELECT * FROM c WHERE c.empresaId = "E-XXXXXXXX"` e
-   excluir os itens retornados, nesta ordem:
+Só gestor pede, e só a empresa dele (a empresa vem do token, nunca do corpo). A API apaga, nesta
+ordem: as sessões e as inscrições de push dos outros usuários, os sensores (a chave deixa de
+valer), todas as leituras da empresa, as viagens, os veículos, os outros usuários, a empresa e,
+por último, o gestor que pediu. Ao final, todos os tokens da empresa respondem `401` e o login
+de qualquer usuário dela falha.
 
-   | ordem | container | o que remove |
-   |---|---|---|
-   | 1 | `usuarios` | todos os usuários da empresa (corta o acesso e invalida os tokens) |
-   | 2 | `leituras` | leituras dos sensores da empresa |
-   | 3 | `viagens` | viagens |
-   | 4 | `veiculos` | veículos |
-   | 5 | `dispositivos` | sensores e hashes de chave |
-   | 6 | `empresas` | o item com `id` igual ao código da empresa |
+Se o pedido parar no meio (erro do banco, ou empresa com muitas leituras que passa do tempo de
+120 s por pedido e recebe `202`), o gestor repete o mesmo pedido, que continua de onde parou; o
+que já foi apagado continua apagado. Enquanto a empresa existe, a confirmação aceita o nome;
+depois, só o código. O log registra só o código da empresa e as contagens, sem e-mail nem nome.
 
-4. Conferir com a mesma consulta que nenhum container retorna itens, e responder na issue que a
-   exclusão foi feita, sem repetir dados pessoais.
-5. Dados que permanecem e saem sozinhos: os logs do Application Insights (até 90 dias, com
-   e-mail mascarado) e os contadores de limite (até 2 dias). Não há como apagar um item
-   isolado desses logs; a política de retenção é o mecanismo de eliminação.
+Dados que permanecem e saem sozinhos: os logs do Application Insights (até 90 dias, com e-mail
+mascarado) e os contadores de limite (hash, até 2 dias). Não há como apagar um item isolado
+desses logs; a política de retenção é o mecanismo de eliminação.
+
+O gestor faz a exclusão no painel, em **Configurações**, seção **Excluir empresa** (a tela chama
+a mesma rota), ou pede à equipe pelo canal acima. Empresa sem gestor que a represente (por exemplo, o único gestor
+removido por fora) segue o procedimento manual: a equipe, no *Data Explorer* do Cosmos DB
+`cosmos-coldtrack-7319` (banco `coldtrack`), executa em cada container
+`SELECT * FROM c WHERE c.empresaId = "E-XXXXXXXX"` e exclui os itens na mesma ordem da rota,
+apagando por último o item de `empresas` com `id` igual ao código.
 
 ### Limitações registradas
 
-- Não existe rota de exclusão de empresa nem de exportação dos dados; os dois pedidos dependem
-  de procedimento manual da equipe, sem prazo garantido por sistema.
-- A exclusão manual não é automatizada nem testada; deve ser conferida a cada execução.
-- Leituras de sensores não têm prazo de retenção; só saem por exclusão manual.
+- Não existe rota de exportação dos dados; a cópia completa e a portabilidade dependem de
+  procedimento manual da equipe, sem prazo garantido por sistema.
+- Leituras de sensores não têm prazo de retenção; só saem com a exclusão da empresa.
 - Não há confirmação de e-mail no cadastro, então a identidade do solicitante é conferida
   pela equipe, fora do sistema.
 - Backups periódicos do Cosmos DB podem conter os dados excluídos até o fim do ciclo de

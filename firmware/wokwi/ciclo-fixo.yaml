@@ -1,0 +1,24 @@
+# Uso: compilar o coldtrack.ino com o secrets.h do Wokwi (Wokwi-GUEST, DEVICE_ID e
+# DEVICE_KEY de teste) mais estas linhas:
+#   #define SIMULAR_API_STATUS 201 / SIMULAR_ENVIO_MS 35000
+# e rodar, na pasta com wokwi.toml e o diagram.json desta pasta:
+#   wokwi-cli --timeout 200000 --serial-log-file serial.log --scenario ciclo-fixo.yaml .
+# SIMULAR_API_STATUS: o envio nao sai da placa (nada e escrito na API).
+# Agenda fixa (issue 96). Cada envio simulado demora 35 s, mais que o ciclo.
+# Esperado: a medicao segue a agenda de 20 s (linhas "CICLO: <ms>" a cada
+# ~20000 ms no serial.log), a leitura nova entra na fila enquanto a anterior
+# ainda esta sendo enviada, e a fila sai em ordem.
+name: Ciclo fixo de 20 s com envio lento
+version: 1
+author: ColdTrack
+steps:
+  - wait-serial: "CICLO: "
+  - wait-serial: "FILA: leitura guardada antes do envio (1 na fila)"
+  - wait-serial: "CICLO: "
+  - wait-serial: "FILA: leitura guardada antes do envio (2 na fila)"
+  - wait-serial: "Azure (SIMULADO, nada saiu da placa): status 201"
+  - wait-serial: "CICLO: "
+  - wait-serial: "CICLO: "
+  - wait-serial: "CICLO: "
+  - wait-serial: "CICLO: "
+  - wait-serial: "reenviadas"

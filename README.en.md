@@ -200,8 +200,9 @@ The `everson` branch stays as a deployment fallback and must not be deleted. Pro
 - [x] JSON upload over HTTPS to Azure
 - [x] Offline storage of readings and resend
 - [x] Web dashboard published on Azure
-- [x] Login with roles (logistics operator and manager)
+- [x] Login with roles (logistics operator, manager and driver linked to a vehicle)
 - [x] Climate analysis of the route (INMET) and preliminary thermal risk model
+- [x] Sensor temperature forecast 10 min ahead (`GET /api/predict/sensor`), compared with persistence; with the current data it does not beat it yet
 - [x] Automated tests and firmware build on GitHub Actions
 - [x] Multiple companies with separated data, company registration and per-sensor key
 - [x] Range per cargo profile (mango, grape) sent to the sensor
@@ -209,6 +210,10 @@ The `everson` branch stays as a deployment fallback and must not be deleted. Pro
 - [x] Heat forecast along the route (Open-Meteo + INMET history) on the dashboard
 - [x] Site chat with an Azure OpenAI language model, answering from the project documentation
 - [x] Dashboard assistant (Azure OpenAI), with the data of the logged-in user's company
+- [x] Push alerts on the phone (Web Push) when a sensor gets worse
+- [x] Device heartbeat when the sensor fails (`POST /api/heartbeat`)
+- [x] Company deletion by the manager (`DELETE /api/empresa`)
+- [x] Logical database backup with restore tested in CI
 - [ ] Physical assembly
 - [ ] Recycled enclosure
 - [ ] Field tests
@@ -230,7 +235,7 @@ The `everson` branch stays as a deployment fallback and must not be deleted. Pro
 | [`docs/politica-de-privacidade.md`](docs/politica-de-privacidade.md) | privacy policy, data subject rights and how to request deletion |
 | [`docs/slides/previa-tecnica.pdf`](docs/slides/previa-tecnica.pdf) | technical preview slides (English pitch and presentation blocks) |
 | [`docs/pitch-en.md`](docs/pitch-en.md) | two-minute pitch script in English |
-| [`docs/model-card.md`](docs/model-card.md) | model card of the thermal risk model (English) |
+| [`docs/model-card.md`](docs/model-card.md) | model card of the thermal risk model and of the sensor forecast model (English) |
 | [`docs/implantacao.md`](docs/implantacao.md) | step-by-step guide to put a carrier into operation |
 | [`docs/memorial-descritivo.md`](docs/memorial-descritivo.md) | design report of the prototype |
 | [`cloud/function/README.md`](cloud/function/README.md) | API: run, test and publish |

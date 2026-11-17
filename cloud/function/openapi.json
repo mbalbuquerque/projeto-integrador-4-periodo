@@ -50,7 +50,7 @@
     },
     {
       "name": "Empresas",
-      "description": "Registration of a new company."
+      "description": "Registration of a new company and deletion of the own company."
     },
     {
       "name": "Perfis",
@@ -81,7 +81,7 @@
         ],
         "operationId": "enviarTelemetria",
         "summary": "Sends a sensor reading",
-        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values (including `seq`) returns `200` with `duplicada: true`. When the reading is worse than the previous one of the same sensor (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO), the API sends a Web Push to the subscribed users of the company (at most one per sensor and range every 10 minutes; readings measured more than 30 minutes ago do not notify). A push failure never changes the answer.",
+        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values (including `seq`) returns `200` with `duplicada: true`. When the reading is worse than the previous one of the same sensor (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO), the API sends a Web Push to the subscribed operators and managers of the company and to the drivers linked to the vehicle of that sensor (at most one per sensor and range every 10 minutes; readings measured more than 30 minutes ago do not notify). A push failure never changes the answer.",
         "security": [
           {
             "dispositivo": []
@@ -179,6 +179,88 @@
                 "example": {
                   "erros": [
                     "já existe leitura deste sensor neste horário, com outros valores"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/heartbeat": {
+      "post": {
+        "tags": [
+          "Telemetria"
+        ],
+        "operationId": "enviarHeartbeat",
+        "summary": "Sends a liveness signal without a valid reading",
+        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nSent by the board on every cycle (20 s) in which it has no valid reading to send; today the only reason is `sensor_falha` (the DHT read failed). It never creates a reading: an invalid reading is never stored as valid. It updates the device's last contact (so `GET /dispositivos` shows it `online`) and the sensor state: `sensor` becomes `falha`, with `sensorFalhaDesde` kept from the first heartbeat of the failure until a valid reading arrives. The next valid reading (`POST /telemetria`) ends the failure. Heartbeats are not queued offline by the board: an old liveness signal says nothing about now.\n\nLimit: 6 per minute per device (the board sends 3).",
+        "security": [
+          {
+            "dispositivo": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Heartbeat"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Heartbeat stored; the current sensor state goes back.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatGravado"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "motivo: use sensor_falha"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sensor not registered or wrong key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "dispositivo não registrado ou chave inválida"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than 6 heartbeats in the same minute for this device.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "muitos heartbeats seguidos. Tente de novo em 1 min."
                   ]
                 }
               }
@@ -338,6 +420,158 @@
                   "erros": [
                     "muitos cadastros deste IP. Tente de novo em 1 hora."
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/empresa": {
+      "delete": {
+        "tags": [
+          "Empresas"
+        ],
+        "operationId": "excluirEmpresa",
+        "summary": "Deletes the caller's company and all of its data",
+        "description": "**Who can call:** manager (token from the login), and only for the company in the token. Right to erasure (LGPD, art. 18, VI). The body must repeat the company name exactly as registered (or the company code, `empresaId` from `GET /eu`; case and surrounding spaces are ignored) and the manager's current password.\n\nDeletes, in this order: the sessions and push subscriptions of the other users, the sensors (their keys stop working), all readings of the company (including those of sensors removed before), trips, vehicles, the other users, the company and, last, the manager who asked. Every token of the company stops working.\n\n**Idempotent and resumable:** an item already gone is skipped. If a call stops in the middle (failure, or the 120 s work limit answered with `202`), repeating the same call continues where it stopped; while the company record exists the name is accepted, after that only the code. Once the manager is deleted, a repeated call answers `401`.\n\nA wrong password counts toward the same escalating wait as the login. Limit: 5 well-formed calls per manager per hour. The log records only the company code and the counts, with no personal data. Rate-limit counters (hashed, no e-mail or IP in clear) expire by themselves.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExclusaoEmpresa"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Company deleted. `removidos` counts the documents deleted by this call, per container.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExclusaoEmpresaResposta"
+                },
+                "example": {
+                  "excluida": true,
+                  "removidos": {
+                    "dispositivos": 1,
+                    "leituras": 240,
+                    "viagens": 1,
+                    "veiculos": 1,
+                    "usuarios": 2,
+                    "empresas": 1
+                  }
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Work limit reached before the end. What was deleted stays deleted; repeat the same call to continue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExclusaoEmpresaResposta"
+                },
+                "example": {
+                  "excluida": false,
+                  "removidos": {
+                    "dispositivos": 1,
+                    "leituras": 5200
+                  },
+                  "mensagem": "exclusão em andamento: repita o mesmo pedido para continuar de onde parou."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, confirmation that does not match the company, or wrong current password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "corpo não é JSON válido",
+                    "value": {
+                      "erros": [
+                        "corpo não é JSON válido"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "confirmacao: digite o nome da empresa para confirmar",
+                    "value": {
+                      "erros": [
+                        "confirmacao: digite o nome da empresa para confirmar"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "senha: informe a sua senha atual",
+                    "value": {
+                      "erros": [
+                        "senha: informe a sua senha atual"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "confirmacao: não confere com o nome da empresa",
+                    "value": {
+                      "erros": [
+                        "confirmacao: não confere com o nome da empresa"
+                      ]
+                    }
+                  },
+                  "caso5": {
+                    "summary": "senha: senha atual incorreta",
+                    "value": {
+                      "erros": [
+                        "senha: senha atual incorreta"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "429": {
+            "description": "Too many calls from this manager in the hour, or account on hold after too many wrong passwords.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "muitos pedidos de exclusão. Tente de novo em 1 hora.",
+                    "value": {
+                      "erros": [
+                        "muitos pedidos de exclusão. Tente de novo em 1 hora."
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "muitas tentativas de senha atual erradas. Aguarde alguns minutos.",
+                    "value": {
+                      "erros": [
+                        "muitas tentativas de senha atual erradas. Aguarde alguns minutos."
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -903,7 +1137,7 @@
         ],
         "operationId": "listarLeituras",
         "summary": "Latest readings of a company sensor",
-        "description": "**Who can call:** operator or manager (token from the login). From the most recent measurement to the oldest. A sensor of another company answers exactly like a missing sensor (`404`). Without the `status` filter, `lacunas` lists the gaps in the sequence numbers of the returned readings (lost readings); a sequence that goes back is a counter reset, not a gap.",
+        "description": "**Who can call:** operator or manager (token from the login). From the most recent measurement to the oldest. A sensor of another company answers exactly like a missing sensor (`404`). Without the `status` filter, `lacunas` lists the gaps in the sequence numbers of the returned readings (lost readings); gaps are computed by number, not by measurement order: a reading that arrives out of order is not a gap, and a number present in the response is never reported missing; a number lower than the lowest of the current count (in measurement order) is a counter reset and starts a new count.",
         "security": [
           {
             "bearerAuth": []
@@ -1193,6 +1427,167 @@
           },
           "403": {
             "$ref": "#/components/responses/SemPerfil"
+          },
+          "503": {
+            "description": "Model file missing from the deployed package.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "modelo indisponível"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/predict/sensor": {
+      "get": {
+        "tags": [
+          "Risco térmico"
+        ],
+        "operationId": "preverTemperaturaDoSensor",
+        "summary": "Sensor temperature forecast 10 minutes ahead, with the persistence baseline",
+        "description": "**Who can call:** operator or manager (choose the sensor with `deviceId`, which must belong to the company of the token) or driver (always the sensor of the vehicle linked to the driver; `deviceId` is ignored). A sensor of another company answers like a missing one (404). Uses the last readings of the sensor itself: a ridge regression (no intercept) on the change over the last 5 and 10 minutes and the 10-minute mean, trained and evaluated with a temporal split on the real readings of the team's board (`analise/sensor/modelo_previsao.py`). The answer always carries the persistence baseline and both test errors; `recomendada` says which one won on the test split, and the screen should show that one. **Limitation:** few hours of data, sensor on a bench and not inside a refrigerated box; with the current data the model does **not** beat the baseline (see `modelo.superaBaseline`). It supports a human decision and never triggers an automatic action. Model card: `docs/model-card.md`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "query",
+            "required": false,
+            "description": "Sensor of the user's company. Required for operator and manager; ignored for the driver.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "coldtrack-01"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Forecast, baseline, recommended source and model version. `previsao` and `baseline` are null when `motivo` explains why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrevisaoSensor"
+                },
+                "example": {
+                  "deviceId": "coldtrack-01",
+                  "horizonteMin": 10,
+                  "ultimaLeitura": {
+                    "medidoEm": "2026-11-17T06:17:05+00:00",
+                    "perfil": "demonstrativo",
+                    "temperatura": 32.8,
+                    "status": "CRITICO"
+                  },
+                  "previsao": {
+                    "para": "2026-11-17T06:27:05+00:00",
+                    "temperatura": 32.8,
+                    "status": "CRITICO"
+                  },
+                  "baseline": {
+                    "para": "2026-11-17T06:27:05+00:00",
+                    "temperatura": 32.8,
+                    "status": "CRITICO"
+                  },
+                  "recomendada": "baseline",
+                  "antecipaExcursao": false,
+                  "motivo": null,
+                  "modelo": {
+                    "versao": "sensor-ridge-10min-v1",
+                    "fonte": "ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe, em bancada)",
+                    "treino": {
+                      "de": "2026-09-29T19:23:00+00:00",
+                      "ate": "2026-11-17T02:18:00+00:00",
+                      "amostras": 496
+                    },
+                    "teste": {
+                      "de": "2026-11-17T02:29:00+00:00",
+                      "ate": "2026-11-17T06:06:00+00:00",
+                      "amostras": 218
+                    },
+                    "maeModelo": 0.342,
+                    "maeBaseline": 0.3128,
+                    "rmseModelo": 0.4711,
+                    "rmseBaseline": 0.4941,
+                    "superaBaseline": false,
+                    "usaLeiturasDoSensor": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Operator or manager without `deviceId`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "informe ?deviceId="
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          },
+          "404": {
+            "description": "Sensor not found in the company, or driver without a linked vehicle or sensor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "sensor": {
+                    "summary": "dispositivo não encontrado",
+                    "value": {
+                      "erros": [
+                        "dispositivo não encontrado"
+                      ]
+                    }
+                  },
+                  "motorista": {
+                    "summary": "sem veículo",
+                    "value": {
+                      "erros": [
+                        "nenhum sensor vinculado a este motorista; fale com o gestor"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many calls by the same user in one minute (limit 30).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "muitas consultas seguidas. Tente de novo em 1 min."
+                  ]
+                }
+              }
+            }
           },
           "503": {
             "description": "Model file missing from the deployed package.",
@@ -2529,7 +2924,7 @@
         ],
         "operationId": "inscreverPush",
         "summary": "Subscribes this device to push alerts",
-        "description": "**Who can call:** operator or manager (token from the login). Stores the subscription in the user's document (field `push`, at most 10 devices; the oldest leaves). The same endpoint is never duplicated, and if it belonged to another account (shared device) it is removed from there. The user then receives a push whenever a sensor of the company gets worse (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO).",
+        "description": "**Who can call:** operator, manager or driver (token from the login). Stores the subscription in the user's document (field `push`, at most 10 devices; the oldest leaves). The same endpoint is never duplicated, and if it belonged to another account (shared device) it is removed from there. The user then receives a push whenever a sensor gets worse (NORMAL to ATENCAO or CRITICO, ATENCAO to CRITICO): operators and managers for every sensor of the company, with the tap opening `/alertas?veiculo=<id>`; a driver only for the sensor of the vehicle linked to them (field `veiculo` of the user, read again at each reading), with the tap opening `/motorista`. A driver without a linked vehicle receives nothing.",
         "security": [
           {
             "bearerAuth": []
@@ -2604,7 +2999,7 @@
         ],
         "operationId": "removerPush",
         "summary": "Removes this device from push alerts",
-        "description": "**Who can call:** operator or manager (token from the login). Removes the subscription with this endpoint from the user. Idempotent: an endpoint the user does not have also answers `204`. `POST /sair` also removes every subscription of the user.",
+        "description": "**Who can call:** operator, manager or driver (token from the login). Removes the subscription with this endpoint from the user. Idempotent: an endpoint the user does not have also answers `204`. `POST /sair` also removes every subscription of the user.",
         "security": [
           {
             "bearerAuth": []
@@ -2948,6 +3343,55 @@
           "senha": "senha-de-exemplo-123"
         }
       },
+      "ExclusaoEmpresa": {
+        "type": "object",
+        "required": [
+          "confirmacao",
+          "senha"
+        ],
+        "properties": {
+          "confirmacao": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Company name exactly as registered, or the company code (`empresaId`). Case and surrounding spaces are ignored."
+          },
+          "senha": {
+            "type": "string",
+            "format": "password",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Current password of the manager."
+          }
+        },
+        "example": {
+          "confirmacao": "Frutas do Vale",
+          "senha": "senha-de-exemplo-123"
+        }
+      },
+      "ExclusaoEmpresaResposta": {
+        "type": "object",
+        "required": [
+          "excluida",
+          "removidos"
+        ],
+        "properties": {
+          "excluida": {
+            "type": "boolean",
+            "description": "`true` when nothing of the company is left."
+          },
+          "removidos": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Documents deleted by this call, per container (`dispositivos`, `leituras`, `viagens`, `veiculos`, `usuarios`, `empresas`)."
+          },
+          "mensagem": {
+            "type": "string",
+            "description": "Only with `202`: repeat the call to continue."
+          }
+        }
+      },
       "TrocaSenha": {
         "type": "object",
         "required": [
@@ -3163,6 +3607,77 @@
           "duplicada": true
         }
       },
+      "Heartbeat": {
+        "type": "object",
+        "required": [
+          "deviceId",
+          "motivo",
+          "fw"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{3,40}$"
+          },
+          "motivo": {
+            "type": "string",
+            "enum": [
+              "sensor_falha"
+            ],
+            "description": "Why there is no reading to send."
+          },
+          "fw": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,32}$",
+            "description": "Firmware version of the board."
+          },
+          "rssi": {
+            "type": "integer",
+            "minimum": -120,
+            "maximum": 0,
+            "nullable": true,
+            "description": "Wi-Fi signal in dBm; `null` when the radio gives an impossible value (simulator)."
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295,
+            "description": "Sequence number of the last reading the board produced (the heartbeat does not use a number of its own)."
+          }
+        },
+        "example": {
+          "deviceId": "coldtrack-01",
+          "motivo": "sensor_falha",
+          "fw": "2026.11.17.2",
+          "rssi": -61,
+          "seq": 1532
+        }
+      },
+      "HeartbeatGravado": {
+        "type": "object",
+        "required": [
+          "sensor",
+          "sensorFalhaDesde"
+        ],
+        "properties": {
+          "sensor": {
+            "type": "string",
+            "enum": [
+              "falha"
+            ]
+          },
+          "sensorFalhaDesde": {
+            "type": "string",
+            "format": "date-time",
+            "description": "First heartbeat of this failure."
+          }
+        },
+        "example": {
+          "sensor": "falha",
+          "sensorFalhaDesde": "2026-11-17T14:02:20+00:00"
+        }
+      },
       "Leitura": {
         "type": "object",
         "required": [
@@ -3252,11 +3767,26 @@
             "type": "string",
             "format": "date-time",
             "nullable": true,
-            "description": "When the sensor's latest reading arrived; null if it never sent one."
+            "description": "When the sensor's latest contact arrived: a reading or a heartbeat, whichever is newer; null if it never sent anything."
           },
           "online": {
             "type": "boolean",
-            "description": "True if the latest reading arrived at most 120 s ago."
+            "description": "True if the latest contact (reading or heartbeat) arrived at most 120 s ago."
+          },
+          "sensor": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "falha"
+            ],
+            "nullable": true,
+            "description": "Last known state of the temperature sensor: `falha` when the latest contact was a heartbeat with reason `sensor_falha` (no valid reading since), `ok` when it was a valid reading, `null` when the board never sent anything. Read it together with `online`: `online` true and `falha` means a live board with a failed sensor; `online` false means no contact at all."
+          },
+          "sensorFalhaDesde": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the current sensor failure started (first heartbeat of it); `null` unless `sensor` is `falha`."
           }
         },
         "example": {
@@ -3264,7 +3794,9 @@
           "descricao": "Baú do CT-001",
           "criadoEm": "2026-11-01T14:30:00+00:00",
           "ultimoContato": "2026-11-16T19:40:12+00:00",
-          "online": true
+          "online": true,
+          "sensor": "ok",
+          "sensorFalhaDesde": null
         }
       },
       "DispositivoNovo": {
@@ -3946,6 +4478,21 @@
                 "nullable": true
               }
             }
+          },
+          "sensor": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "falha"
+            ],
+            "nullable": true,
+            "description": "Last known state of the temperature sensor: `falha` when the latest contact was a heartbeat with reason `sensor_falha` (no valid reading since), `ok` when it was a valid reading, `null` when the board never sent anything. Read it together with `online`: `online` true and `falha` means a live board with a failed sensor; `online` false means no contact at all."
+          },
+          "sensorFalhaDesde": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the current sensor failure started (first heartbeat of it); `null` unless `sensor` is `falha`."
           }
         },
         "example": {
@@ -3974,6 +4521,234 @@
             "carga": "Manga Tommy, 12 paletes",
             "inicio": "2026-11-10T06:00:00-03:00",
             "fim": null
+          },
+          "sensor": "ok",
+          "sensorFalhaDesde": null
+        }
+      },
+      "PrevisaoSensor": {
+        "type": "object",
+        "required": [
+          "deviceId",
+          "horizonteMin",
+          "ultimaLeitura",
+          "previsao",
+          "baseline",
+          "recomendada",
+          "antecipaExcursao",
+          "motivo",
+          "modelo"
+        ],
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "horizonteMin": {
+            "type": "integer",
+            "description": "Forecast horizon in minutes."
+          },
+          "ultimaLeitura": {
+            "type": "object",
+            "nullable": true,
+            "required": [
+              "medidoEm",
+              "perfil",
+              "temperatura",
+              "status"
+            ],
+            "properties": {
+              "medidoEm": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "perfil": {
+                "type": "string",
+                "description": "Cargo profile stored with the reading."
+              },
+              "temperatura": {
+                "type": "number"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NORMAL",
+                  "ATENCAO",
+                  "CRITICO"
+                ]
+              }
+            }
+          },
+          "previsao": {
+            "type": "object",
+            "required": [
+              "para",
+              "temperatura",
+              "status"
+            ],
+            "properties": {
+              "para": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Instant the forecast refers to: last reading time plus horizonteMin."
+              },
+              "temperatura": {
+                "type": "number",
+                "description": "Forecast temperature in °C (one decimal)."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NORMAL",
+                  "ATENCAO",
+                  "CRITICO"
+                ],
+                "description": "Status of the forecast temperature in the cargo profile of the last reading."
+              }
+            },
+            "nullable": true,
+            "description": "Model forecast (ridge regression on the sensor's own recent readings). Null when there is no basis (see motivo)."
+          },
+          "baseline": {
+            "type": "object",
+            "required": [
+              "para",
+              "temperatura",
+              "status"
+            ],
+            "properties": {
+              "para": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Instant the forecast refers to: last reading time plus horizonteMin."
+              },
+              "temperatura": {
+                "type": "number",
+                "description": "Forecast temperature in °C (one decimal)."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NORMAL",
+                  "ATENCAO",
+                  "CRITICO"
+                ],
+                "description": "Status of the forecast temperature in the cargo profile of the last reading."
+              }
+            },
+            "nullable": true,
+            "description": "Persistence baseline: the last reading repeated. Null when there is no recent reading."
+          },
+          "recomendada": {
+            "type": "string",
+            "enum": [
+              "modelo",
+              "baseline"
+            ],
+            "description": "Which forecast won on the temporal test split (lower MAE). The screen should show this one."
+          },
+          "antecipaExcursao": {
+            "type": "boolean",
+            "description": "True when the recommended forecast has a worse status than the last reading (the cargo is expected to leave the range)."
+          },
+          "motivo": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "sem_leituras",
+              "sem_leitura_recente",
+              "historico_insuficiente",
+              null
+            ],
+            "description": "Why a forecast is missing: no readings, last reading older than the gap limit (5 min), or less than janelaMin minutes of continuous history (model only)."
+          },
+          "modelo": {
+            "type": "object",
+            "required": [
+              "versao",
+              "fonte",
+              "treino",
+              "teste",
+              "maeModelo",
+              "maeBaseline",
+              "rmseModelo",
+              "rmseBaseline",
+              "superaBaseline",
+              "usaLeiturasDoSensor"
+            ],
+            "properties": {
+              "versao": {
+                "type": "string"
+              },
+              "fonte": {
+                "type": "string"
+              },
+              "treino": {
+                "type": "object",
+                "required": [
+                  "de",
+                  "ate",
+                  "amostras"
+                ],
+                "properties": {
+                  "de": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "ate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "amostras": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "One sample per minute of continuous readings."
+                  }
+                }
+              },
+              "teste": {
+                "type": "object",
+                "required": [
+                  "de",
+                  "ate",
+                  "amostras"
+                ],
+                "properties": {
+                  "de": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "ate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "amostras": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "One sample per minute of continuous readings."
+                  }
+                }
+              },
+              "maeModelo": {
+                "type": "number",
+                "description": "Mean absolute error on the test split, °C."
+              },
+              "maeBaseline": {
+                "type": "number"
+              },
+              "rmseModelo": {
+                "type": "number"
+              },
+              "rmseBaseline": {
+                "type": "number"
+              },
+              "superaBaseline": {
+                "type": "boolean",
+                "description": "True only if the model MAE is lower than the baseline MAE on the test split."
+              },
+              "usaLeiturasDoSensor": {
+                "type": "boolean"
+              }
+            }
           }
         }
       }

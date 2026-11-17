@@ -5,7 +5,7 @@ camada do jeito que ela pode ser contada em voz alta, e cada afirmação técnic
 arquivo e a função onde está no código. O que ainda não existe aparece como "não implementado",
 com o que está no plano.
 
-Estado: 16/11/2026, `main` dos dois repositórios
+Estado: 17/11/2026, `main` dos dois repositórios
 ([projeto-integrador-4-periodo](https://github.com/mbalbuquerque/projeto-integrador-4-periodo),
 chamado aqui de **back**, e [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi),
 chamado de **front**). Caminhos sem prefixo são do back; os do front vêm marcados com `front:`.
@@ -89,10 +89,10 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 | pasta / arquivo | o que tem |
 |---|---|
 | `firmware/coldtrack/coldtrack.ino` | Firmware do ESP32-C3 (Arduino): leitura do DHT, classificação, LEDs/tela, HTTPS, MQTT, fila offline, configuração pelo cabo |
-| `firmware/coldtrack/payload_core.h` | Cópia testável de três funções do firmware (montar o JSON, ler número do JSON, classificar). O `.ino` ainda não inclui esse arquivo |
+| `firmware/coldtrack/payload_core.h` | Funções puras incluídas pelo `.ino` e testadas no CI: montar o JSON da leitura e do heartbeat, URL do heartbeat, vencimento do ciclo fixo, linha da fila com horário, ler número do JSON, classificar a faixa |
 | `firmware/coldtrack/azure_ca.h` | Certificado raiz (DigiCert Global Root G2) usado para validar o TLS |
 | `firmware/coldtrack/secrets.example.h` | Modelo do `secrets.h` (o real nunca vai para o Git) |
-| `firmware/tests/test_firmware.cpp` | 4 testes C++ do `payload_core.h`, rodados no CI com `g++` |
+| `firmware/tests/test_firmware.cpp` | 11 testes C++ do `payload_core.h`, rodados no CI com `g++` |
 | `firmware/wokwi/` | Circuito da simulação (`diagram.json`, `libraries.txt`) |
 | `cloud/function/function_app.py` | Todas as rotas da API |
 | `cloud/function/contrato.py` | Contrato da telemetria, perfis de carga, classificação, idempotência |
@@ -101,14 +101,16 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 | `cloud/function/cadastros.py` | Validação de empresa, usuário, sensor, veículo e viagem |
 | `cloud/function/chat.py`, `assistente.py`, `base_chat.json` | Chat do site e assistente do painel (Azure OpenAI + busca por embeddings) |
 | `cloud/function/predicao.py`, `modelo_risco.json` | Modelo de risco térmico servido em `GET /api/predict` |
+| `cloud/function/previsao_sensor.py`, `modelo_sensor.json` | Previsão da temperatura do sensor 10 min à frente, servida em `GET /api/predict/sensor` |
 | `cloud/function/openapi.json` | Especificação OpenAPI 3.0, em inglês, exibida em `/api/docs` |
 | `cloud/function/test_*.py` | Testes da API (pytest/unittest, com Cosmos falso) |
+| `cloud/function/push.py` | Alertas Web Push (VAPID): inscrição, mensagem e regra de quando avisar |
 | `cloud/function/pacote.txt`, `publicar.sh` | Lista do que é publicado e publicação manual |
 | `cloud/function/scripts/` | Criar usuário, gerar a base do chat, migração para multiempresa |
-| `infra/` | `main.bicep` (o ambiente Azure descrito em código), `Dockerfile`, `docker-compose.yml`, `README.md` com custos e OIDC |
+| `infra/` | `main.bicep` (o ambiente Azure descrito em código), `Dockerfile`, `docker-compose.yml`, `README.md` com custos e OIDC; `infra/backup/` (exportação e restauração lógica do Cosmos); `infra/ci/` (preparo do banco de teste no CI) |
 | `analise/` | Análise climática do INMET e o modelo de risco; `analise/sensor/` descreve a base real da placa |
 | `docs/` | Documentação (API, segurança, STRIDE, LGPD, QA, UX, model card, implantação, slides) |
-| `.github/workflows/` | `testes.yml` (CI), `publicar-api.yml` (deploy), `seguranca.yml` (pip-audit e ZAP) |
+| `.github/workflows/` | `testes.yml` (CI), `publicar-api.yml` (deploy), `seguranca.yml` (pip-audit e ZAP), `backup-logico.yml` (restauração do backup lógico no emulador), `compose-zap.yml` (compose, reinício e ZAP ativo) |
 | `RESILIENCIA.md`, `REQUISITOS_UC.md`, `PLANO_ACAO.md` | Requisitos R1–R8/F1–F6, matriz por disciplina e plano de ação |
 
 ### Front (`Front-End-pi`)
@@ -117,20 +119,20 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 |---|---|
 | `front: src/main.jsx`, `src/App.jsx`, `src/rotas.js` | Entrada do React, rotas (cada tela com `lazy`), menu e URLs antigas |
 | `front: src/pages/<Tela>/` | Uma pasta por tela, com as regras puras em `.js` e testes ao lado |
-| `front: src/lib/` | Lógica sem React: `api.js`, `sessao.js`, `leituras.js`, `faixas.js`, `predicao.js`, `chat.js`, `assistente.js`, `armazenamento.js` |
-| `front: src/hooks/` | `useSessao`, `usePolling`, `useVeiculoEscolhido`, `useTitulo`, `useMovimentoReduzido` |
-| `front: src/components/` | `PainelLayout`, `RequireAuth`, `Estado`, `StatusSelo`, gráfico, chat e assistente |
+| `front: src/lib/` | Lógica sem React: `api.js`, `sessao.js`, `leituras.js`, `faixas.js`, `predicao.js`, `chat.js`, `assistente.js`, `armazenamento.js`, `push.js`, `regua.js`, `sensorFalha.js`, `conectividade.js`, `veiculo.js`, `formatar.js`, `config.js` |
+| `front: src/hooks/` | `useSessao`, `usePolling`, `useVeiculoEscolhido`, `useTitulo`, `useMovimentoReduzido`, `useAlertasPush`, `useTelaAcesa` |
+| `front: src/components/` | `PainelLayout`, `AcessoLayout`, `RequireAuth`, `Estado`, `StatusSelo`, `ReguaFaixa` (régua da faixa, compartilhada entre dashboard e motorista), `FaixaOffline`, `Gaveta`, `Icone`, `FiltroPeriodo`, `SeletorVeiculo`, gráfico, chat e assistente |
 | `front: public/sw.js`, `public/manifest.json` | Service worker e manifesto do PWA |
 | `front: vite.config.js` | Build, escopo de CSS por família, cópias `.html` antigas e CSP |
 | `front: coldtrack-qa/` | Testes e2e (Playwright): simulados (`tests/`) e contra produção (`real/`) |
-| `front: docs/` | `ARQUITETURA.md`, `guia-de-uso.md`, `relatorio-de-testes.md` |
+| `front: docs/` | `ARQUITETURA.md`, `design-system.md`, `guia-de-uso.md`, `relatorio-de-testes.md` |
 | `front: .github/workflows/` | `testes.yml`, `publicar-site.yml`, `seguranca.yml` (npm audit) |
 
 ---
 
 ## 3. Firmware passo a passo
 
-Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.09.28"`).
+Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.11.17.3"`).
 
 ### 3.1 Hardware e variantes
 
@@ -139,7 +141,7 @@ Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.09.28"`).
 - **Sem tela** (Wokwi): três LEDs nos GPIO 5, 6 e 7 (`LED_VERDE`, `LED_AMARELO`, `LED_VERMELHO`).
 - **Com tela** (`TELA_OLED`, placa ESP32-C3 com OLED 0,42" embutido): os GPIO 5 e 6 viram o I2C
   da tela (72x40 pixels, `U8G2_SSD1306_72X40_ER_F_HW_I2C`), os LEDs saem e o status vai para a tela
-  (`mostrarNaTela`). Nessa placa a potência do rádio cai para 8,5 dBm (`ajustarRadio`), porque a
+  (`desenharTela`, seção 3.12). LED da própria placa só com `LED_PLACA` no `secrets.h` (3.12). Nessa placa a potência do rádio cai para 8,5 dBm (`ajustarRadio`), porque a
   antena de chip falhava no handshake com a potência padrão.
 - MQTT só é compilado se o `secrets.h` tiver `MQTT_CANAL`, `MQTT_CLIENT_ID`, `MQTT_USUARIO` e
   `MQTT_SENHA` (macro `COM_MQTT`).
@@ -147,7 +149,10 @@ Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.09.28"`).
 ### 3.2 `setup()`: o que acontece ao ligar
 
 1. Abre a serial a 115200 baud com buffer de recepção de 1024 bytes (o comando de configuração
-   passa de 200 bytes).
+   passa de 200 bytes). Na placa física (USB nativo), limita a espera de cada escrita a 5 ms
+   (`SERIAL_TX_TIMEOUT_MS`): com o cabo num computador que não lê a porta, cada `print` esperava
+   até 2 s e o ciclo passava de 20 s para ~78 s (medido em 17/11/2026). Agora o log que não cabe
+   no buffer é descartado e a medição não atrasa.
 2. Prepara os LEDs ou a tela ("INICIANDO").
 3. Monta o LittleFS (`LittleFS.begin(true)`: formata a flash se ainda não houver sistema de
    arquivos) e conta a fila pendente (`contarFila`).
@@ -158,29 +163,39 @@ Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.09.28"`).
    gravado na flash vale mais que o `secrets.h`; o `secrets.h` só é usado se a flash estiver vazia
    (é o caso do Wokwi).
 6. Liga o Wi-Fi em modo estação e registra o evento de queda (`aoCairWiFi` guarda o motivo).
-7. Conecta ao Wi-Fi (`conectarWiFi`) e pede a hora por NTP (`sincronizarRelogio`).
+7. Conecta ao Wi-Fi (`conectarWiFi`), pede a hora por NTP (`sincronizarRelogio`) e inicia a
+   tarefa de envio (`iniciarTarefaEnvio`).
 
 ### 3.3 `loop()`: um ciclo
+
+O firmware tem duas tarefas. O `loop()` mede, classifica, numera e grava a leitura na fila; a
+**tarefa de envio** (`tarefaEnvio`, FreeRTOS) esvazia a fila por HTTPS, manda o heartbeat e publica
+no MQTT. A medição segue uma **agenda fixa de 20 s, contada do início de um ciclo ao início do
+seguinte** (`proximoCicloCore`): envio lento, servidor fora do ar ou reconexão do MQTT atrasam só o
+envio, nunca a próxima leitura. Se a placa ficar parada mais de um ciclo inteiro (configuração pelo
+cabo), a agenda recomeça daquele instante, sem rajada de leituras. Cada ciclo imprime
+`CICLO: <millis> ms`, que permite medir o intervalo na serial.
 
 ```mermaid
 flowchart TD
     A[lerSerial: chegou comando CT&lt;?] -->|sim| B[tratarComando]
-    A --> M[mqtt.loop, se COM_MQTT]
-    M --> C{tem Wi-Fi configurado<br/>e ID + chave?}
-    C -->|não| D[pisca amarelo / tela CONFIGURAR<br/>espera o cabo]
+    A --> C{tem Wi-Fi configurado<br/>e ID + chave?}
+    C -->|não| D[amarelo em dois toques / tela SEM CONFIG<br/>espera o cabo]
     C -->|sim| E{Wi-Fi conectado?}
-    E -->|não| F[conectarWiFi: até 20 x 500 ms]
+    E -->|não, 30 s desde a última| F[iniciarWiFi: tentativa nova,<br/>sem esperar]
     E -->|sim| G
-    F --> G{passaram 20 s?}
+    F --> G{chegou a hora marcada?}
     G -->|não| A
-    G -->|sim| H[lerSensor: 2 tentativas]
-    H -->|falhou| I[ERRO SENSOR: pisca vermelho<br/>nada é enviado]
+    G -->|sim| H[lerSensor: 2 tentativas<br/>marca o próximo ciclo +20 s]
+    H -->|falhou| I[FALHA SENSOR: três LEDs piscam<br/>nenhuma leitura enviada]
+    I --> P{conexaoDisponivel?}
+    P -->|sim| Q[pede heartbeat sensor_falha<br/>à tarefa de envio]
+    P -->|não| R[heartbeat descartado<br/>não vai para a fila]
     H -->|ok| J[classifica pela faixa<br/>acende LED / tela]
-    J --> K[montarPayload com medidoEm]
-    K --> L{conexaoDisponivel?}
-    L -->|sim| N[reenviarFila até 10<br/>postarAzure da leitura atual<br/>publicarMqtt]
-    N -->|falha temporária| O[guardarOffline]
-    L -->|não| O
+    J --> K[proximaSeq + montarPayload]
+    K --> L[guardarLeitura: grava na fila<br/>antes de qualquer envio]
+    L --> S[avisa a tarefa de envio]
+    T[tarefaEnvio: acorda pelo aviso<br/>ou a cada 1 s] --> U[mqtt.loop<br/>reenviarFila: da mais antiga para a mais nova<br/>heartbeat pendente<br/>publicarMqtt da leitura do ciclo]
 ```
 
 ### 3.4 Leitura do DHT (validação, checksum, 2 tentativas)
@@ -198,10 +213,20 @@ watchdog do sistema reiniciava a placa em loop.
 - `lerSensor`: faz **duas tentativas** (a segunda depois de 1,1 s no DHT11 ou 2,1 s no DHT22),
   porque uma interrupção do Wi-Fi pode esticar um pulso e errar o checksum. Sem leitura válida,
   devolve `false` e `NAN` nos dois valores.
-- No `loop()`, `NAN` gera "ERRO: Falha na leitura do sensor!", pisca o vermelho por 300 ms (ou
-  mostra "ERRO SENSOR" na tela) e **retorna sem enviar e sem guardar na fila**. Leitura inválida
-  nunca sai como válida. Mesmo que saísse, a API recusaria `NaN` e valores fora da faixa física
-  (`contrato.validar`).
+- No `loop()`, `NAN` gera "ERRO: Falha na leitura do sensor!", mostra "FALHA SENSOR" na tela (com
+  `--.-°C`), faz os três LEDs piscarem juntos (seção 3.12) e **não envia nem guarda leitura na
+  fila**. Leitura inválida nunca sai como válida. Mesmo que saísse, a API recusaria `NaN` e valores
+  fora da faixa física (`contrato.validar`).
+- Heartbeat (R7, firmware `2026.11.17.2`): no mesmo ciclo, com conexão, a placa reenvia a fila de
+  leituras válidas de antes e manda `POST /api/heartbeat` com
+  `{"deviceId", "motivo": "sensor_falha", "fw", "rssi", "seq"}` (`seq` é o da última leitura; o
+  heartbeat não gasta número, para não abrir lacuna falsa). A API não cria leitura: atualiza o
+  último contato do dispositivo e grava `sensorFalhaDesde`, e `GET /dispositivos` e
+  `GET /motorista` passam a mostrar `sensor: "falha"` com a placa `online`. Assim o painel separa
+  "placa viva com sensor em falha" de "placa desligada ou sem rede". Sem conexão o heartbeat é
+  descartado, **não vai para a fila**: um sinal de vida atrasado não diz nada sobre o agora, e
+  reenviado depois faria a placa parecer online no passado. A primeira leitura válida encerra a
+  falha. Detalhe da rota em [`api.md`](api.md#post-heartbeat).
 - Autoteste da conversão: compilado com `-DTESTE_DHT`, `autotesteDht` confere 5 casos conhecidos
   (inclusive checksum errado).
 
@@ -225,7 +250,7 @@ A cada `201` da API, `atualizarFaixa` lê o campo `faixa` da resposta e, **só s
 flash (poupa escrita). Sem sinal, a placa continua classificando pela última faixa recebida.
 
 Sinalização: `statusNormal` (verde), `statusAtencao` (amarelo), `statusCritico` (vermelho), ou o
-texto na tela OLED. Isso é a "classificação na borda": o motorista vê o semáforo mesmo sem
+texto na tela OLED; o piscar do LED da faixa conta a situação da conexão (seção 3.12). Isso é a "classificação na borda": o motorista vê o semáforo mesmo sem
 internet.
 
 ### 3.6 Envio HTTPS com `x-device-key` e TLS
@@ -237,8 +262,9 @@ internet.
    aceitaria qualquer servidor.
 2. `POST` em `AZURE_FUNCTION_URL` (padrão
    `https://func-coldtrack-7319.azurewebsites.net/api/telemetria`), com `Content-Type:
-   application/json` e o cabeçalho **`x-device-key`** com a chave do sensor. Tempo limite de 5 s
-   (`HTTP_TIMEOUT_MS`).
+   application/json` e o cabeçalho **`x-device-key`** com a chave do sensor. Tempos limite: 4 s
+   de conexão TCP (`CONEXAO_TIMEOUT_MS`), 8 s de handshake TLS (`TLS_HANDSHAKE_S`; o padrão do core
+   é 120 s, mais que o watchdog) e 5 s de resposta (`HTTP_TIMEOUT_MS`). Roda na tarefa de envio.
 3. Corpo, montado por `montarPayload`:
    `{"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58,"medidoEm":1790000000}`.
    RSSI maior ou igual a zero (valor impossível, aparece no simulador) vai como `null`. Sem relógio
@@ -256,7 +282,8 @@ Um `4xx` (dado recusado pelo contrato) não melhora reenviando.
 Bloco `#ifdef COM_MQTT`:
 
 - Conexão persistente em `mqtt3.thingspeak.com:8883` com TLS (mesma raiz DigiCert), keep-alive de
-  120 s e tempo limite de 5 s.
+  120 s, 4 s de conexão TCP, 8 s de handshake TLS e 5 s de resposta do broker. Tudo do MQTT roda
+  na tarefa de envio: reconexão lenta não atrasa a medição.
 - `garantirMqtt`: só tenta com rede e com relógio válido (o certificado não se valida sem hora). Se
   falhar, espera **5 s, dobrando até 60 s** (`mqttEspera`) antes da próxima tentativa, e imprime o
   motivo traduzido (`estadoMqtt`).
@@ -270,36 +297,55 @@ Bloco `#ifdef COM_MQTT`:
 ### 3.8 Fila em flash (store-and-forward)
 
 Constantes: arquivo `/fila.jsonl` (uma leitura JSON por linha), `FILA_MAX 500` (~2 h 45 min a cada
-20 s), `REENVIO_POR_CICLO 10`.
+20 s), `REENVIO_POR_LOTE 10` (linhas lidas da flash por vez).
 
-- `guardarOffline`: sem conexão, ou com falha temporária no envio, a leitura vai para a fila
-  (`enfileirar`). Se a fila passar de 500, **descarta a mais antiga** (`descartarInicioDaFila`).
-  Se a flash não abrir, a leitura é perdida e isso sai no log.
+- `guardarLeitura`: **toda** leitura vai para a fila logo depois de ganhar o número de sequência,
+  com ou sem rede, antes de qualquer envio, e só sai quando a nuvem responde. Um reinício no meio
+  do envio (watchdog, gravação do firmware, porta serial aberta com DTR) não perde a leitura: ela
+  sai depois do boot com o mesmo `seq` e o mesmo `medidoEm`, e a API responde `200` se já tinha
+  gravado. Antes, a leitura só entrava na fila depois de uma falha, e as leituras 56 e 132 da
+  coleta de 16-17/11/2026 se perderam em reinícios. Se a fila passar de 500, **descarta a mais
+  antiga** (`descartarInicioDaFila`). Se a flash não abrir, a leitura do ciclo vai direto, uma
+  tentativa só (`pedirEnvioDireto`).
+- O `loop()` só grava no fim do arquivo; a tarefa de envio lê o início e apaga o que foi confirmado
+  (`descartarEnviadas`, pelo texto da linha). Uma trava (`TravaFila`) protege o arquivo, mas fica
+  presa só para ler e reescrever, nunca durante a requisição.
 - Sem relógio, a linha é guardada com `"ms"` (o `millis()` da medição) no lugar do `medidoEm`.
   Quando o relógio sincroniza, `reescreverFilaMs(true)` converte para o horário real
   (`agora - (millis atual - ms) / 1000`). Linhas com `"ms"` de antes de um reinício são descartadas
   no boot.
-- `reenviarFila`: com conexão, **antes** da leitura atual, envia até 10 leituras da fila, **da
-  mais antiga para a mais nova**, para manter a ordem. Para na primeira falha temporária. As que
-  receberam resposta definitiva (201, 200 e também 4xx) saem da fila.
+- `reenviarFila` (tarefa de envio): com conexão, envia a fila **da mais antiga para a mais nova**,
+  em lotes de 10, até esvaziar. Para na primeira falha temporária e tenta de novo no segundo
+  seguinte. As que receberam resposta definitiva (201, 200 e também 4xx) saem da fila. Linha sem
+  horário recente (menos de 40 s, `SEM_RELOGIO_RECENTE_MS`) sai sem `medidoEm` (a API usa a hora
+  da chegada); mais velha espera o relógio.
 - O horário da medição (`medidoEm`) viaja junto: o banco guarda quando foi medido, não quando
   chegou.
 
 ### 3.9 Horário (NTP)
 
 `sincronizarRelogio` chama `configTime(0, 0, "pool.ntp.org", "time.google.com")` (UTC).
-`relogioOk` só considera o relógio válido depois de `EPOCH_VALIDO` (1700000000, nov/2023).
+`relogioOk` só considera o relógio válido **depois que o NTP respondeu neste boot**
+(`aoSincronizarRelogio`) e depois de `EPOCH_VALIDO` (1700000000, nov/2023). Num reinício que não
+é falta de energia, o ESP32 devolve a hora a partir do oscilador RC interno, que deriva: na coleta
+de 17/11/2026 a leitura 266 saiu com o relógio ~1 min adiantado e ficou com horário depois da 270.
+Até o NTP responder, a leitura é guardada com o `millis()` e ganha o horário quando ele chega.
 Para testes há `SIMULAR_SEM_RELOGIO_S` e `SIMULAR_QUEDA_S`, que fingem relógio e rede fora nos
-primeiros N segundos.
+primeiros N segundos (`SIMULAR_QUEDA_INICIO_S` adia o começo da queda, para simular a rede caindo
+com a placa já enviando), e `SIMULAR_API_STATUS`, que faz o envio devolver esse status HTTP sem
+sair da placa (prova de tela e LED no simulador sem escrever na API de produção).
 
 ### 3.10 Reconexão
 
-- **Wi-Fi**: a cada passada do `loop()`, se `WiFi.status() != WL_CONNECTED`, chama
-  `conectarWiFi`, que tenta por até 20 x 500 ms (cerca de 10 s) e devolve o controle. Não há
-  espera crescente no Wi-Fi: a próxima tentativa é na próxima passada. A medição a cada 20 s
-  continua acontecendo, e as leituras vão para a fila.
+- **Wi-Fi**: se `WiFi.status() != WL_CONNECTED`, o `loop()` começa uma tentativa nova a cada 30 s
+  (`RECONEXAO_MS`, `iniciarWiFi`) e não espera por ela: no meio, o driver segue tentando sozinho. A
+  medição segue a agenda de 20 s e as leituras vão para a fila. Só o `setup()` espera a conexão
+  (`conectarWiFi`, até 20 x 500 ms).
 - **MQTT**: espera crescente de 5 s até 60 s (seção 3.7).
-- **Watchdog**: o firmware **não configura** watchdog de tarefa (R4 pendente).
+- **Watchdog** (R4): watchdog de tarefa (TWDT) de `WATCHDOG_S` (60 s) no `loop()` e na tarefa de
+  envio (o pior caso legítimo de uma requisição é ~17 s); travou, a placa
+  reinicia, avisa `REINICIO WDT` e retoma a fila e a sequência, que estão na flash
+  (`iniciarWatchdog`, `alimentarWatchdog`; provado no Wokwi com `tela/erro-wdt.yaml`).
 
 ### 3.11 Configuração pelo cabo (Web Serial) e gravação da placa
 
@@ -312,7 +358,8 @@ Wi-Fi nem chave (comandos em `README.md`, seção Firmware). O procedimento que 
 placa física, com um script de apoio mantido fora do repositório, é: (1) gravar 20 s da serial do
 firmware que está na placa; (2) copiar a flash inteira com `esptool read-flash` (dá para voltar
 com `write-flash`); (3) compilar com DHT11, tela OLED e, se houver, as credenciais do MQTT; (4)
-gravar com `arduino-cli upload`. Depois disso a placa pisca o amarelo esperando configuração.
+gravar com `arduino-cli upload`. Depois disso a placa mostra "SEM CONFIG / LIGUE O CABO" na tela
+esperando configuração (na simulação, o amarelo pisca em dois toques).
 
 **b) Configurar a placa pelo site** (Wi-Fi, ID e chave), sem recompilar. Feito na tela Sensores
 do painel, botão "Conectar sensor pelo cabo", só em Chrome ou Edge no computador (Web Serial).
@@ -324,8 +371,11 @@ mensagem; painel → placa começa com `CT<`, placa → painel com `CT>`; o rest
 CT<{"cmd":"info"}
 CT>{"id":"coldtrack-a1b2c3","chip":"coldtrack-a1b2c3","configurado":false,"ssid":"","wifi":false,"fw":"2026.09.28"}
 CT<{"cmd":"config","ssid":"..","senha":"..","id":"..","chave":".."}
-CT>{"ok":true,"wifi":"conectado","rssi":-55,"id":".."}
-CT>{"ok":false,"erro":"senha","motivo":15}
+CT>{"ok":true,"wifi":"conectado","rssi":-55,"canal":6,"seguranca":"wpa2","id":".."}
+CT>{"ok":false,"erro":"sinal_fraco","motivo":15,"rssi":-84,"canal":11,"seguranca":"wpa2"}
+CT<{"cmd":"redes"}
+CT>{"ok":true,"redes":[{"ssid":"..","rssi":-61,"canal":6,"seguranca":"wpa2"}]}
+CT>{"pronto":true,"fw":"2026.11.16.3"}        (uma vez, ao fim do setup)
 ```
 
 Lado da placa (`lerSerial`, `tratarComando`, `testarWiFi`):
@@ -334,29 +384,178 @@ Lado da placa (`lerSerial`, `tratarComando`, `testarWiFi`):
   configurada, a rede e a versão do firmware.
 - `wifi` troca só a rede (exige identidade já gravada); `config` grava rede, ID e chave.
 - Valida: rede de 1 a 32 caracteres, senha até 63, ID de 3 a 40, chave com pelo menos 16.
-- **Testa a rede antes de gravar** (até 15 s, `TESTE_WIFI_MS`), traduzindo o motivo do driver
-  em `senha`, `rede_nao_encontrada` ou `tempo`. Se falhar, **nada é gravado** e a placa volta para
-  a rede anterior.
+- **Procura a rede antes de testar** (`procurarRede`): scan dirigido ao nome (acha também rede
+  oculta) e guarda o AP de sinal mais forte (RSSI, canal, segurança). Não achou → `rede_nao_encontrada`
+  (o ESP32-C3 só tem rádio 2.4 GHz: rede só de 5 GHz não aparece); WPA-Enterprise (802.1X, login
+  com usuário) → `rede_corporativa`; WEP ou WPA antigo → `seguranca_incompativel`. Rede aberta
+  ignora a senha digitada.
+- **Testa a rede antes de gravar** (até 25 s com a rede achada, `TESTE_WIFI_ACHADA_MS`; 15 s sem
+  scan, `TESTE_WIFI_MS`), traduzindo o motivo do driver (`traduzirMotivo`) em `senha`,
+  `sinal_fraco` (handshake que estoura com RSSI abaixo de -80 dBm, `RSSI_FRACO`, ou perda de
+  beacon), `sem_ip` (associou, mas o DHCP não respondeu), `seguranca_incompativel`,
+  `rede_corporativa`, `rede_nao_encontrada` ou `tempo`. A resposta leva o `motivo` numérico do
+  driver (`wifi_err_reason_t`) e, se o scan achou a rede, `rssi`, `canal` e `seguranca`; a serial
+  registra o motivo com o nome (`WIFI: ..., motivo 15 (4WAY_HANDSHAKE_TIMEOUT)`). Se falhar,
+  **nada é gravado** e a placa volta para a rede anterior.
+- `redes` faz um scan e devolve até 15 redes 2.4 GHz vistas (uma por nome, o AP mais forte), da
+  mais forte para a mais fraca, com `ssid`, `rssi`, `canal` e `seguranca`. Nenhuma senha.
+- **Scan recusado** (`escanear`): o driver recusa o scan enquanto a estação está no meio de uma
+  tentativa de conexão (estado *connecting*, típico logo depois do boot). Nesse caso a placa para a
+  tentativa (`WiFi.disconnect()`), espera o estado assentar (500 ms, 1 s, 1,5 s, alimentando o
+  watchdog) e repete, até 4 vezes (`SCAN_TENTATIVAS`); o loop reconecta logo depois. Só responde
+  `scan_falhou` se as 4 falharem. Vale para `redes` e para o scan antes do teste de `wifi`/`config`.
+- **Linha de prontidão**: ao fim do `setup()` a placa manda `CT>{"pronto":true,"fw":".."}`. Ela não
+  responde a comando nenhum; avisa que a placa acabou de iniciar e já trata comandos.
+- Toda tentativa de conexão (`iniciarWiFi`) começa com `WiFi.disconnect()`: sem isso, um `begin`
+  no meio da tentativa anterior é recusado pelo driver (`sta is connecting, cannot set config`) e
+  a tentativa em curso é atropelada. O scan é em todos os canais e escolhe o AP pelo sinal
+  (`WIFI_ALL_CHANNEL_SCAN` + `WIFI_CONNECT_AP_BY_SIGNAL`); o padrão entra no primeiro AP com o
+  nome, e em campus há vários APs com o mesmo SSID. A potência reduzida da placa com tela é
+  aplicada antes do `begin` (o modo estação já está ligado desde o `setup`). Sem rede, o loop
+  tenta de novo a cada 30 s (`RECONEXAO_MS`); no meio, o driver segue tentando sozinho e a
+  leitura e a fila continuam.
 - Se conectou, grava no `Preferences` (namespace `config`). Se o ID mudou, apaga a fila (as
   leituras guardadas eram de outra identidade e a nuvem recusaria).
 - Senha e chave nunca voltam pela serial nem aparecem no log.
-- Ao final, sincroniza o relógio e zera `ultimoEnvio`: a próxima leitura sai na hora.
+- Enquanto testa a rede, a tarefa de envio fica parada (`pausaEnvio`); a troca de ID e chave passa
+  por uma trava (`cfgTrava`), porque a tarefa de envio lê os dois.
+- Ao final, sincroniza o relógio e marca `cicloImediato`: a próxima leitura sai na hora e a agenda
+  de 20 s recomeça dali.
 
 Lado do site (`front: src/pages/Sensores/serial.js`, classe `SensorUsb`, e `Sensores.jsx`):
 
 1. `conectar()`: `navigator.serial.requestPort()` abre a janela do navegador para escolher a
-   porta; abre a 115200 baud e passa a ler linha por linha, ignorando o que não começa com `CT>`.
-2. `info()`: pergunta até 6 vezes (2 s cada), porque a placa pode reiniciar ao abrir a porta.
+   porta; abre a 115200 baud, solta os sinais RTS e DTR (`soltarSinais`, ver abaixo) e passa a ler
+   linha por linha, ignorando o que não começa com `CT>`.
+2. `info()`: **espera a placa ficar pronta** antes de qualquer outro comando. Pergunta `info` a
+   cada 2 s por até 20 s (`PRONTO_MS`); a linha `CT>{"pronto":true}` que chega no meio corta a
+   espera e o `info` sai de novo na hora. Placa que não reiniciou não manda a linha, mas responde o
+   `info`. A linha de prontidão nunca é tomada como resposta de comando: se chegar com um comando
+   em curso, a placa reiniciou e o comando se perdeu (quem esperava recebe `null`).
 3. `situacaoDaPlaca` (`front: src/pages/Sensores/sensores.js`) decide o caso: **novo** (registra
    com `POST /api/dispositivos`, que devolve a chave), **nova-chave** (sensor já registrado sem
    chave gravada: `PUT /api/dispositivos/{id}` gera outra), **trocar-rede** (só manda `cmd: wifi`).
-4. `configurar()` manda o comando e espera até 25 s pela resposta (a placa testa a rede por até
-   15 s). Se a rede falhar, a chave já gerada é reaproveitada na próxima tentativa.
+4. `configurar()` manda o comando e espera até 50 s pela resposta (scan, que a placa repete se o
+   rádio estiver ocupado, + teste de até 25 s). Se a rede falhar, a chave já gerada é reaproveitada na próxima tentativa; a mensagem
+   (`mensagemDeErro`) diz o motivo e acrescenta sinal, canal e o motivo numérico do driver.
+   O botão "Ver redes que o sensor enxerga" (`redes()`) lista o scan da placa; se vier
+   `scan_falhou`, o painel repete uma vez antes de mostrar o erro.
 5. `esperarPrimeiraLeitura`: consulta `GET /api/leituras` a cada 5 s por até 2 min e só aceita
    leitura recebida depois da configuração; aí mostra **ONLINE** com a temperatura.
 
+**Abrir a porta reinicia a placa.** O ESP32-C3 desta placa usa o controlador USB Serial/JTAG do
+próprio chip (VID 303A, PID 1001), que imita os sinais de controle de uma porta serial: com **RTS
+ativo e DTR inativo o chip é reiniciado** (é a mesma lógica do circuito de auto-reset com dois
+transistores das placas com conversor USB-serial: os dois ativos não reiniciam; a sequência de
+reset do `esptool` é "RTS ativo, espera, RTS inativo"). Abrir a porta com os sinais padrão no
+Windows passa por esse estado: na placa física, abrir com o pyserial nos sinais padrão reiniciou a
+placa, e um `redes` enviado logo depois, com a placa ainda conectando ao Wi-Fi salvo, voltou
+`scan_falhou`; abrindo com DTR e RTS inativos a placa não reiniciou e `redes`, `rede_nao_encontrada`
+e `senha` funcionaram. A Web Serial não deixa escolher os sinais antes do `open()`, então o painel
+(a) logo depois de abrir solta primeiro o RTS e depois o DTR, em duas chamadas de `setSignals`,
+para nunca passar por "RTS ativo com DTR inativo" (navegador sem `setSignals` segue sem isso);
+(b) não manda configuração nem `redes` antes da linha de prontidão ou de um `info` respondido; e
+(c) a placa não responde mais `scan_falhou` só por estar conectando. Se o próprio `open()` do
+navegador reiniciar a placa, (b) e (c) cobrem o caso.
+
+Prova no simulador: cenário `firmware/wokwi/redes-no-boot.yaml` (manda `redes` assim que a placa
+começa a conectar, antes da conexão). Com o firmware anterior a resposta foi `scan_falhou`; com o
+atual o scan foi recusado duas vezes e a terceira devolveu a lista.
+
 A rede e a senha do Wi-Fi vão direto para a placa pelo cabo; o painel não as guarda. A chave do
 sensor sai da API uma única vez e vai para a placa sem o usuário copiar.
+
+### 3.12 Indicadores na placa (tela OLED e LED)
+
+Quem está do lado do sensor (motorista, operador) vê o que a placa está fazendo sem computador.
+Seção "INDICADORES" do `coldtrack.ino`.
+
+**Sem bloquear o loop.** O estado fica em variáveis (`indFaixa`, `indSensorFalhou`,
+`indConectando`, `indEnviando`, `indUltimoHttp`, `indCabo`...) e o piscar é calculado pelo
+`millis()`. `atualizarIndicadores()` roda a cada volta do `loop()` (no máximo a cada 50 ms) e a tela
+só é redesenhada quando o texto muda. Nenhuma animação usa `delay`. Os trechos que já esperavam
+(conexão do Wi-Fi, scan, teste da rede pelo cabo, segunda tentativa do sensor) trocaram o `delay`
+por `esperarAtualizando(ms)`, que continua animando durante a espera. A única coisa que segura a
+tela é a própria requisição HTTPS (até 5 s), e por isso "ENVIANDO..." é desenhado antes dela.
+
+**Tela 72x40** (placa física, `TELA_OLED`), três linhas:
+
+| linha | fonte | conteúdo |
+|---|---|---|
+| 1 | Helvetica negrito 14 px | temperatura (`12.4°C`; `--.-°C` sem leitura válida) |
+| 2 | 6x10 | carga e umidade (`NORMAL   81%`, `ATENCAO`, `CRITICO`), ou `FALHA SENSOR`, `CONFIG CABO`, `SEM CONFIG`, `INICIANDO`, `REINICIO WDT` |
+| 3 | 6x10 | fase da conexão (até 12 letras) |
+
+Linha 3, pela ordem de prioridade: `TESTANDO...` / nome da rede (teste pelo cabo), resultado do
+teste por 8 s (`REDE OK`, `SENHA ERRADA`, `REDE AUSENTE`, `SINAL FRACO`, `SEM IP`, `TEMPO ESGOT.`,
+`REDE CORPOR.`, `SEG. INCOMP.`...), `CONECTANDO` / nome da rede, `LIGUE O CABO` (sem configuração),
+`REINICIO WDT` (no primeiro minuto depois de um reinício por watchdog), `ENVIANDO...`,
+`SEM REDE` / `FILA n`, `FALHA ENVIO` (sem resposta da API), `ERRO API 401` (código devolvido),
+`ENVIADO` (4 s depois de um 201/200) e, no resto do tempo, `WIFI -58dBm` (`WIFI OK` no simulador,
+que não dá RSSI). Onde há duas informações (`/`), a linha alterna entre elas a cada 2 s.
+
+**LEDs.** Na simulação (sem tela) continuam os três LEDs da faixa; a fase da conexão muda **o
+jeito de piscar**, não a cor, então a cor da carga nunca se perde:
+
+| fase | LEDs da simulação | log na serial |
+|---|---|---|
+| iniciando, conectando sem leitura ainda, testando rede pelo cabo | verde, amarelo, vermelho em sequência (200 ms cada) | `LED: sequencia` |
+| online, último envio aceito | LED da faixa aceso fixo | `LED: fixo` |
+| sem rede (leituras indo para a fila) | LED da faixa pisca 1 vez por segundo (500 ms aceso, 500 ms apagado) | `LED: sem_rede` |
+| erro no envio (API recusou ou não respondeu) | LED da faixa pisca 4 vezes por segundo (125/125 ms) | `LED: erro_envio` |
+| falha do sensor | os três piscam juntos, 2 vezes por segundo (250/250 ms) | `LED: falha_sensor` |
+| sem configuração (espera o cabo) | amarelo em dois toques curtos a cada 1,5 s | `LED: sem_config` |
+
+O reinício por watchdog aparece na tela (`REINICIO WDT`) e na serial; o LED só faz a sequência de
+boot.
+
+**LED da placa física.** Na placa com OLED os GPIO 5 e 6 são da tela. O LED embutido não está
+confirmado: o projeto de referência da placa ESP32-C3 com OLED 0,42" (01Space) tem um LED RGB
+endereçável WS2812 no GPIO 2, e as placas no formato "SuperMini" têm LED azul simples no GPIO 8,
+aceso em nível baixo. Como a placa da equipe ainda não foi conferida, o LED fica desligado até o
+`secrets.h` dizer qual é:
+
+```c
+#define LED_PLACA 8              // LED simples no GPIO 8...
+#define LED_PLACA_ATIVO_BAIXO    // ...que acende com o pino em 0
+// ou
+#define LED_PLACA 2              // WS2812 no GPIO 2
+#define LED_PLACA_RGB            // mostra a cor da faixa (rgbLedWrite do core, sem biblioteca)
+```
+
+Os padrões são os mesmos da tabela. No LED RGB a cor é a da faixa (branco nos três juntos); no LED
+de uma cor só fica o padrão de piscar. O GPIO 8 também é pino de *strapping* (precisa estar em
+nível alto para gravar pela serial); o firmware só mexe nele depois do boot. Conferir na placa
+física qual LED existe antes de ligar a macro.
+
+**Prova no simulador** (`firmware/wokwi/indicadores/`). O Wokwi não tem tela 72x40: o diagrama de
+teste usa a `board-ssd1306` (128x64, I2C nos GPIO 5 e 6) com o mesmo driver
+`U8G2_SSD1306_72X40_ER_F_HW_I2C`; o desenho aparece nas colunas 28 a 99, a mesma janela que a
+placa física enxerga. O fio de dados do DHT passa por um botão (`fio`): pressionado é o fio ligado,
+solto é o fio puxado (o Wokwi não tem controle para desligar o DHT). O envio usa
+`SIMULAR_API_STATUS` (nada é escrito na API de produção) e a queda usa `SIMULAR_QUEDA_INICIO_S 30` +
+`SIMULAR_QUEDA_S 45` (rede cai com a placa já enviando e volta 45 s depois). Cenários:
+
+- `tela/fases.yaml`: iniciando, conectando, enviando, enviado, conectado, sem rede e fila, volta
+  com reenvio da fila, fio do sensor puxado, sensor de volta (atenção), teste pelo cabo com rede
+  boa (`REDE OK`) e com rede inexistente (`REDE AUSENTE`), com print da tela em cada fase;
+- `tela/sem-config.yaml`: placa sem rede e sem identidade (`SEM CONFIG` / `LIGUE O CABO`);
+- `tela/erro-wdt.yaml`: API recusando (401) e reinício por watchdog (`SIMULAR_TRAVAMENTO_S 25`,
+  `WATCHDOG_S 8`);
+- `tela/heartbeat.yaml` (R7): queda simulada de 25 s a 80 s (`SIMULAR_QUEDA_INICIO_S 25`,
+  `SIMULAR_QUEDA_S 55`). Leitura válida sem rede vai para a fila; o fio do sensor é puxado; sem
+  rede o heartbeat é descartado (fila continua com 1); a rede volta, a fila sai primeiro e depois
+  o heartbeat `sensor_falha` (simulado, `200`); outro heartbeat no ciclo seguinte; o fio volta e a
+  leitura válida sai de novo (`201`);
+- `leds/leds.yaml`: os padrões dos três LEDs (log `LED:` e `expect-pin`), com o analisador lógico
+  gravando os três pinos;
+- `ciclo-fixo.yaml` (issue 96): cada envio simulado demora 35 s (`SIMULAR_ENVIO_MS 35000`), mais
+  que o ciclo; as linhas `CICLO:` seguem a 20 s e a fila sai em ordem;
+- `reinicio-no-envio.yaml` (issue 96): a placa reinicia no meio do envio
+  (`SIMULAR_REINICIO_ENVIO_S 30`); a leitura em curso já estava na fila e sai depois do boot com o
+  mesmo `seq` e `medidoEm`.
+
+Na placa física o teste fica para depois da coleta de 48 h em andamento (gravar reinicia a placa).
 
 ---
 
@@ -374,18 +573,21 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | POST | `/api/empresas` | público | Cria empresa e o primeiro gestor; devolve token (`empresas`) |
 | POST | `/api/login` | público | E-mail e senha → token de 8 h (`login`) |
 | GET | `/api/perfis` | público | Perfis de carga e faixas (`perfis`) |
+| POST | `/api/heartbeat` | sensor (`x-device-key`) | Sinal de vida com o sensor em falha: atualiza o último contato e `sensorFalhaDesde`, não grava leitura (`heartbeat`) |
 | GET | `/api/health` | público | 200 se o banco responde, 503 se não (`health`) |
 | POST | `/api/chat` | público | Chat do site com IA (`chat_site`) |
 | GET | `/api/docs`, `/api/openapi.json` | público | Swagger UI e a especificação |
 | GET | `/api/eu` | todos os perfis | Dados do usuário logado e nome da empresa (e `veiculo` do motorista) |
 | POST | `/api/senha` | todos os perfis | Troca a própria senha (pede a atual) e devolve token novo |
 | POST | `/api/sair` | todos os perfis | Derruba todas as sessões do usuário (204) e apaga as inscrições de push |
+| DELETE | `/api/empresa` | gestor | Exclui a própria empresa e todos os dados dela, com o nome digitado e a senha atual (`excluir_empresa`) |
 | GET | `/api/push/chave` | público | Chave pública VAPID dos alertas push (503 sem configuração) |
-| POST / DELETE | `/api/push/inscricao` | operador, gestor | Inscreve ou remove o aparelho nos alertas push |
+| POST / DELETE | `/api/push/inscricao` | todos os perfis | Inscreve ou remove o aparelho nos alertas push |
 | GET | `/api/motorista` | motorista | Última leitura, faixa, status e viagem em curso **só do veículo vinculado** (`motorista`) |
 | POST | `/api/assistente` | operador, gestor | Assistente do painel com os dados da empresa |
 | GET | `/api/leituras?deviceId=&limite=&horas=&status=` | operador, gestor | Últimas leituras de um sensor da empresa (até 500) |
 | GET | `/api/predict?mes=&hora=` | operador, gestor | Risco de passar de 30 °C no mês e hora |
+| GET | `/api/predict/sensor?deviceId=` | operador, gestor, motorista | Temperatura do sensor prevista 10 min à frente, com baseline (o motorista recebe a do próprio veículo) |
 | GET | `/api/dispositivos` | operador, gestor | Sensores da empresa com `ultimoContato` e `online` |
 | POST / PUT / DELETE | `/api/dispositivos[/{id}]` | gestor | Registra (devolve a chave uma vez), gera chave nova, remove |
 | GET | `/api/veiculos`, `/api/viagens` | operador, gestor | Frota e viagens |
@@ -434,7 +636,7 @@ sequenceDiagram
   token; perfil ausente ou empresa ausente → 403 ("na dúvida, nunca libera").
 - **Perfis**: `TODOS = ("operador", "gestor")` para leitura; `GESTOR = ("gestor",)` para criar,
   alterar e remover; `MOTORISTA = ("motorista",)` só para `GET /motorista`. `CONTA` (os três)
-  vale para a própria conta: `/eu`, `/senha`, `/sair`. Qualquer outra rota nega o motorista com
+  vale para a própria conta: `/eu`, `/senha`, `/sair`, e para `/push/inscricao`. Qualquer outra rota nega o motorista com
   403 (`test_motorista.py` chama todas).
 - **Motorista vinculado a um veículo**: o cadastro do usuário motorista guarda `veiculo` (código
   da frota da mesma empresa), obrigatório nesse perfil e proibido nos outros
@@ -495,12 +697,17 @@ O IP vem de `X-Azure-ClientIP` ou do último item do `X-Forwarded-For` (`ip_do_c
 | rota | limite | resposta |
 |---|---|---|
 | `POST /login` | 20 falhas por IP em 15 min; por conta, espera de 1 a 15 min | 429 / 401 |
+| `POST /empresas` | 5 cadastros por hora por IP (pedido inválido não conta) | 429 |
+| `POST /senha` | senha atual errada entra na mesma espera do login (1 a 15 min) | 429 |
+| `POST /heartbeat` | 6 por minuto por sensor (a placa envia 3) | 429 |
+| `GET /predict/sensor` | 30 por minuto por usuário | 429 |
 | `POST /chat` | 10 por minuto por IP; 2000 por dia no site todo | 429 |
 | `POST /assistente` | 15 por minuto por usuário; 300 por dia por empresa | 429 |
 | `GET /motorista` | 30 por minuto por usuário (a tela consulta a cada 20 s) | 429 |
+| `DELETE /empresa` | 5 pedidos bem formados por hora por gestor; senha errada na espera do login | 429 |
 
 Sem limite próprio (e por quê, em `docs/seguranca.md`): `/telemetria` (um limite poderia descartar
-leitura legítima; a proteção é a chave), `/empresas` (lacuna conhecida), rotas estáticas, `/health`
+leitura legítima; a proteção é a chave), rotas estáticas, `/health`
 e as rotas autenticadas (o painel consulta a cada 20 s).
 
 ### 4.8 `/health`, `/predict`, chat e assistente
@@ -512,6 +719,15 @@ e as rotas autenticadas (o painel consulta a cada 20 s).
   célula (mês, hora) da tabela `modelo_risco.json` e devolve probabilidade, nível (`baixo` até 0,20,
   `moderado` até 0,50, `alto` acima), horas de histórico da célula, o baseline e os dois Brier, com
   `usaLeiturasDoSensor: false`. Sem o arquivo → 503 (seção 11).
+- **`GET /predict/sensor?deviceId=`**: operador e gestor escolhem o sensor (de outra empresa →
+  404, igual a inexistente); o motorista recebe sempre o sensor do veículo vinculado a ele, e o
+  `deviceId` da URL é ignorado. Lê do banco as leituras dos últimos 20 min do sensor
+  (`consultar_leituras`, filtrado por sensor e empresa) e chama `previsao_sensor.prever`, que
+  devolve a última leitura, a previsão do modelo, o baseline de persistência, qual das duas é a
+  `recomendada` (a que ganhou no teste), `antecipaExcursao` e o `motivo` quando falta base
+  (`sem_leituras`, `sem_leitura_recente` com a última leitura há mais de 5 min,
+  `historico_insuficiente` com menos de 10 min contínuos). Até 30 chamadas por minuto por
+  usuário (429). Sem `modelo_sensor.json` → 503 (seção 11).
 - **`POST /chat`** (site, público) — **RAG**: `chat.responder` transforma a pergunta em vetor
   (`text-embedding-3-small`, 512 dimensões), acha os 4 trechos mais parecidos da
   `base_chat.json` por cosseno (mínimo 0,2), põe esses trechos no prompt e pede a resposta ao
@@ -556,14 +772,21 @@ sequenceDiagram
     A->>A: piorou? (NORMAL→ATENCAO/CRITICO, ATENCAO→CRITICO)
     A->>DB: limites: 1 por sensor e faixa a cada 10 min
     A->>S: webpush (cifrado, assinado com a chave privada VAPID)
-    S-->>N: notificação → service worker mostra e abre /alertas
+    S-->>N: notificação → service worker mostra e abre /alertas (motorista: /motorista)
 ```
 
 - **Modelo**: sem container novo. A inscrição (`endpoint`, `keys.p256dh`, `keys.auth`,
   `criadaEm`) fica no campo `push` do documento do usuário, no container `usuarios`. Assim herda o
-  `empresaId` do usuário (o envio consulta `lista("usuarios", empresa_do_sensor, "c.id, c.push")`,
+  `empresaId` do usuário (o envio consulta
+  `lista("usuarios", empresa_do_sensor, "c.id, c.push, c.perfil, c.veiculo")`,
   e uma empresa nunca recebe alerta da outra), e some junto com o usuário. `publico()` e as listas
   de usuários escolhem os campos, então a inscrição nunca sai em resposta da API.
+- **Quem recebe** (`recebe_push`): operador e gestor, de todos os sensores da empresa; o
+  motorista (que também se inscreve, `CONTA`), só do sensor do veículo vinculado a ele, comparando
+  o `veiculo` do cadastro com o veículo que usa o sensor naquela leitura. O vínculo é relido a
+  cada leitura: trocar o veículo do motorista troca os alertas, sem reinscrever. Motorista sem
+  veículo, sensor fora de veículo ou perfil desconhecido não recebem. A notificação do motorista
+  abre `/motorista` (`push.mensagem(..., motorista=True)`); a dos outros, `/alertas?veiculo=`.
 - **Só na transição** (`avisar_por_push`): compara com a leitura anterior do mesmo sensor pelo
   horário da medição; só a piora avisa. O reenvio duplicado responde antes e nunca avisa.
   Leitura com mais de 30 min (fila offline) não avisa. O contador `push:<sensor>:<faixa>` no
@@ -605,8 +828,11 @@ Azure Cosmos DB for NoSQL, conta `cosmos-coldtrack-7319`, banco `coldtrack` (`in
   o `ttl` de cada contador). O container `leituras` **não tem TTL**: leituras ficam até alguém
   remover (pela estimativa de `infra/README.md`, os 25 GB do free tier durariam mais de 2 anos com
   10 caminhões).
-- **Backup**: `backupPolicy: { type: 'Periodic' }` no Bicep (backup periódico padrão do Cosmos).
-  A **restauração nunca foi testada** (R8 parcial).
+- **Backup**: duas camadas (`infra/README.md`, "Backup e restauração"). Backup periódico do Cosmos
+  (`backupPolicy: Periodic`: cópia a cada 240 min, retenção de 8 h; restauração só por chamado ao
+  suporte da Azure, **não testada**). Backup lógico em `infra/backup/` (`exportar.py`,
+  `restaurar.py`): ida e volta testada no CI contra o emulador, com dados sintéticos
+  (`backup-logico.yml`). A restauração de um export real de produção **não foi executada** (R8 parcial).
 - O formato dos documentos é validado no código da API antes de gravar (o Cosmos não tem schema).
 
 ---
@@ -628,7 +854,8 @@ React 18 + Vite 5 + React Router 6, em JavaScript, publicado como site estático
 | `/viagens` | Viagens com faixa registrada, tempo fora da faixa e gráfico; registrar e encerrar (gestor) | `/viagens`, `/leituras` |
 | `/alertas` | Ocorrências fora da faixa (leituras seguidas viram uma ocorrência), 24 h ou 7 dias | `/leituras` |
 | `/relatorios` | Média, mínima, máxima, percentual fora da faixa, gráfico e CSV | `/leituras` |
-| `/configuracoes` | Trocar senha; usuários (gestor) | `/senha`, `/usuarios` |
+| `/configuracoes` | Trocar senha; usuários (gestor), com o perfil Motorista e o veículo dele | `/senha`, `/usuarios`, `/veiculos` |
+| `/motorista` | **Só o perfil motorista**, no celular: temperatura grande, status em cor e texto (NORMAL, ATENÇÃO, CRÍTICO, SEM SINAL), faixa, última leitura e viagem; alerta local (vibração, bipe, notificação) quando piora, aviso até voltar ao normal, tela acesa (Wake Lock), faixa sem conexão com o último valor marcado como antigo | `/motorista` |
 | `/monitoramento` | Tela demonstrativa que lê o canal público do ThingSpeak (`thingspeak.js`) | ThingSpeak |
 | `/usuarios`, `/auditoria`, `/cadastro-usuario`, `/logistica` | Telas demonstrativas com dados de exemplo, sem API | — |
 | todas as logadas | Botão do **assistente do painel** (`AssistentePainel`, montado no `PainelLayout`) | `POST /assistente` |
@@ -650,7 +877,9 @@ fazer login (a etiqueta não dá acesso sozinha).
 `front: src/lib/sessao.js` guarda `{ token, usuario, expiraEm }` no `localStorage`
 (`coldtrack.sessao`), com `expiraEm` tirado do `exp` do JWT; sessão vencida é descartada antes de
 usar. `useSessao().sair()` chama `POST /sair` (melhor esforço, 5 s), limpa a sessão e volta ao
-login. `RequireAuth` protege as rotas logadas; `ehGestor` esconde os botões de gestor. Quem decide
+login. `RequireAuth` protege as rotas logadas; `ehGestor` esconde os botões de gestor. O
+motorista vai do login direto para `/motorista` (`rotaInicial`), e qualquer outra rota logada o
+leva de volta para lá; `/motorista` manda operador e gestor ao `/dashboard`. Quem decide
 de verdade é a API (403).
 
 ### 6.4 "Sem dados desde", indicador de conexão e selo online/offline
@@ -659,8 +888,9 @@ de verdade é a API (403).
   quando a última leitura tem mais de 2 min (`LIMITE_SEM_DADOS_MS`, 6 ciclos de 20 s) ou quando a
   API não respondeu. A tela mostra "**Sem dados desde HH:MM** — Os valores abaixo são os últimos
   recebidos, não os atuais", ou "Sem conexão com a API" se nunca houve leitura.
-- **Topo de toda tela** (`PainelLayout`): "Conectando...", "Azure conectado" ou "Sem conexão com
-  Azure".
+- **Topo de toda tela** (`PainelLayout`): "Conectando...", "Azure conectado", "Sem conexão com
+  Azure" ou "Sem internet" (navegador offline); sem internet aparece também a faixa "Sem conexão"
+  (`FaixaOffline`) com o horário do último dado recebido.
 - **Sensores**: `GET /api/dispositivos` devolve `ultimoContato` e `online` (leitura há no máximo
   120 s, `LIMITE_ONLINE_S` em `function_app.py`, calculado por `contato_do_dispositivo`).
   `seloConexao` mostra **Online/Offline** e `textoUltimoContato` mostra "Último contato: dd/mm
@@ -681,8 +911,11 @@ de verdade é a API (403).
 
 - `front: public/manifest.json`: nome "ColdTrack Control", `display: standalone`, retrato,
   ícones 192 e 512 → instalável no celular.
-- `front: public/sw.js` (`CACHE_NAME = "coldtrack-v12"`), registrado só no build:
-  - na instalação, guarda `/`, `/index.html` e `/manifest.json`;
+- `front: public/sw.js` (`CACHE_NAME = "coldtrack-v14"`), registrado só no build:
+  - na instalação, guarda o shell: `/`, `/index.html`, `/manifest.json`, o JS/CSS com hash e os
+    pedaços de tela (`guardarShell`);
+  - trata os eventos `push` e `notificationclick` (alertas no celular; o clique abre a tela de
+    alertas do veículo);
   - **rede primeiro**: busca na rede e guarda uma cópia; sem internet, devolve a cópia guardada, e
     uma navegação cai no `/index.html` guardado;
   - **a API nunca entra no cache**: só GET da própria origem é interceptado; qualquer
@@ -743,7 +976,7 @@ nas app settings da Function, não no repositório.
   imagem constrói (job `docker` em `testes.yml`).
 - `infra/docker-compose.yml`: sobe a API em `localhost:7071` com `restart: unless-stopped` e
   `healthcheck` em `/api/health` (a cada 30 s, tempo limite 10 s, 3 tentativas, 40 s de partida).
-  **Ainda não foi validado** na máquina da equipe (arquivo diz isso no cabeçalho; CLD-07).
+  Validado no CI (workflow `compose-zap.yml`: subida, `/health`, reinício e ZAP ativo; CLD-07).
   Observação para a banca: o `restart` do Docker reinicia o contêiner quando o processo sai; o
   `healthcheck` sozinho só marca o contêiner como `unhealthy`.
 
@@ -770,22 +1003,22 @@ Fonte: `RESILIENCIA.md`, `docs/qa/plano-de-testes.md` (seção 6) e o código.
 |---|---|---|---|
 | R1 | Reconexão automática | Implementado | `conectarWiFi` a cada passada do `loop()`; MQTT com espera de 5 a 60 s |
 | R2 | Armazenar e reenviar | Implementado | Fila `/fila.jsonl`, até 500, reenvio de 10 por ciclo com o `medidoEm` original |
-| R3 | Identidade da mensagem | Parcial | `deviceId` + `medidoEm` → id determinístico, `duplicada: true`, 409. **Não há número de sequência** |
-| R4 | Watchdog | Pendente | Nenhum watchdog de tarefa configurado no firmware |
+| R3 | Identidade da mensagem | Implementado | `deviceId` + `medidoEm` → id determinístico, `duplicada: true`, 409; `seq` por leitura (na flash), e `GET /leituras` devolve as `lacunas` da sequência |
+| R4 | Watchdog | Implementado | Watchdog de tarefa de 60 s no `loop()`; reinício retoma fila e sequência da flash (Wokwi `tela/erro-wdt.yaml`); **teste na placa física pendente** |
 | R5 | Falha de sensor | Implementado | Checksum, 2 tentativas, nada inválido é enviado; RSSI inválido vira `null` |
 | R6 | Degradação controlada | Implementado | "Sem dados desde HH:MM" no dashboard; API indisponível não trava a tela |
-| R7 | Observabilidade | Parcial | `/health` 200/503; `ultimoContato` e `online` por sensor, selo na tela de Sensores. Sem heartbeat próprio do firmware (a leitura faz esse papel) |
-| R8 | Recuperação na nuvem | Parcial | Backup periódico do Cosmos; restauração não testada; compose com reinício não testado |
+| R7 | Observabilidade | Implementado | `/health` 200/503; `ultimoContato` e `online` por sensor; heartbeat `POST /heartbeat` a cada 20 s quando o sensor falha, com `sensor`/`sensorFalhaDesde` em `GET /dispositivos` e `GET /motorista` (Wokwi `tela/heartbeat.yaml`); **teste na placa física pendente** (exibição no painel implementada: aviso no dashboard, selo em Sensores e na tela do motorista) |
+| R8 | Recuperação na nuvem | Parcial | Backup periódico do Cosmos (restauração por chamado, não testada); backup lógico com restauração testada no CI (dados sintéticos); restauração de produção não executada; reinício do contêiner validado no CI (volta em 4,4 s) |
 
 ### 8.2 Testes de falha F1 a F6
 
 | teste | critério | situação |
 |---|---|---|
-| F1 Queda de rede (60 s) | Reconecta em até 30 s, sem lacuna | Lógica implementada; **execução na placa não registrada** |
-| F2 Queda de energia | Volta a enviar em até 60 s | Final; a fila em flash sobrevive ao reinício; sem watchdog |
-| F3 Falha de sensor | Nada inválido gravado, alerta visível | Lógica implementada; **execução não registrada** |
-| F4 Nuvem fora | Serviço volta sozinho, zero perda | Final; reinício do contêiner não testado |
-| F5 Mensagem duplicada | Um só registro | **Automatizado**, passa no CI |
+| F1 Queda de rede (60 s) | Reconecta em até 30 s, sem lacuna | **Aprovado na placa física** em 17/11/2026: queda de cerca de 2,5 min, 6 leituras na fila, reconexão em menos de 30 s após a rede voltar, reenvio em ordem, sequência sem lacuna (`RESILIENCIA.md`, Registro) |
+| F2 Queda de energia | Volta a enviar em até 60 s | Final; a fila e a sequência em flash sobrevivem ao reinício; watchdog de 60 s |
+| F3 Falha de sensor | Nada inválido gravado, alerta visível | Simulado no Wokwi (`tela/fases.yaml`, `tela/heartbeat.yaml`): `FALHA SENSOR` na tela, três LEDs piscando, nenhuma leitura enviada, heartbeat `sensor_falha` deixa a placa online com `sensor: "falha"`; testes da API em `test_heartbeat.py`. **Execução na placa física não registrada** |
+| F4 Nuvem fora | Serviço volta sozinho, zero perda | Final; reinício do contêiner validado no CI (`compose-zap.yml`); teste F4 completo pendente |
+| F5 Mensagem duplicada | Um só registro | **Automatizado**, passa no CI; observado também na placa física (reenvio após timeout respondido como `duplicada: true`) |
 | F6 ThingSpeak fora | API e painel seguem | Final; por desenho o painel não depende do ThingSpeak |
 
 ### 8.3 Linha a linha: Wi-Fi cai por 2 minutos
@@ -819,18 +1052,24 @@ novo no ciclo seguinte. Se a fila passar de 500, as mais antigas são descartada
 - **Duplicada**: sabe. O id da leitura é `deviceId~medidoEm`; o segundo envio bate no mesmo id, a
   API compara os valores e responde 200 `duplicada: true` (reenvio legítimo) ou 409 (mesmo
   horário com valores diferentes).
-- **Perdida**: hoje **não há número de sequência**, então a API não detecta a perda de uma
-  mensagem específica. O que existe é detecção por tempo: o sensor deveria mandar a cada 20 s, o
-  painel avisa "Sem dados desde" após 2 min, o selo fica Offline após 120 s, e
-  `analise/sensor/descrever.py` conta lacunas (intervalo maior que 40 s) na base real. A placa
-  registra no log quando descarta leitura (fila cheia, flash indisponível). O plano de ação prevê
-  incluir uma sequência no payload e no contrato, com teste automático de lacuna.
+- **Perdida**: cada leitura leva `seq` (1, 2, 3..., guardado na flash); buraco na sequência é
+  leitura perdida entre o sensor e o banco, e `GET /leituras` devolve essas `lacunas`. A conta é
+  pelo número de `seq`, não pela ordem do horário: leitura com horário adiantado (relógio antes do
+  NTP) que chega fora de ordem não gera falta falsa; leitura sem `seq` não entra; `seq` menor que
+  o da contagem atual (contador zerado) abre contagem nova. Só aparece sem filtro de `status` e
+  vale para as leituras devolvidas (`limite`). Além disso
+  há a detecção por tempo: o sensor deveria mandar a cada 20 s, o painel avisa "Sem dados desde"
+  após 2 min, o selo fica Offline após 120 s, e `analise/sensor/descrever.py` conta lacunas
+  (intervalo maior que 40 s) na base real. A placa registra no log quando descarta leitura (fila
+  cheia, flash indisponível).
 
 ### 8.5 Outros cenários
 
-- **Sensor solta**: `lerSensor` falha duas vezes → pisca vermelho / "ERRO SENSOR", nada é enviado
-  nem enfileirado; o painel mostra "Sem dados desde" depois de 2 min. Ao religar, a próxima
-  leitura válida sai sozinha.
+- **Sensor solta**: `lerSensor` falha duas vezes → "FALHA SENSOR" e os três LEDs piscando; nenhuma
+  leitura é enviada nem enfileirada. Com rede, a placa manda heartbeat `sensor_falha` a cada 20 s:
+  na API ela continua `online`, com `sensor: "falha"` e `sensorFalhaDesde`. Sem heartbeat por
+  120 s, aí sim ela fica offline (placa desligada ou sem rede). Ao religar, a próxima leitura
+  válida sai sozinha e encerra a falha.
 - **API fora**: `postarAzure` recebe erro de rede ou 5xx → `falhaTemporaria` → a leitura vai para
   a fila e o reenvio acontece quando a API volta. No painel, "Sem conexão com Azure" e o aviso de
   dados antigos; a tela não trava.
@@ -854,7 +1093,7 @@ novo no ciclo seguinte. Se a fila passar de 500, as mais antigas são descartada
 | Repudiation | Negar uma ação | Logs sem senha nem token, e-mail mascarado (`mascarar_email`) |
 | Information disclosure | Ver dados de outra empresa | `empresaId` do token em toda consulta; 404 para item de outra empresa |
 | Information disclosure | Interceptar tráfego | Só HTTPS, TLS 1.2 mínimo, certificado raiz fixado na placa, CORS só para o painel |
-| Denial of service | Excesso de chamadas | Limites no Cosmos para login, chat e assistente |
+| Denial of service | Excesso de chamadas | Limites no Cosmos para login, cadastro de empresa, troca de senha, exclusão de empresa, chat, assistente, motorista, heartbeat e previsão do sensor |
 | Elevation of privilege | Operador fazer ação de gestor; token roubado | Perfil relido do banco a cada chamada; sessão revogável |
 
 **Ameaça de maior risco.** O `docs/stride.md` não dá nota numérica de risco. Com o critério
@@ -881,15 +1120,25 @@ consegue se passar por aquele sensor.
 - Front: **npm audit** `--omit=dev --audit-level=high`.
 - Resultado em 16/11/2026 (`docs/relatorio-seguranca.md`): pip-audit sem vulnerabilidade, npm audit
   sem alerta alto, ZAP com **0 alertas altos** e 12 avisos triados (os da API corrigidos; os da
-  página padrão do Azure Functions não são do projeto). Varredura ativa ainda não feita.
+  página padrão do Azure Functions não são do projeto). Varredura ativa (ZAP API scan) feita no CI
+  contra o contêiner com o emulador do Cosmos, nunca contra produção: 0 altos, 1 médio (CSP
+  `unsafe-inline` do Swagger, aceito), 6 baixos (`compose-zap.yml`).
 
 ### 9.3 LGPD (`docs/lgpd.md`, `docs/politica-de-privacidade.md`)
 
 Dados pessoais: nome, e-mail e perfil do usuário, hash da senha, IP (só como hash nos contadores,
 que expiram). Perguntas ao chat e ao assistente não são gravadas. Não há CPF, telefone ou
 localização na API. Princípios aplicados: necessidade, segurança, logs sem e-mail completo,
-retenção (logs 90 dias, contadores por TTL). O gestor corrige e exclui usuários; exclusão da
-empresa inteira ainda é manual. Base legal proposta: execução de contrato e legítimo interesse.
+retenção (logs 90 dias, contadores por TTL). O gestor corrige e exclui usuários e exclui a
+empresa inteira por `DELETE /api/empresa` (`excluir_empresa` em `function_app.py`): confere o
+perfil, a senha atual e o nome ou código da empresa digitado, e então `excluir_dados_da_empresa`
+derruba as sessões dos outros usuários e apaga, nesta ordem, sensores, leituras (consulta por
+`empresaId` em todas as partições, o que pega até leituras de sensores já removidos), viagens,
+veículos, outros usuários, a empresa e, por último, o gestor. Item que já sumiu é ignorado e
+cada pedido trabalha até 120 s (`EXCLUSAO_PRAZO_S`): passou disso, responde 202 e o pedido
+seguinte continua. Testes em `test_excluir_empresa.py` (duas empresas, falha no meio e
+repetição, prazo, log sem dado pessoal). Base legal proposta: execução de contrato e legítimo
+interesse.
 
 ---
 
@@ -906,27 +1155,24 @@ empresa inteira ainda é manual. Base legal proposta: execução de contrato e l
 
 ### 10.2 Testes e cobertura
 
-- **API**: 256 testes passando, cobertura de linhas e ramos de **99,6%** (1221 instruções com 4 não
-  cobertas, 384 ramos com 2 parciais), medido em 16/11/2026 na `main`. O CI falha abaixo de 98%.
+- **API**: 424 testes passando, cobertura de linhas e ramos de **99,8%** (1769 instruções com 3 não
+  cobertas, 612 ramos com 1 parcial), medido em 17/11/2026 na `main`. O CI falha abaixo de 98%.
   Ferramentas: pytest, unittest, Hypothesis (testes de propriedade em `test_propriedades.py`) e
   time-machine. O Cosmos é trocado por um falso (`test_falsos.py`), sem rede.
-- **Painel**: Vitest (unitário) com piso no CI de 29% de linhas (medido 29,72%), e Playwright
-  e2e com a API simulada e contra produção (`front: coldtrack-qa/`).
-- **Firmware**: 4 testes C++ (`firmware/tests/test_firmware.cpp`) sobre o `payload_core.h`.
-- **Análise**: 7 testes pytest.
+- **Painel**: Vitest com 615 testes, 99,2% de linhas e 95,2% de ramos (piso no CI: 98% de linhas,
+  94% de ramos), medido em 17/11/2026 na `main`; Playwright e2e com a API simulada (295 passando)
+  e contra produção (`front: coldtrack-qa/`).
+- **Firmware**: 11 testes C++ (`firmware/tests/test_firmware.cpp`) sobre o `payload_core.h`.
+- **Análise**: 27 testes pytest (clima e sensor).
 - Plano formal: `docs/qa/plano-de-testes.md` (níveis, ambientes, critérios de entrada e saída,
   casos F1–F6 e de segurança S01–S14, rastreabilidade). Métricas: `docs/qa/metricas-de-qualidade.md`.
 
 **Parte crítica ainda não coberta**:
 
 - A **fila offline do firmware** (`enfileirar`, `reenviarFila`, `reescreverFilaMs`) não tem teste
-  automático, e os testes C++ rodam sobre uma cópia das funções (`payload_core.h`) que o `.ino`
-  ainda não inclui.
-- As **telas** do painel fora de `src/lib` têm cobertura de linhas baixa (verificadas por e2e, que o
-  Vitest não conta).
+  automático; os testes C++ cobrem só as funções puras de `payload_core.h`, que o `.ino` inclui.
 - A idempotência é testada com Cosmos falso; repetir contra o Cosmos real está previsto.
-- Na API, as linhas sem cobertura são o 401 do `GET /dispositivos` e o 503 quando falta o
-  `openapi.json`.
+- Na API, só fica sem cobertura a leitura do `openapi.json` ausente (503).
 
 ### 10.3 Um teste que falharia se a idempotência quebrasse
 
@@ -956,7 +1202,14 @@ rota responde 201: o teste quebra no `assertEqual(status, 200)`. Junto dele:
 ## 11. Inteligência artificial
 
 Fontes: `analise/relatorio.md`, `docs/model-card.md`, `analise/explorar.py`,
-`analise/exportar_modelo.py`, `cloud/function/predicao.py`.
+`analise/exportar_modelo.py`, `cloud/function/predicao.py`; para o modelo sobre o sensor,
+`analise/sensor/modelo_previsao.py`, `analise/sensor/relatorio_previsao.md` e
+`cloud/function/previsao_sensor.py`.
+
+São dois modelos. O **11.1** usa o clima externo (INMET); o **11.2** usa as leituras do próprio
+sensor.
+
+### 11.1 Risco térmico externo (INMET)
 
 - **Problema**: qual a chance de a temperatura externa passar de 30 °C no mês e na hora da saída?
   Apoia a decisão humana de **quando sair ou carregar** e quando reforçar o monitoramento. Não
@@ -980,9 +1233,45 @@ Fontes: `analise/relatorio.md`, `docs/model-card.md`, `analise/explorar.py`,
   alguns meses têm menos anos (o campo `horasDeHistorico` mostra a amostra da célula).
 - **Servido em** `GET /api/predict` e mostrado no card **Risco térmico da saída** do dashboard.
 - **Limitação principal**: **não usa as leituras do sensor do baú** (`usaLeiturasDoSensor:
-  false`). Mede o calor de fora, em Petrolina. A base real da placa (`analise/sensor/relatorio.md`)
-  tem 1.588 leituras e 8,55 h cobertas, com maior janela contínua de 1,19 h, abaixo da meta de 48 h.
+  false`). Mede o calor de fora, em Petrolina. O modelo sobre o sensor é o da seção 11.2.
   Próximo passo: cruzar a telemetria das viagens com o clima externo e usar a previsão do dia.
+
+### 11.2 Previsão da temperatura do sensor (10 min à frente)
+
+- **Problema**: a partir das últimas leituras do sensor, qual será a temperatura daqui a 10 min
+  e em que status ela cai no perfil da carga? Apoia a decisão humana de **conferir a porta, o
+  equipamento de frio ou a rota antes** de a carga sair da faixa. Não dispara ação automática.
+- **Por que previsão e não detecção de anomalia**: a base real não tem nenhuma falha rotulada
+  (sensor travado, porta aberta, frio desligado). Um detector só poderia ser medido em falhas
+  inseridas à mão; a previsão é medida nas próprias leituras reais.
+- **Dados**: canal público ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe), 1.899
+  leituras baixadas em 17/11/2026. Limpeza: descarta leitura sem temperatura ou sem data, fora
+  da faixa do DHT11 (0 a 50 °C) ou com instante repetido (nenhuma saiu nesta base). Intervalo
+  de mais de 5 min entre leituras abre trecho novo; nenhuma amostra atravessa lacuna. Uma
+  amostra por minuto: 714 amostras (cerca de 11,9 h) em 8 trechos.
+- **Modelo**: regressão ridge sem intercepto sobre a variação (alvo menos a última leitura),
+  com três atributos dos últimos 10 min: variação em 5 min (`d5`), em 10 min (`d10`) e média
+  dos 10 min menos a última leitura (`m10`); lambda fixo 1. Exportado como três coeficientes
+  em `modelo_sensor.json` (versão `sensor-ridge-10min-v1`), sem biblioteca de ML em produção. O
+  cálculo dos atributos é a mesma função (`previsao_sensor.atributos`) no treino e na rota.
+- **Baseline**: persistência (a temperatura daqui a 10 min é a última leitura).
+- **Divisão temporal**: teste = 30% mais recentes dos instantes (17/11 02:29 a 06:06 UTC, 218
+  amostras); treino = o que vem antes (496 amostras), descartando amostra cujo alvo cai depois
+  do corte, para não vazar futuro.
+- **Resultado (teste)**: MAE do modelo **0,342 °C** contra **0,313 °C** da persistência; RMSE
+  0,471 contra 0,494. Com a métrica principal (MAE, definida antes do treino) **o modelo não
+  supera o baseline**. Por isso o arquivo sai com `superaBaseline: false` e a rota responde
+  `recomendada: "baseline"`: a tela deve mostrar a persistência. A previsão do modelo segue na
+  resposta para a comparação ficar visível.
+- **Quando erra e por quê**: a placa está em bancada, em ambiente interno, e não num baú; a
+  série é quase estável e muda em degraus de resolução do DHT11. Não há nenhuma excursão real
+  na base, que é justamente o que o modelo deveria antecipar. Com poucas horas, persistência é
+  muito difícil de bater.
+- **Re-treinar** (um comando, baixa o canal de novo): `cd analise/sensor && python
+  modelo_previsao.py --baixar`. Se o MAE do modelo ficar abaixo do da persistência, a rota passa
+  a recomendar o modelo sem mudar código; publica-se a API com o novo `modelo_sensor.json`.
+- **Servido em** `GET /api/predict/sensor`. Na `main` do painel nenhuma tela consome a rota ainda;
+  a exibição no dashboard e na tela do motorista está em andamento (Front-End-pi #60).
 
 ---
 
@@ -1017,8 +1306,9 @@ Fontes: `analise/relatorio.md`, `docs/model-card.md`, `analise/explorar.py`,
   não vêm do cache. As telas mostram "Sem conexão com Azure"; o dashboard mantém os últimos valores
   já carregados com o aviso "Sem dados desde HH:MM", ou "Sem conexão com a API" se ainda não havia
   dado. Nenhum valor velho aparece como atual.
-- **Não implementado**: alerta push e faixa "sem conexão" própria do PWA (plano de ação, entrega
-  final); tela e rota do motorista estão com outro integrante e não estão na `main`.
+- **Implementado**: alerta push (Web Push/VAPID, no máximo um por sensor e faixa a cada 10 min),
+  faixa "Sem conexão" (`FaixaOffline`) e tela `/motorista` com `GET /api/motorista`. **Não
+  implementado**: app nativo.
 - **Teste com usuários**: **ainda não foi feito**. O plano é teste com 5 usuários e questionário SUS
   (meta ≥ 68) para a entrega final.
 
@@ -1040,10 +1330,10 @@ buraco. No painel, durante a queda, aparece 'Sem dados desde' depois de 2 minuto
 **IoT — Como o sistema sabe que uma mensagem foi perdida ou duplicada?**
 "Duplicada ele sabe: o id da leitura no banco é o ID do sensor mais o horário da medição. Se a
 mesma leitura chega de novo, bate no mesmo id; a API compara e responde 200 com `duplicada: true`,
-ou 409 se os valores forem diferentes. Perdida, hoje ele só sabe pelo tempo: o sensor deveria
+ou 409 se os valores forem diferentes. Perdida, ele sabe de dois jeitos. Pelo tempo: o sensor deveria
 mandar a cada 20 segundos, então o painel avisa quando passa de 2 minutos sem dado, e a análise da
-base conta as lacunas. Não temos número de sequência ainda; está no plano de ação, com teste
-automático de lacuna."
+base conta as lacunas. E cada leitura leva um número de sequência guardado na flash: se falta um
+número, a API aponta a lacuna em `GET /leituras`."
 
 **Cloud — Onde cada serviço está implantado e quanto custa por mês?**
 "Tudo no Azure, região Brazil South, grupo `rg-coldtrack`. A API é uma Azure Function em Python no
@@ -1057,9 +1347,10 @@ mês, e o maior item é log, que cai para uns 128 se subir o nível de log para 
 "Na nuvem, a Function é gerenciada pela plataforma do Azure: ela cria e recicla as instâncias
 sozinha, e, como não temos instância sempre pronta, uma requisição depois de um tempo parado sobe
 uma instância nova. Não medimos esse tempo. Para rodar fora do Azure temos o contêiner com
-`restart: unless-stopped` e healthcheck no `/api/health` a cada 30 segundos, mas isso ainda não foi
-testado; é o teste F4 da entrega final. A placa não depende do serviço estar no ar: guarda na
-flash e reenvia quando volta. O que falta é watchdog no firmware, que está pendente."
+`restart: unless-stopped` e healthcheck no `/api/health` a cada 30 segundos; o reinício foi
+validado no CI, com volta em 4,4 segundos. O teste F4 completo fica para a entrega final. A placa não depende do serviço estar no ar: guarda na
+flash e reenvia quando volta, e se o programa da placa travar o watchdog reinicia em até 60
+segundos e o envio retoma da fila."
 
 **Segurança — Qual a ameaça de maior risco no seu modelo STRIDE e qual controle a mitiga?**
 "Para nós é uma empresa ver dados de outra, porque é dado de cliente e toda rota que recebe um id
@@ -1075,11 +1366,9 @@ Se vazar, o gestor gera outra e a antiga para na hora. O risco que sobra é algu
 da flash de uma placa física."
 
 **Qualidade — Qual a cobertura atual e qual parte crítica ainda não está coberta?**
-"A API tem 256 testes e 99,6% de cobertura de linhas e ramos, e o CI barra abaixo de 98%. O painel
-tem cobertura de linhas por volta de 30%, porque as telas são testadas por e2e com Playwright, que
-não entra nessa conta. A parte crítica sem cobertura é a fila offline do firmware: a gravação e o
-reenvio na flash não têm teste automático, e os testes C++ rodam numa cópia das funções que o
-firmware ainda não inclui."
+"A API tem 424 testes e 99,8% de cobertura de linhas e ramos, e o CI barra abaixo de 98%. O painel
+tem 615 testes de unidade, com 99% de linhas, e mais o e2e com Playwright. A parte crítica sem cobertura é a fila offline do firmware: a gravação e o
+reenvio na flash não têm teste automático; os testes C++ cobrem só as funções puras."
 
 **Qualidade — Mostre um teste que falharia se a idempotência quebrasse.**
 "`test_rotas.py`, `test_telemetria_duplicada_reenvio_identico`. O teste já começa com uma leitura
@@ -1098,11 +1387,18 @@ como são muito parecidas o resultado ia parecer melhor do que é."
 fato passaram de 30 graus. Também não é previsão do tempo do dia, é o padrão histórico, e ainda não
 usa o sensor do baú, só a estação do INMET em Petrolina."
 
+**IA — E o modelo sobre as leituras do sensor?**
+"Prevê a temperatura do sensor 10 minutos à frente, para avisar antes de sair da faixa. O
+baseline é repetir a última leitura. Com as horas que temos, com a placa em bancada, o modelo
+teve erro médio de 0,34 grau contra 0,31 da persistência, então não ganhou, e a rota recomenda
+a persistência. O pipeline re-treina com um comando quando entrarem as 48 horas ou uma viagem
+de verdade."
+
 **UE Mobile — O que o app mostra quando está sem internet?**
 "O app abre, porque o service worker guarda a casca do site, mas a API nunca vai para o cache. Então
 o topo mostra 'Sem conexão com Azure' e o dashboard avisa 'Sem dados desde' tal hora, dizendo que
 os valores são os últimos recebidos. Ele nunca mostra dado velho como se fosse atual. Notificação
-push ainda não temos."
+push já existe, com o app instalado e a inscrição ativada."
 
 **UE Mobile — Qual problema o teste com usuários revelou e o que mudou por causa dele?**
 "Ainda não fizemos teste com usuários reais, então não posso apontar um problema que ele revelou.
@@ -1131,7 +1427,8 @@ The API validates it, classifies it again using the profile of the truck, stores
 with the status, and sends the range back to the board. The dashboard polls every 20 seconds, so
 within about 20 seconds the status card turns critical and an alert message appears, and the
 Alerts screen groups consecutive out-of-range readings into one occurrence with start, duration
-and peak. Push notifications are not implemented yet; they are planned for the final delivery."
+and peak. Subscribed users also get a push notification when a sensor gets worse, at most one per sensor
+and status every 10 minutes."
 
 **Tech English — "What was the hardest trade-off in your architecture, and why?"**
 "The hardest one was the transport protocol. MQTT is lighter and is the IoT standard, but the
@@ -1196,6 +1493,7 @@ idempotency and per-device authentication."
 | **LGPD** | Lei Geral de Proteção de Dados (Lei 13.709/2018) |
 | **CI** | Integração contínua: testes automáticos a cada push (GitHub Actions) |
 | **Cobertura** | Percentual de linhas e ramos do código executados pelos testes |
-| **Watchdog** | Temporizador que reinicia a placa se o programa travar (pendente no firmware) |
+| **Watchdog** | Temporizador que reinicia a placa se o programa travar (60 s no firmware) |
+| **Heartbeat** | Sinal de vida da placa sem leitura válida (sensor em falha), em `POST /heartbeat` |
 | **Healthcheck** | Verificação periódica de saúde do serviço (`/api/health`) |
 | **SUS** | System Usability Scale, questionário de usabilidade (meta ≥ 68) |

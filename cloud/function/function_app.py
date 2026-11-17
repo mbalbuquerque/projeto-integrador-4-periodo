@@ -2,6 +2,7 @@
 
 Dispositivo (chave própria do dispositivo no header `x-device-key`):
   POST /api/telemetria          leitura do ESP32: valida, classifica e grava
+  POST /api/heartbeat           sinal de vida sem leitura válida (sensor em falha)
 
 Público:
   POST /api/empresas            cadastro de empresa nova + primeiro gestor
@@ -16,11 +17,15 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
   POST /api/senha               troca a própria senha                   (todos os perfis)
   POST /api/sair                encerra todas as sessões do usuário     (todos os perfis)
-  POST/DELETE /api/push/inscricao  inscreve ou remove o aparelho nos alertas push (operador, gestor)
+  DELETE /api/empresa           exclui a própria empresa e todos os dados dela (gestor)
+  POST/DELETE /api/push/inscricao  inscreve ou remove o aparelho nos alertas push (todos os perfis)
   GET  /api/motorista           leitura, faixa e viagem do veículo vinculado (motorista)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/predict             risco de passar de 30 °C por mês e hora (operador, gestor)
-  GET  /api/dispositivos        sensores da empresa, com último contato e online (operador, gestor)
+  GET  /api/predict/sensor      temperatura do sensor prevista 10 min à frente, com baseline
+                                (operador e gestor pelo ?deviceId=; motorista, o do veículo)
+  GET  /api/dispositivos        sensores da empresa, com último contato, online e estado do sensor
+                                (operador, gestor)
   POST/PUT/DELETE /api/dispositivos[/{id}]  registra, troca a chave, remove (gestor)
   GET  /api/veiculos            frota                                   (operador, gestor)
   POST/PUT/DELETE /api/veiculos[/{id}]                                   (gestor)
@@ -54,12 +59,14 @@ import assistente
 import chat
 import limites
 import predicao
+import previsao_sensor
 import push
 from cadastros import (
     EMAIL,
     SENHA_MIN,
     validar_dispositivo,
     validar_empresa,
+    validar_exclusao_empresa,
     validar_troca_senha,
     validar_usuario,
     validar_veiculo,
@@ -76,6 +83,7 @@ from contrato import (
     lacunas_de_sequencia,
     mesma_leitura,
     validar,
+    validar_heartbeat,
 )
 from limites import Limites, ip_do_cliente
 from seguranca import (
@@ -103,18 +111,27 @@ HASH_FALSO = gerar_hash(uuid.uuid4().hex)
 TODOS = ("operador", "gestor")
 GESTOR = ("gestor",)
 MOTORISTA = ("motorista",)
-# A própria conta (ver, trocar a senha, sair) vale para todo perfil; o resto do
+# A própria conta (ver, trocar a senha, sair, inscrever no push) vale para todo perfil; o resto do
 # painel continua só de operador e gestor (o motorista recebe 403).
 CONTA = TODOS + MOTORISTA
 SEP = "~"
 
-# Sensor sem leitura recebida há mais que isso aparece como offline (6 ciclos de 20 s).
+# Sensor sem contato (leitura ou heartbeat) há mais que isso aparece como offline
+# (6 ciclos de 20 s).
 LIMITE_ONLINE_S = 120
+
+# Heartbeat: a placa manda um a cada 20 s enquanto o sensor falha (3 por minuto);
+# 6 por minuto por dispositivo deixa folga para reenvio e segura um laço.
+HEARTBEAT_POR_MINUTO = 6
 
 # Tela do motorista: última leitura mais velha que isso vira SEM_LEITURA (15 ciclos de 20 s).
 LIMITE_SINAL_MOTORISTA_S = 5 * 60
 # A tela consulta a cada 20 s (3 por minuto); 30 por minuto por usuário segura um laço.
 MOTORISTA_POR_MINUTO = 30
+# Previsão do sensor: o painel e a tela do motorista consultam a cada 20 s; mesma folga.
+PREVISAO_SENSOR_POR_MINUTO = 30
+# Leituras pedidas ao banco para a previsão (20 s de cadência x 30 min = 90; folga).
+PREVISAO_SENSOR_LEITURAS = 200
 
 # Limites de uso (contados no Cosmos, valem somando todas as instâncias):
 # chat do site: 10 perguntas por minuto por IP e 2000 por dia no total;
@@ -240,21 +257,33 @@ def id_interno(empresa, codigo):
     return f"{empresa}{SEP}{codigo}"
 
 
-def contato_do_dispositivo(device_id):
-    """Quando chegou a última leitura do sensor e se ele conta como online."""
+def ultima_leitura_recebida(device_id):
+    """Quando chegou (recebidoEm) a leitura mais recente do sensor, ou None."""
     itens = list(container().query_items(
         "SELECT TOP 1 c.recebidoEm FROM c WHERE c.deviceId = @d ORDER BY c.medidoEm DESC",
         parameters=[{"name": "@d", "value": device_id}],
         partition_key=device_id))
-    ultimo = itens[0].get("recebidoEm") if itens else None
-    online = False
-    if ultimo:
-        try:
-            atraso = datetime.now(timezone.utc) - datetime.fromisoformat(ultimo)
-            online = atraso.total_seconds() <= LIMITE_ONLINE_S
-        except ValueError:
-            online = False
-    return {"ultimoContato": ultimo, "online": online}
+    return itens[0].get("recebidoEm") if itens else None
+
+
+def estado_do_dispositivo(doc, leitura_recebida):
+    """Último contato, online e estado do sensor, a partir do cadastro e da última leitura.
+
+    Contato é a leitura ou o heartbeat, o que chegou por último. O sensor está em
+    falha quando o heartbeat mais recente veio com motivo `sensor_falha` e nenhuma
+    leitura válida chegou depois dele; `sensor` é None se a placa nunca falou.
+    """
+    lido = _instante(leitura_recebida) if leitura_recebida else None
+    batido = _instante(doc.get("heartbeatEm")) if doc.get("heartbeatEm") else None
+    heartbeat_mais_novo = batido is not None and (lido is None or batido > lido)
+    ultimo, quando = ((doc["heartbeatEm"], batido) if heartbeat_mais_novo
+                      else (leitura_recebida, lido))
+    online = (quando is not None
+              and (datetime.now(timezone.utc) - quando).total_seconds() <= LIMITE_ONLINE_S)
+    falha = heartbeat_mais_novo and doc.get("heartbeatMotivo") == "sensor_falha"
+    sensor = "falha" if falha else ("ok" if lido is not None else None)
+    return {"ultimoContato": ultimo, "online": online, "sensor": sensor,
+            "sensorFalhaDesde": doc.get("sensorFalhaDesde") if falha else None}
 
 
 def id_externo(doc):
@@ -337,10 +366,75 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
                      "perfil": perfil, "faixa": faixa(perfil)}, 201)
 
 
+@app.route(route="heartbeat", methods=["POST"])
+def heartbeat(req: func.HttpRequest) -> func.HttpResponse:
+    """Sinal de vida da placa sem leitura válida (hoje: sensor em falha).
+
+    Não cria leitura (leitura inválida nunca é gravada como válida). Atualiza no
+    cadastro do dispositivo o último heartbeat e desde quando o sensor falha, para
+    o painel separar "placa viva com sensor em falha" de "placa sem rede".
+    """
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+
+    erros = validar_heartbeat(dados)
+    if erros:
+        logging.warning("heartbeat rejeitado: %s", erros)
+        return resposta({"erros": erros}, 400)
+
+    dispositivo = ler("dispositivos", dados["deviceId"].lower())
+    if dispositivo is None or not conferir_chave(req.headers.get("x-device-key"),
+                                                 dispositivo.get("chaveHash")):
+        logging.warning("heartbeat sem chave válida para %s", dados["deviceId"])
+        return resposta({"erros": ["dispositivo não registrado ou chave inválida"]}, 401)
+
+    if not LIMITES.permitir(f"heartbeat:{dispositivo['id']}", HEARTBEAT_POR_MINUTO,
+                            limites.MINUTO):
+        return resposta({"erros": ["muitos heartbeats seguidos. Tente de novo em 1 min."]}, 429)
+
+    agora = datetime.now(timezone.utc)
+    lido = _instante(ultima_leitura_recebida(dispositivo["id"]))
+    desde = _instante(dispositivo.get("sensorFalhaDesde"))
+    # A falha continua enquanto nenhuma leitura válida chegou depois do início dela;
+    # leitura válida no meio encerra a falha anterior e esta começa agora.
+    if desde is None or (lido is not None and lido >= desde):
+        desde = agora
+
+    operacoes = [
+        {"op": "set", "path": "/heartbeatEm", "value": agora.isoformat()},
+        {"op": "set", "path": "/heartbeatMotivo", "value": dados["motivo"]},
+        {"op": "set", "path": "/sensorFalhaDesde", "value": desde.isoformat()},
+        {"op": "set", "path": "/fw", "value": dados["fw"]},
+        {"op": "set", "path": "/heartbeatRssi", "value": dados.get("rssi")},
+    ]
+    if "seq" in dados:
+        operacoes.append({"op": "set", "path": "/ultimaSeq", "value": dados["seq"]})
+    container("dispositivos").patch_item(item=dispositivo["id"], partition_key=dispositivo["id"],
+                                         patch_operations=operacoes)
+    return resposta({"sensor": "falha", "sensorFalhaDesde": desde.isoformat()}, 200)
+
+
 # ------------------------------------------------------------ alertas push
+
+def recebe_push(usuario, veiculo):
+    """True se o usuário recebe o push da leitura deste veículo.
+
+    Operador e gestor recebem tudo da empresa; motorista, só do veículo vinculado
+    a ele (relido do cadastro a cada leitura: trocar o veículo troca os alertas).
+    Sensor sem veículo não avisa motorista; perfil desconhecido não recebe nada.
+    """
+    if usuario.get("perfil") in TODOS:
+        return True
+    return (usuario.get("perfil") in MOTORISTA and veiculo is not None
+            and usuario.get("veiculo") == veiculo)
+
 
 def avisar_por_push(leitura, veiculo, medido, recebido):
     """Manda push aos usuários da empresa quando a leitura piora de faixa.
+
+    Operador e gestor recebem de todos os sensores da empresa; o motorista, só do
+    sensor do veículo vinculado a ele, com o toque abrindo a tela /motorista.
 
     Só na transição (NORMAL -> ATENCAO/CRITICO, ATENCAO -> CRITICO), comparando com a
     leitura anterior do mesmo sensor pelo horário da medição; no máximo 1 push por
@@ -365,15 +459,19 @@ def avisar_por_push(leitura, veiculo, medido, recebido):
                             push.INTERVALO_S):
         return 0
 
-    conteudo = push.mensagem(leitura, veiculo)
-    usuarios = [u for u in lista("usuarios", leitura["empresaId"], "c.id, c.push")
-                if u.get("push")]
+    conteudos = {False: push.mensagem(leitura, veiculo),
+                 True: push.mensagem(leitura, veiculo, motorista=True)}
+    usuarios = [u for u in lista("usuarios", leitura["empresaId"],
+                                 "c.id, c.push, c.perfil, c.veiculo")
+                if u.get("push") and recebe_push(u, veiculo)]
     envios = [(u, i) for u in usuarios for i in u["push"]]
     if not envios:
         return 0
     # Em paralelo: com vários aparelhos, o sensor não espera um envio depois do outro.
     with ThreadPoolExecutor(max_workers=min(8, len(envios))) as executor:
-        resultados = list(executor.map(lambda par: push.enviar(par[1], conteudo), envios))
+        resultados = list(executor.map(
+            lambda par: push.enviar(par[1], conteudos[par[0].get("perfil") in MOTORISTA]),
+            envios))
 
     expiradas = {}
     for (usuario, inscricao), resultado in zip(envios, resultados):
@@ -418,8 +516,12 @@ def _tirar_de_outros(endpoint, dono):
 
 @app.route(route="push/inscricao", methods=["POST", "DELETE"])
 def push_inscricao(req: func.HttpRequest) -> func.HttpResponse:
-    """POST guarda a inscrição do aparelho no usuário; DELETE tira (idempotente)."""
-    usuario, erro = autorizar(req, TODOS)
+    """POST guarda a inscrição do aparelho no usuário; DELETE tira (idempotente).
+
+    Vale para operador, gestor e motorista (o motorista só recebe alertas do
+    veículo vinculado a ele: o filtro é no envio, em avisar_por_push).
+    """
+    usuario, erro = autorizar(req, CONTA)
     if erro:
         return erro
     dados, erro = corpo_json(req)
@@ -615,6 +717,132 @@ def sair(req: func.HttpRequest) -> func.HttpResponse:
                                    {"op": "set", "path": "/push", "value": []}])
     logging.info("%s saiu (sessões encerradas)", mascarar_email(usuario["id"]))
     return func.HttpResponse(status_code=204)
+
+
+# ------------------------------------------------------------ exclusão da empresa (LGPD)
+
+# Até 5 pedidos por gestor por hora: cada um custa um scrypt e várias consultas, e 5
+# cobrem um pedido que parou no meio e precisa ser repetido.
+EXCLUSOES_POR_HORA = 5
+# Tempo de trabalho de cada pedido. Empresa com muitas leituras não cabe numa
+# requisição só: passado o prazo, a rota para entre dois itens, responde 202 e o
+# gestor repete o pedido, que continua de onde parou.
+EXCLUSAO_PRAZO_S = 120
+MSG_EXCLUSAO_LIMITE = "muitos pedidos de exclusão. Tente de novo em 1 hora."
+MSG_EXCLUSAO_CONTINUAR = ("exclusão em andamento: repita o mesmo pedido para continuar "
+                          "de onde parou.")
+
+
+class PrazoEsgotado(Exception):
+    """O pedido de exclusão passou do prazo; o próximo pedido continua."""
+
+
+def _apagar(nome, itens, chave, prazo, contagem):
+    """Apaga os itens do container, um a um, contando em `contagem[nome]`.
+
+    Item que já sumiu (outro pedido, ou um anterior que parou no meio) é ignorado:
+    a exclusão pode ser repetida quantas vezes for preciso.
+    """
+    alvo = container(nome if nome != "leituras" else None)
+    for item in itens:
+        if time.monotonic() > prazo:
+            raise PrazoEsgotado()
+        try:
+            alvo.delete_item(item["id"], partition_key=item[chave])
+        except exceptions.CosmosResourceNotFoundError:
+            continue
+        contagem[nome] = contagem.get(nome, 0) + 1
+
+
+def _ids_da_empresa(nome, empresa, campos="c.id"):
+    return list(container(nome if nome != "leituras" else None).query_items(
+        f"SELECT {campos} FROM c WHERE c.empresaId = @e",
+        parameters=[{"name": "@e", "value": empresa}],
+        enable_cross_partition_query=True))
+
+
+def excluir_dados_da_empresa(empresa, gestor_id, prazo, contagem):
+    """Apaga tudo da empresa, na ordem que não deixa nada órfão nem gravando.
+
+    1. Sessões dos outros usuários: sobe a versão e tira o push (ninguém mais
+       cadastra nada durante a exclusão).
+    2. Sensores: a chave morre, o sensor para de gravar leitura.
+    3. Leituras da empresa (inclusive de sensores removidos antes).
+    4. Viagens e veículos.
+    5. Outros usuários (com as inscrições de push, que ficam no cadastro).
+    6. A empresa.
+    7. O gestor que pediu, por último: até aqui o token dele vale e o pedido
+       pode ser repetido se parar no meio.
+    Conta em `contagem` os itens apagados por container; levanta PrazoEsgotado
+    se o prazo acabar antes (o que já foi apagado continua apagado).
+    """
+    outros = [u for u in _ids_da_empresa("usuarios", empresa) if u["id"] != gestor_id]
+    for u in outros:
+        if time.monotonic() > prazo:
+            raise PrazoEsgotado()
+        _patch_usuario(u["id"], [{"op": "incr", "path": "/sessao", "value": 1},
+                                 {"op": "set", "path": "/push", "value": []}])
+    _apagar("dispositivos", _ids_da_empresa("dispositivos", empresa), "id", prazo, contagem)
+    _apagar("leituras", _ids_da_empresa("leituras", empresa, "c.id, c.deviceId"),
+            "deviceId", prazo, contagem)
+    _apagar("viagens", _ids_da_empresa("viagens", empresa), "id", prazo, contagem)
+    _apagar("veiculos", _ids_da_empresa("veiculos", empresa), "id", prazo, contagem)
+    _apagar("usuarios", [u for u in _ids_da_empresa("usuarios", empresa)
+                         if u["id"] != gestor_id], "id", prazo, contagem)
+    _apagar("empresas", [{"id": empresa}], "id", prazo, contagem)
+    _apagar("usuarios", [{"id": gestor_id}], "id", prazo, contagem)
+
+
+@app.route(route="empresa", methods=["DELETE"])
+def excluir_empresa(req: func.HttpRequest) -> func.HttpResponse:
+    """Exclui a empresa do gestor e todos os dados dela (direito de eliminação, LGPD).
+
+    Exige o nome (ou o código) da empresa digitado e a senha atual. Pode ser
+    repetida: um pedido que parou no meio (falha ou prazo) continua no próximo.
+    """
+    gestor, erro = autorizar(req, GESTOR)
+    if erro:
+        return erro
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    erros, doc = validar_exclusao_empresa(dados)
+    if erros:
+        return resposta({"erros": erros}, 400)
+    # Conta só o pedido bem formado (o que chega à senha e ao banco).
+    if not LIMITES.permitir(f"excluir-empresa:usuario:{gestor['id']}", EXCLUSOES_POR_HORA,
+                            limites.HORA):
+        return resposta({"erros": [MSG_EXCLUSAO_LIMITE]}, 429)
+    # Mesma espera do login e da troca de senha: o token sozinho não apaga a empresa.
+    if bloqueado_ate(gestor) > 0:
+        return resposta({"erros": [MSG_SENHA_EM_ESPERA]}, 429)
+    if not conferir_senha(doc["senha"], gestor["senhaHash"]):
+        _registrar_falha(gestor)
+        return resposta({"erros": ["senha: senha atual incorreta"]}, 400)
+
+    empresa = gestor["empresaId"]
+    registro = ler("empresas", empresa)
+    # O código vale sempre; o nome, enquanto a empresa existe (um pedido que parou
+    # depois de apagá-la só se confirma pelo código).
+    aceitas = {empresa.casefold()}
+    if registro and registro.get("nome"):
+        aceitas.add(registro["nome"].strip().casefold())
+    if doc["confirmacao"].casefold() not in aceitas:
+        return resposta({"erros": ["confirmacao: não confere com o nome da empresa"]}, 400)
+
+    prazo = time.monotonic() + EXCLUSAO_PRAZO_S
+    contagem = {}
+    try:
+        excluir_dados_da_empresa(empresa, gestor["id"], prazo, contagem)
+    except PrazoEsgotado:
+        # Só o código da empresa e a quantidade: nenhum dado pessoal no log.
+        logging.warning("exclusão da empresa %s parou no prazo; continua no próximo pedido",
+                        empresa)
+        return resposta({"excluida": False, "removidos": contagem,
+                         "mensagem": MSG_EXCLUSAO_CONTINUAR}, 202)
+    logging.info("empresa %s excluída a pedido do gestor: %s", empresa,
+                 ", ".join(f"{n} {k}" for k, n in sorted(contagem.items())))
+    return resposta({"excluida": True, "removidos": contagem})
 
 
 # ------------------------------------------------------------ chat do site
@@ -843,7 +1071,11 @@ def motorista(req: func.HttpRequest) -> func.HttpResponse:
 
     perfil = veiculo.get("perfil", PERFIL_PADRAO)
     agora = datetime.now(timezone.utc)
-    ultima = consultar_leituras(veiculo["deviceId"], empresa, 1) if veiculo.get("deviceId") else []
+    device = veiculo.get("deviceId")
+    ultima = consultar_leituras(device, empresa, 1) if device else []
+    disp = ler("dispositivos", device) if device else None
+    estado = (estado_do_dispositivo(disp, ultima[0].get("recebidoEm") if ultima else None)
+              if disp is not None and disp.get("empresaId") == empresa else {})
     leitura, minutos, status = None, None, "SEM_LEITURA"
     if ultima:
         u = ultima[0]
@@ -863,6 +1095,8 @@ def motorista(req: func.HttpRequest) -> func.HttpResponse:
         "status": status,
         "minutosSemLeitura": minutos,
         "viagem": viagem_ativa(empresa, codigo, agora),
+        "sensor": estado.get("sensor"),
+        "sensorFalhaDesde": estado.get("sensorFalhaDesde"),
     })
 
 
@@ -889,6 +1123,54 @@ def predict(req: func.HttpRequest) -> func.HttpResponse:
     return resposta(predicao.prever(modelo, mes, hora))
 
 
+def _sensor_do_motorista(usuario):
+    """deviceId do veículo vinculado ao motorista (do cadastro, nunca da URL), ou None."""
+    empresa, codigo = usuario["empresaId"], usuario.get("veiculo")
+    veiculo = ler("veiculos", id_interno(empresa, codigo)) if codigo else None
+    if veiculo is None or veiculo.get("empresaId") != empresa:
+        return None
+    return veiculo.get("deviceId") or None
+
+
+@app.route(route="predict/sensor", methods=["GET"])
+def predict_sensor(req: func.HttpRequest) -> func.HttpResponse:
+    """Temperatura do sensor prevista `horizonteMin` minutos à frente, com o baseline.
+
+    Usa as leituras recentes do próprio sensor (modelo de analise/sensor/modelo_previsao.py).
+    Operador e gestor escolhem o sensor por ?deviceId=; o motorista recebe o do veículo
+    vinculado a ele. Sensor de outra empresa responde igual a sensor inexistente.
+    """
+    usuario, erro = autorizar(req, CONTA)
+    if erro:
+        return erro
+    if not LIMITES.permitir(f"predict-sensor:usuario:{usuario['id']}",
+                            PREVISAO_SENSOR_POR_MINUTO, limites.MINUTO):
+        return resposta({"erros": ["muitas consultas seguidas. Tente de novo em 1 min."]}, 429)
+    empresa = usuario["empresaId"]
+    if usuario["perfil"] == "motorista":
+        device = _sensor_do_motorista(usuario)
+        if device is None:
+            return resposta({"erros": ["nenhum sensor vinculado a este motorista; "
+                                       "fale com o gestor"]}, 404)
+    else:
+        device = req.params.get("deviceId")
+        if not device:
+            return resposta({"erros": ["informe ?deviceId="]}, 400)
+    if _dispositivo_da_empresa(device, empresa) is None:
+        return resposta({"erros": ["dispositivo não encontrado"]}, 404)
+    device = device.lower()
+    try:
+        modelo = previsao_sensor.carregar()
+    except (OSError, ValueError):
+        logging.exception("predict/sensor: modelo_sensor.json ausente ou inválido no pacote")
+        return resposta({"erros": ["modelo indisponível"]}, 503)
+    agora = datetime.now(timezone.utc)
+    minutos = modelo["janelaMin"] + modelo["lacunaMaxS"] // 60 + 5
+    itens = consultar_leituras(device, empresa, PREVISAO_SENSOR_LEITURAS,
+                               agora.timestamp() - minutos * 60)
+    return resposta({"deviceId": device, **previsao_sensor.prever(modelo, itens, agora)})
+
+
 # ------------------------------------------------------------ dispositivos
 
 @app.route(route="dispositivos/{id?}", methods=["GET", "POST", "PUT", "DELETE"])
@@ -900,9 +1182,13 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         usuario, erro = autorizar(req, TODOS)
         if erro:
             return erro
-        itens = lista("dispositivos", usuario["empresaId"], campos)
+        itens = lista("dispositivos", usuario["empresaId"],
+                      campos + ", c.heartbeatEm, c.heartbeatMotivo, c.sensorFalhaDesde")
         for item in itens:
-            item.update(contato_do_dispositivo(item["id"]))
+            estado = estado_do_dispositivo(item, ultima_leitura_recebida(item["id"]))
+            for interno in ("heartbeatEm", "heartbeatMotivo"):
+                item.pop(interno, None)
+            item.update(estado)
         return resposta({"dispositivos": itens})
 
     gestor, erro = autorizar(req, GESTOR)

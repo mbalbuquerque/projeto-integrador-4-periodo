@@ -80,6 +80,7 @@ entre todas as instâncias). Detalhe das respostas em [`api.md`](api.md).
 | `POST /login` | conta | espera de 1 min a partir da 5ª senha errada seguida, dobrando até 15 min | `401` (igual à senha errada) |
 | `POST /empresas` | IP de quem chama | 5 cadastros por hora (conta o pedido válido, criado ou recusado por e-mail repetido; erro de validação não conta) | `429` |
 | `POST /senha` | conta (a mesma do login) | espera de 1 min a partir da 5ª senha atual errada seguida, dobrando até 15 min; em espera nem a senha certa troca | `429` |
+| `DELETE /empresa` | gestor | 5 pedidos bem formados por hora; a senha errada conta na mesma espera do login | `429` |
 | `POST /chat` | IP | 10 perguntas por minuto | `429` |
 | `POST /chat` | site inteiro | 2000 perguntas por dia | `429` |
 | `POST /assistente` | usuário | 15 perguntas por minuto | `429` |
@@ -98,6 +99,18 @@ Em `POST /senha`, a senha atual errada usa o mesmo contador de falhas e a mesma 
 de ganhar o dobro de tentativas. Efeito colateral aceito: quem tem um token roubado pode deixar a
 conta em espera por até 15 min. A senha certa zera a contagem. As respostas `429` não trazem
 `Retry-After`, como as demais da API; a mensagem manda aguardar.
+
+### Exclusão da empresa (`DELETE /empresa`)
+
+A rota mais destrutiva da API tem quatro travas: só o perfil gestor, só a empresa do token (o
+corpo não escolhe empresa), o nome ou o código da empresa digitado em `confirmacao` e a senha
+atual. A senha errada entra na mesma espera do login, então um token roubado não basta para
+apagar a empresa nem para testar senhas em quantidade. Cada pedido bem formado conta no limite
+de 5 por hora por gestor, que também segura o custo (um scrypt e várias consultas por pedido).
+A ordem da exclusão derruba primeiro as sessões dos outros usuários e as chaves dos sensores,
+para ninguém gravar nada durante a exclusão, e apaga o gestor por último: um pedido que parou no
+meio (erro do banco ou o prazo de 120 s, respondido com `202`) é repetido e continua. O log
+registra só o código da empresa e as contagens.
 
 ### Rotas sem limite e por quê
 

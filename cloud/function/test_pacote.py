@@ -41,6 +41,10 @@ class TestPacote(unittest.TestCase):
         # predicao.py le o modelo do disco: sem ele no pacote, a rota /predict da 503.
         self.assertIn("modelo_risco.json", set(ler_pacote()))
 
+    def test_modelo_do_sensor_publicado(self):
+        # previsao_sensor.py le o modelo do disco: sem ele, a rota /predict/sensor da 503.
+        self.assertIn("modelo_sensor.json", set(ler_pacote()))
+
     def test_nada_de_teste_ou_script_publicado(self):
         for nome in ler_pacote():
             self.assertFalse(nome.startswith(("test_", "scripts/", "requirements-dev")), nome)

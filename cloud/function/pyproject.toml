@@ -8,7 +8,7 @@ select = ["E", "F", "W", "I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["assistente", "cadastros", "chat", "contrato", "function_app", "limites",
-                     "predicao", "push", "seguranca"]
+                     "predicao", "previsao_sensor", "push", "seguranca"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
@@ -18,7 +18,7 @@ python_files = ["test_*.py"]
 [tool.coverage.run]
 branch = true
 source = ["assistente", "cadastros", "chat", "contrato", "function_app", "limites", "predicao",
-          "push", "seguranca"]
+          "previsao_sensor", "push", "seguranca"]
 omit = ["test_*.py", "scripts/*"]
 
 [tool.coverage.report]

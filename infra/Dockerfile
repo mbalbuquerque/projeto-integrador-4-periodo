@@ -16,4 +16,5 @@ COPY requirements.txt /
 RUN pip install --no-cache-dir -r /requirements.txt
 
 COPY function_app.py contrato.py seguranca.py cadastros.py chat.py assistente.py limites.py \
-     predicao.py push.py modelo_risco.json base_chat.json openapi.json host.json /home/site/wwwroot/
+     predicao.py previsao_sensor.py push.py modelo_risco.json modelo_sensor.json base_chat.json \
+     openapi.json host.json /home/site/wwwroot/

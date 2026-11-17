@@ -150,6 +150,15 @@ class TestValidacao(unittest.TestCase):
         self.assertEqual(sem_veiculo["url"], "/alertas")
         self.assertIn("(outro)", sem_veiculo["corpo"])
 
+    def test_mensagem_do_motorista_abre_a_tela_dele(self):
+        leitura = {"deviceId": "dev-01", "temperatura": 20.0, "perfil": "manga",
+                   "status": "CRITICO"}
+        m = push.mensagem(leitura, "CAM-01", motorista=True)
+        self.assertEqual(m["titulo"], "Crítico: Veículo CAM-01")
+        self.assertEqual(m["url"], "/motorista")
+        self.assertIn("Toque para ver a carga.", m["corpo"])
+        self.assertEqual(m["tag"], "coldtrack-dev-01")
+
     def test_configurado(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertFalse(push.configurado())
@@ -464,6 +473,111 @@ class TestTransicao(BasePush):
         anterior = int((agora - timedelta(seconds=40)).timestamp())
         self.ler(20.0, medido=anterior)  # anterior a ela é a NORMAL de maio: piorou
         self.assertEqual(len(self.envio.call_args_list), 3)  # mas o intervalo segura
+
+
+class TestPushMotorista(BasePush):
+    """Motorista se inscreve e só recebe o push do veículo vinculado a ele."""
+
+    def setUp(self):
+        super().setUp()
+        usuarios = self.containers["usuarios"]
+        hash_ = usuarios.itens[0]["senhaHash"]
+        usuarios.itens += [
+            {"id": "moto1@a.com", "nome": "Moto 1", "perfil": "motorista", "veiculo": "CAM-01",
+             "empresaId": "E-A", "sessao": 0, "senhaHash": hash_},
+            {"id": "moto2@a.com", "nome": "Moto 2", "perfil": "motorista", "veiculo": "CT-002",
+             "empresaId": "E-A", "sessao": 0, "senhaHash": hash_},
+            {"id": "moto3@a.com", "nome": "Moto 3", "perfil": "motorista",
+             "empresaId": "E-A", "sessao": 0, "senhaHash": hash_},
+            {"id": "estranho@a.com", "nome": "Sem perfil", "perfil": "visitante",
+             "empresaId": "E-A", "sessao": 0, "senhaHash": hash_},
+        ]
+        self.containers["veiculos"].itens.append(
+            {"id": "E-A~CT-002", "empresaId": "E-A", "deviceId": "dev-livre",
+             "tipo": "Baú refrigerado", "perfil": "manga"})
+        self.relogio = int(time.time()) - 30
+        self.webpush = mock.patch.object(push, "webpush")
+        self.envio = self.webpush.start()
+
+    def tearDown(self):
+        self.webpush.stop()
+        super().tearDown()
+
+    def inscrever_todos(self):
+        usuarios = self.containers["usuarios"]
+        for email, sufixo in (("gestor@a.com", "g1"), ("operador@a.com", "o1"),
+                              ("moto1@a.com", "m1"), ("moto2@a.com", "m2"),
+                              ("moto3@a.com", "m3"), ("estranho@a.com", "x1"),
+                              ("gestor@b.com", "b1")):
+            usuarios._achar(email)["push"] = [inscricao(sufixo)]
+
+    def ler(self, temperatura):
+        self.relogio += 20
+        return self.chamar(TELEMETRIA, "POST", "/api/telemetria", {
+            "deviceId": "dev-01", "temperatura": temperatura, "umidade": 80.0, "rssi": -60,
+            "medidoEm": self.relogio}, headers={"x-device-key": self.chave_dev1})
+
+    def enviados(self):
+        """{sufixo do endpoint: url da notificação}."""
+        return {c.kwargs["subscription_info"]["endpoint"].rsplit("/", 1)[-1]:
+                json.loads(c.kwargs["data"])["url"] for c in self.envio.call_args_list}
+
+    def test_motorista_inscreve_e_remove(self):
+        status, corpo = self.chamar(INSCRICAO, "POST", "/api/push/inscricao", inscricao("m1"),
+                                    email="moto1@a.com")
+        self.assertEqual((status, corpo), (201, {"inscricoes": 1}))
+        self.assertEqual(len(self.usuario("moto1@a.com")["push"]), 1)
+        status, _ = self.chamar(INSCRICAO, "DELETE", "/api/push/inscricao",
+                                {"endpoint": inscricao("m1")["endpoint"]}, email="moto1@a.com")
+        self.assertEqual(status, 204)
+        self.assertEqual(self.usuario("moto1@a.com")["push"], [])
+
+    def test_so_o_motorista_do_veiculo_recebe_e_abre_a_tela_dele(self):
+        self.inscrever_todos()
+        status, corpo = self.ler(20.0)
+        self.assertEqual((status, corpo["status"]), (201, "CRITICO"))
+        # moto2 (outro veículo), moto3 (sem veículo), perfil desconhecido e empresa B: nada.
+        self.assertEqual(self.enviados(), {"g1": "/alertas?veiculo=CAM-01",
+                                           "o1": "/alertas?veiculo=CAM-01",
+                                           "m1": "/motorista"})
+
+    def test_troca_de_veiculo_troca_os_alertas(self):
+        self.inscrever_todos()
+        self.containers["usuarios"]._achar("moto1@a.com")["veiculo"] = "CT-002"
+        self.containers["usuarios"]._achar("moto2@a.com")["veiculo"] = "CAM-01"
+        self.ler(20.0)
+        self.assertEqual(self.enviados(), {"g1": "/alertas?veiculo=CAM-01",
+                                           "o1": "/alertas?veiculo=CAM-01",
+                                           "m2": "/motorista"})
+
+    def test_sensor_sem_veiculo_nao_avisa_motorista(self):
+        self.inscrever_todos()
+        self.containers["veiculos"].itens[:] = [
+            v for v in self.containers["veiculos"].itens if v["id"] != "E-A~CAM-01"]
+        self.ler(20.0)
+        self.assertEqual(sorted(self.enviados()), ["g1", "o1"])
+
+    def test_inscricao_expirada_do_motorista_sai(self):
+        self.inscrever_todos()
+
+        def responder(subscription_info, **_):
+            if subscription_info["endpoint"].endswith("/m1"):
+                raise pywebpush.WebPushException("x", response=RespostaFalsa(410))
+        self.envio.side_effect = responder
+        self.assertEqual(self.ler(20.0)[0], 201)
+        self.assertEqual(self.usuario("moto1@a.com")["push"], [])
+        self.assertEqual(len(self.usuario("gestor@a.com")["push"]), 1)
+
+    def test_recebe_push(self):
+        self.assertTrue(function_app.recebe_push({"perfil": "gestor"}, None))
+        self.assertTrue(function_app.recebe_push({"perfil": "operador"}, "CAM-01"))
+        self.assertTrue(function_app.recebe_push(
+            {"perfil": "motorista", "veiculo": "CAM-01"}, "CAM-01"))
+        self.assertFalse(function_app.recebe_push(
+            {"perfil": "motorista", "veiculo": "CAM-01"}, "CT-002"))
+        self.assertFalse(function_app.recebe_push({"perfil": "motorista"}, None))
+        self.assertFalse(function_app.recebe_push({"perfil": "motorista"}, "CAM-01"))
+        self.assertFalse(function_app.recebe_push({"veiculo": "CAM-01"}, "CAM-01"))
 
 
 if __name__ == "__main__":

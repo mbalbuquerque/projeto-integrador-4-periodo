@@ -24,7 +24,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 
 | tipo | como | usado por |
 |---|---|---|
-| chave do sensor | header `x-device-key: <chave>` | `POST /telemetria` |
+| chave do sensor | header `x-device-key: <chave>` | `POST /telemetria`, `POST /heartbeat` |
 | token do painel | header `Authorization: Bearer <token>` | rotas do painel, `POST /assistente` e `POST /sair` |
 | nenhuma | — | `POST /empresas`, `POST /login`, `GET /perfis`, `POST /chat`, `GET /docs`, `GET /openapi.json` |
 
@@ -46,9 +46,11 @@ acrescenta; os anteriores podem ter sido escritos pelo cliente).
 | `POST /login` | por conta: espera de 1 min a partir da 5ª senha errada seguida, dobrando até 15 min | `401` (mesma resposta de senha errada) |
 | `POST /empresas` | 5 cadastros por hora por IP (pedido inválido não conta) | `429` |
 | `POST /senha` | por conta, junto com o login: espera de 1 min a partir da 5ª senha atual errada seguida, dobrando até 15 min | `429` |
+| `DELETE /empresa` | 5 pedidos bem formados por hora por gestor; a senha errada conta na mesma espera do login | `429` |
 | `POST /chat` | 10 perguntas por minuto por IP; 2000 por dia no site todo | `429` |
 | `POST /assistente` | 15 perguntas por minuto por usuário; 300 por dia por empresa | `429` |
 | `GET /motorista` | 30 consultas por minuto por usuário (a tela consulta a cada 20 s) | `429` |
+| `POST /heartbeat` | 6 por minuto por sensor (a placa envia 3: um a cada 20 s) | `429` |
 
 As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 
@@ -63,8 +65,9 @@ As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 | `404` | item inexistente ou de outra empresa (as duas respondem igual) | `não encontrado` / `dispositivo não encontrado` |
 
 Perfis: `operador` (consulta), `gestor` (consulta e cadastra) e `motorista` (só `GET /motorista`,
-com o veículo vinculado à conta, e a própria conta: `GET /eu`, `POST /senha`, `POST /sair`; as
-demais rotas do painel respondem `403`).
+com o veículo vinculado à conta, a própria conta: `GET /eu`, `POST /senha`, `POST /sair`, e a
+inscrição nos alertas push: `POST/DELETE /push/inscricao`; as demais rotas do painel respondem
+`403`).
 
 ## Sensor
 
@@ -102,8 +105,41 @@ veículo usa `demonstrativo`). Dentro de `[min, max]` é `NORMAL`; até `margem`
 `ATENCAO`; além disso, `CRITICO`. `min` nulo significa sem limite inferior. O sensor usa a
 `faixa` devolvida para acender os LEDs.
 
-**Alerta push**: quando a leitura piora de faixa, os usuários inscritos da empresa recebem uma
-notificação (ver [Alertas push](#alertas-push-push)).
+**Alerta push**: quando a leitura piora de faixa, os operadores e gestores inscritos da empresa e
+os motoristas inscritos vinculados ao veículo do sensor recebem uma notificação (ver
+[Alertas push](#alertas-push-push)).
+
+### `POST /heartbeat`
+
+Acesso: chave do sensor (`x-device-key`), igual a `POST /telemetria`. Sinal de vida da placa
+no ciclo (20 s) em que ela não tem leitura válida para enviar; hoje o único motivo é o sensor
+em falha (leitura do DHT falhou).
+
+```json
+{"deviceId": "coldtrack-01", "motivo": "sensor_falha", "fw": "2026.11.17.2", "rssi": -61, "seq": 1532}
+```
+
+| campo | regra |
+|---|---|
+| `deviceId` | igual à telemetria |
+| `motivo` | `sensor_falha` |
+| `fw` | versão do firmware: 1 a 32 caracteres, letras, números, `.`, `_` ou `-` |
+| `rssi` | opcional; inteiro de -120 a 0, ou `null` |
+| `seq` | opcional; número de sequência da **última leitura** produzida pela placa (o heartbeat não gasta número, para não abrir lacuna falsa em `GET /leituras`) |
+
+| resposta | corpo |
+|---|---|
+| `200` | `{"sensor": "falha", "sensorFalhaDesde": "<ISO 8601>"}` |
+| `400` | erros de validação |
+| `401` | `dispositivo não registrado ou chave inválida` |
+| `429` | `muitos heartbeats seguidos. Tente de novo em 1 min.` |
+
+O heartbeat **não cria leitura**: leitura inválida nunca é gravada como válida. Ele grava no
+cadastro do dispositivo o horário do heartbeat (conta como último contato em
+`GET /dispositivos`), o motivo, a versão do firmware, o RSSI e `sensorFalhaDesde`, que é mantido
+desde o primeiro heartbeat da falha até chegar uma leitura válida (`POST /telemetria`), que
+encerra a falha. A placa não guarda heartbeat na fila offline: sinal de vida atrasado não diz
+nada sobre o agora.
 
 ## Acesso
 
@@ -180,6 +216,41 @@ aparelhos): sobe a versão da sessão e todo token já emitido passa a receber `
 Resposta: `204`. O painel deve chamar antes de apagar o token guardado no navegador.
 Também apaga as inscrições de alerta push do usuário.
 
+### `DELETE /empresa`
+
+Acesso: gestor, só da própria empresa (a do token). Exclui a empresa e **todos** os dados dela
+(direito de eliminação da LGPD, art. 18, VI). Não há como desfazer.
+
+```json
+{"confirmacao": "Transportes Exemplo", "senha": "********"}
+```
+
+| campo | regra |
+|---|---|
+| `confirmacao` | o nome da empresa como foi cadastrado, ou o código dela (`empresaId`, de `GET /eu`); maiúsculas e espaços nas pontas não importam |
+| `senha` | a senha atual do gestor (até 128 caracteres) |
+
+Ordem da exclusão: (1) sobe a versão da sessão e tira o push dos outros usuários, que saem na
+hora e não cadastram nada durante a exclusão; (2) sensores, cuja chave para de valer; (3) todas
+as leituras da empresa, inclusive de sensores removidos antes; (4) viagens; (5) veículos;
+(6) os outros usuários; (7) a empresa; (8) por último, o gestor que pediu. Item que já sumiu é
+ignorado.
+
+| resposta | corpo |
+|---|---|
+| `200` | `{"excluida": true, "removidos": {"dispositivos": 1, "leituras": 240, "viagens": 1, "veiculos": 1, "usuarios": 2, "empresas": 1}}` (contagem deste pedido) |
+| `202` | `{"excluida": false, "removidos": {...}, "mensagem": "exclusão em andamento: repita o mesmo pedido para continuar de onde parou."}` |
+| `400` | validação; `confirmacao: não confere com o nome da empresa`; `senha: senha atual incorreta` |
+| `401` | sem token ou sessão derrubada (inclusive depois da exclusão concluída) |
+| `403` | perfil diferente de gestor |
+| `429` | `muitos pedidos de exclusão. Tente de novo em 1 hora.` ou conta em espera por senha errada |
+
+Cada pedido trabalha até 120 s. Empresa com muitas leituras pode precisar de mais de um pedido:
+o `202` diz para repetir, e o pedido seguinte continua de onde o anterior parou. Um pedido que
+falhou no meio (erro do banco) também é repetido do mesmo jeito. Enquanto a empresa existe, a
+confirmação aceita o nome; depois que ela foi apagada (falha entre a empresa e o gestor), só o
+código. O log registra só o código da empresa e as contagens, sem e-mail nem nome.
+
 ## Alertas push (`/push`)
 
 Web Push padrão (VAPID): o navegador do usuário (Chrome/Edge/Firefox no Android ou no
@@ -190,8 +261,8 @@ assina cada envio com a chave privada VAPID e o serviço de push do navegador en
 | método e rota | acesso | corpo | resposta |
 |---|---|---|---|
 | `GET /push/chave` | público | — | `200 {"chave"}` (chave pública VAPID, base64url); `503` sem chaves configuradas |
-| `POST /push/inscricao` | operador, gestor | `PushSubscription.toJSON()`: `{"endpoint", "keys": {"p256dh", "auth"}}` | `201 {"inscricoes": n}` |
-| `DELETE /push/inscricao` | operador, gestor | `{"endpoint"}` | `204` (também quando o endpoint não era do usuário) |
+| `POST /push/inscricao` | operador, gestor, motorista | `PushSubscription.toJSON()`: `{"endpoint", "keys": {"p256dh", "auth"}}` | `201 {"inscricoes": n}` |
+| `DELETE /push/inscricao` | operador, gestor, motorista | `{"endpoint"}` | `204` (também quando o endpoint não era do usuário) |
 
 - `endpoint` precisa ser `https` em um serviço de push conhecido (`fcm.googleapis.com`,
   `*.push.services.mozilla.com`, `*.push.apple.com`, `*.notify.windows.com`); outro endereço dá
@@ -208,11 +279,15 @@ assina cada envio com a chave privada VAPID e o serviço de push do navegador en
 - no máximo 1 push por sensor e faixa a cada 10 min (contador no container `limites`), para a
   leitura que oscila na borda da faixa não virar uma notificação a cada 20 s;
 - leitura medida há mais de 30 min (fila offline do sensor chegando depois) não avisa;
-- vai para todas as inscrições dos usuários da **empresa do sensor**.
+- vai para as inscrições dos usuários da **empresa do sensor**: operador e gestor recebem de
+  todos os sensores da empresa; o **motorista só do sensor do veículo vinculado a ele** (campo
+  `veiculo` do cadastro, relido a cada leitura: trocar o veículo troca os alertas). Motorista
+  sem veículo, ou sensor que não está em veículo, não gera push para motorista.
 
 Conteúdo da notificação (JSON cifrado de ponta a ponta, só o navegador lê):
 `{"titulo", "corpo", "url", "tag", "status", "deviceId"}`, com `url` `/alertas?veiculo=<código>`
-(ou `/alertas` se o sensor não está em veículo). Falha no envio nunca muda a resposta da
+(ou `/alertas` se o sensor não está em veículo) para operador e gestor, e `/motorista` para o
+motorista (o painel de alertas não é do perfil dele). Falha no envio nunca muda a resposta da
 telemetria (fica só no log, sem endereço nem chaves); o serviço de push respondendo `404` ou
 `410` (inscrição expirada) faz a API apagar a inscrição.
 
@@ -318,7 +393,9 @@ do usuário, relido do banco a cada chamada, nunca da URL.
   "status": "NORMAL",
   "minutosSemLeitura": 1,
   "viagem": {"origem": "Petrolina - PE", "destino": "Suape - PE",
-             "carga": "Manga Tommy, 12 paletes", "inicio": "2026-11-10T06:00:00-03:00", "fim": null}
+             "carga": "Manga Tommy, 12 paletes", "inicio": "2026-11-10T06:00:00-03:00", "fim": null},
+  "sensor": "ok",
+  "sensorFalhaDesde": null
 }
 ```
 
@@ -330,6 +407,9 @@ do usuário, relido do banco a cada chamada, nunca da URL.
 - `minutosSemLeitura`: minutos inteiros desde a medição da última leitura; `null` sem leitura.
 - `viagem`: a viagem do veículo em curso (começou e não tem fim, ou o fim ainda não chegou); com
   mais de uma, a que começou por último. `null` quando não há.
+- `sensor` e `sensorFalhaDesde`: estado do sensor de temperatura, com a mesma regra de
+  `GET /dispositivos` (`falha` quando o contato mais recente foi um heartbeat `sensor_falha`).
+  `null` quando o veículo não tem sensor ou o sensor nunca falou.
 
 Erros: `401`; `403` para outro perfil; `404` `nenhum veículo vinculado a este motorista; fale com o
 gestor` (o veículo saiu da frota); `429` `muitas consultas seguidas. Tente de novo em 1 min.`
@@ -401,17 +481,67 @@ Atualizar o modelo: `cd analise && python exportar_modelo.py` (precisa de
 `dados/inmet_rota_horario.csv`, ver [`analise/README.md`](../analise/README.md)) e publicar a
 API com o novo `modelo_risco.json`.
 
+### `GET /predict/sensor?deviceId=<id>`
+
+Acesso: operador e gestor (com `deviceId` de um sensor da empresa do token); motorista (sempre o
+sensor do veículo vinculado a ele, `deviceId` ignorado).
+
+Temperatura do sensor prevista **10 min à frente** da última leitura, a partir das leituras dos
+últimos 20 min do próprio sensor. Modelo: regressão ridge de
+[`analise/sensor/modelo_previsao.py`](../analise/sensor/modelo_previsao.py), exportada em
+`cloud/function/modelo_sensor.json`; baseline: persistência (última leitura). Ficha do modelo:
+[`model-card.md`](model-card.md).
+
+Resposta `200`:
+
+```json
+{"deviceId": "coldtrack-01", "horizonteMin": 10,
+ "ultimaLeitura": {"medidoEm": "2026-11-17T06:17:05+00:00", "perfil": "demonstrativo", "temperatura": 32.8, "status": "CRITICO"},
+ "previsao": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
+ "baseline": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
+ "recomendada": "baseline", "antecipaExcursao": false, "motivo": null,
+ "modelo": {"versao": "sensor-ridge-10min-v1", "fonte": "ThingSpeak 3515173 (...)",
+            "treino": {"de", "ate", "amostras"}, "teste": {"de", "ate", "amostras"},
+            "maeModelo": 0.342, "maeBaseline": 0.3128, "rmseModelo": 0.4711, "rmseBaseline": 0.4941,
+            "superaBaseline": false, "usaLeiturasDoSensor": true}}
+```
+
+- `previsao`: valor do modelo; `baseline`: última leitura repetida. O `status` de cada uma é a
+  classificação no perfil de carga da última leitura.
+- `recomendada`: `modelo` ou `baseline`, a que teve menor MAE no teste temporal. É a que a tela
+  deve mostrar. Hoje é `baseline` (o modelo não superou a persistência).
+- `antecipaExcursao`: `true` quando a previsão recomendada cai num status pior que o da última
+  leitura.
+- `motivo`: `null`, ou `sem_leituras` (nada nos últimos 20 min), `sem_leitura_recente` (última
+  leitura há mais de 5 min; `previsao` e `baseline` saem `null`) ou `historico_insuficiente`
+  (menos de 10 min contínuos; só `previsao` sai `null`).
+
+Erros: `400` `informe ?deviceId=` (operador ou gestor sem o parâmetro); `401` sem token; `404`
+`dispositivo não encontrado` (sensor inexistente ou de outra empresa) ou `nenhum sensor
+vinculado a este motorista; fale com o gestor`; `429` mais de 30 chamadas por minuto do mesmo
+usuário; `503` `modelo indisponível`.
+
+Atualizar o modelo: `cd analise/sensor && python modelo_previsao.py --baixar` e publicar a API
+com o novo `modelo_sensor.json`.
+
 ## Sensores (`/dispositivos`)
 
 | método e rota | acesso | corpo | resposta |
 |---|---|---|---|
-| `GET /dispositivos` | operador, gestor | — | `200 {"dispositivos": [{"id", "descricao", "criadoEm"}]}` |
+| `GET /dispositivos` | operador, gestor | — | `200 {"dispositivos": [{"id", "descricao", "criadoEm", "ultimoContato", "online", "sensor", "sensorFalhaDesde"}]}` |
 | `POST /dispositivos` | gestor | `{"id", "descricao"}` | `201 {"id", "descricao", "criadoEm", "chave"}` |
 | `PUT /dispositivos/{id}` | gestor | — | `200 {"id", "chave"}`: gera chave nova, a anterior para de valer |
 | `DELETE /dispositivos/{id}` | gestor | — | `204` |
 
 - `id`: 3 a 40 caracteres, letras, números, `_` ou `-` (gravado em minúsculas);
   `descricao`: opcional, até 60.
+- `ultimoContato`: quando chegou o contato mais recente da placa, leitura ou heartbeat (o que for
+  mais novo); `null` se ela nunca enviou nada. `online`: contato há no máximo 120 s.
+- `sensor`: último estado conhecido do sensor de temperatura: `falha` quando o contato mais
+  recente foi um heartbeat `sensor_falha` (nenhuma leitura válida depois dele), `ok` quando foi
+  uma leitura válida, `null` quando a placa nunca falou. `sensorFalhaDesde`: início da falha
+  atual, `null` fora de falha. Lidos juntos: `online` com `falha` é placa viva com sensor em
+  falha; `online` falso é placa sem contato (desligada ou sem rede).
 - A `chave` aparece só na resposta do `POST` e do `PUT`; o banco guarda apenas o SHA-256.
 - Erros: `409` `o ID ... já está em uso; escolha outro`; `404` `dispositivo não encontrado`;
   `409` no `DELETE` quando um veículo usa o sensor.

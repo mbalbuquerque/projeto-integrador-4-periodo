@@ -14,8 +14,9 @@ de sensores da empresa dele, e some junto com o usuário.
     ]
 
 Quando uma leitura piora de faixa (NORMAL -> ATENCAO, NORMAL -> CRITICO ou
-ATENCAO -> CRITICO), a API manda um push para cada inscrição dos usuários da
-empresa. Configuração (app settings da Function App):
+ATENCAO -> CRITICO), a API manda um push para cada inscrição dos operadores e
+gestores da empresa e dos motoristas vinculados ao veículo daquele sensor.
+Configuração (app settings da Function App):
 
     VAPID_PUBLIC_KEY   chave pública (base64url, ponto P-256 não comprimido)
     VAPID_PRIVATE_KEY  chave privada (base64url, 32 bytes) - só no app setting
@@ -153,16 +154,25 @@ def piorou(anterior, atual):
 NOMES = {"ATENCAO": "Atenção", "CRITICO": "Crítico"}
 
 
-def mensagem(leitura, veiculo=None):
-    """Conteúdo da notificação (o service worker do painel monta o aviso com ele)."""
+def mensagem(leitura, veiculo=None, motorista=False):
+    """Conteúdo da notificação (o service worker do painel monta o aviso com ele).
+
+    Para o motorista, o toque abre a tela dele (/motorista): o painel de alertas é
+    só de operador e gestor.
+    """
     status = leitura["status"]
     carga = PERFIS_CARGA.get(leitura["perfil"], {}).get("nome", leitura["perfil"])
     onde = f"Veículo {veiculo}" if veiculo else f"Sensor {leitura['deviceId']}"
+    if motorista:
+        url, acao = "/motorista", "Toque para ver a carga."
+    else:
+        url = f"/alertas?veiculo={veiculo}" if veiculo else "/alertas"
+        acao = "Toque para ver os alertas."
     return {
         "titulo": f"{NOMES.get(status, status)}: {onde}",
         "corpo": (f"{leitura['temperatura']:.1f} °C, fora da faixa normal da carga "
-                  f"({carga}). Toque para ver os alertas."),
-        "url": f"/alertas?veiculo={veiculo}" if veiculo else "/alertas",
+                  f"({carga}). {acao}"),
+        "url": url,
         "tag": f"coldtrack-{leitura['deviceId']}",
         "status": status,
         "deviceId": leitura["deviceId"],

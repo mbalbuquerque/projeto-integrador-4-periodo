@@ -1,0 +1,21 @@
+# Uso: compilar o coldtrack.ino com o secrets.h do Wokwi (Wokwi-GUEST, DEVICE_ID e
+# DEVICE_KEY de teste) mais estas linhas:
+#   #define SIMULAR_API_STATUS 201 / SIMULAR_REINICIO_ENVIO_S 30
+# e rodar, na pasta com wokwi.toml e o diagram.json desta pasta:
+#   wokwi-cli --timeout 200000 --serial-log-file serial.log --scenario reinicio-no-envio.yaml .
+# SIMULAR_API_STATUS: o envio nao sai da placa (nada e escrito na API).
+# Leitura em curso num reinicio (issue 96). Depois de 30 s ligada, a placa
+# reinicia no meio do envio. Esperado: a leitura ja estava na fila (gravada
+# antes do envio); depois do boot ela sai com o mesmo seq e o mesmo medidoEm
+# (conferir no serial.log), e a sequencia segue sem buraco.
+name: Reinicio no meio do envio
+version: 1
+author: ColdTrack
+steps:
+  - wait-serial: "FILA: leitura guardada antes do envio (1 na fila)"
+  - wait-serial: "TESTE: reiniciando a placa no meio do envio."
+  - wait-serial: "COLDTRACK EDGE"
+  - wait-serial: "FILA: 1 leituras pendentes na flash."
+  - wait-serial: "reenviadas, 0 restantes."
+  - wait-serial: "CICLO: "
+  - wait-serial: "reenviadas, 0 restantes."
