@@ -131,8 +131,37 @@ void test_payload_com_seq() {
     PASS();
 }
 
+void test_heartbeat() {
+    TEST("montarHeartbeatCore com e sem seq/RSSI");
+    char buffer[200];
+    montarHeartbeatCore(buffer, sizeof(buffer), "coldtrack-01", "sensor_falha",
+                        "2026.11.17.2", -61, 42);
+    ASSERT(std::string(buffer) ==
+           "{\"deviceId\":\"coldtrack-01\",\"motivo\":\"sensor_falha\","
+           "\"fw\":\"2026.11.17.2\",\"rssi\":-61,\"seq\":42}");
+
+    // Simulador (RSSI >= 0) e placa que ainda nao leu nada (seq 0).
+    montarHeartbeatCore(buffer, sizeof(buffer), "coldtrack-01", "sensor_falha",
+                        "2026.11.17.2", 0, 0);
+    ASSERT(std::string(buffer) ==
+           "{\"deviceId\":\"coldtrack-01\",\"motivo\":\"sensor_falha\","
+           "\"fw\":\"2026.11.17.2\",\"rssi\":null}");
+    PASS();
+}
+
+void test_url_do_heartbeat() {
+    TEST("urlHeartbeatCore troca /telemetria por /heartbeat");
+    ASSERT(urlHeartbeatCore("https://x.azurewebsites.net/api/telemetria") ==
+           "https://x.azurewebsites.net/api/heartbeat");
+    ASSERT(urlHeartbeatCore("https://x/api/telemetria?code=1") == "https://x/api/heartbeat?code=1");
+    ASSERT(urlHeartbeatCore("https://x/api/outra").empty());
+    PASS();
+}
+
 int main() {
     std::cout << "=== Executando Testes Unitarios do Firmware (C++) ===\n";
+    test_heartbeat();
+    test_url_do_heartbeat();
     test_payload_com_rssi_negativo_e_medido_em();
     test_payload_com_rssi_positivo_vira_null();
     test_payload_com_seq();

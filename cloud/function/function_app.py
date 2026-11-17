@@ -2,6 +2,7 @@
 
 Dispositivo (chave própria do dispositivo no header `x-device-key`):
   POST /api/telemetria          leitura do ESP32: valida, classifica e grava
+  POST /api/heartbeat           sinal de vida sem leitura válida (sensor em falha)
 
 Público:
   POST /api/empresas            cadastro de empresa nova + primeiro gestor
@@ -21,7 +22,8 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   GET  /api/motorista           leitura, faixa e viagem do veículo vinculado (motorista)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
   GET  /api/predict             risco de passar de 30 °C por mês e hora (operador, gestor)
-  GET  /api/dispositivos        sensores da empresa, com último contato e online (operador, gestor)
+  GET  /api/dispositivos        sensores da empresa, com último contato, online e estado do sensor
+                                (operador, gestor)
   POST/PUT/DELETE /api/dispositivos[/{id}]  registra, troca a chave, remove (gestor)
   GET  /api/veiculos            frota                                   (operador, gestor)
   POST/PUT/DELETE /api/veiculos[/{id}]                                   (gestor)
@@ -78,6 +80,7 @@ from contrato import (
     lacunas_de_sequencia,
     mesma_leitura,
     validar,
+    validar_heartbeat,
 )
 from limites import Limites, ip_do_cliente
 from seguranca import (
@@ -110,8 +113,13 @@ MOTORISTA = ("motorista",)
 CONTA = TODOS + MOTORISTA
 SEP = "~"
 
-# Sensor sem leitura recebida há mais que isso aparece como offline (6 ciclos de 20 s).
+# Sensor sem contato (leitura ou heartbeat) há mais que isso aparece como offline
+# (6 ciclos de 20 s).
 LIMITE_ONLINE_S = 120
+
+# Heartbeat: a placa manda um a cada 20 s enquanto o sensor falha (3 por minuto);
+# 6 por minuto por dispositivo deixa folga para reenvio e segura um laço.
+HEARTBEAT_POR_MINUTO = 6
 
 # Tela do motorista: última leitura mais velha que isso vira SEM_LEITURA (15 ciclos de 20 s).
 LIMITE_SINAL_MOTORISTA_S = 5 * 60
@@ -242,21 +250,33 @@ def id_interno(empresa, codigo):
     return f"{empresa}{SEP}{codigo}"
 
 
-def contato_do_dispositivo(device_id):
-    """Quando chegou a última leitura do sensor e se ele conta como online."""
+def ultima_leitura_recebida(device_id):
+    """Quando chegou (recebidoEm) a leitura mais recente do sensor, ou None."""
     itens = list(container().query_items(
         "SELECT TOP 1 c.recebidoEm FROM c WHERE c.deviceId = @d ORDER BY c.medidoEm DESC",
         parameters=[{"name": "@d", "value": device_id}],
         partition_key=device_id))
-    ultimo = itens[0].get("recebidoEm") if itens else None
-    online = False
-    if ultimo:
-        try:
-            atraso = datetime.now(timezone.utc) - datetime.fromisoformat(ultimo)
-            online = atraso.total_seconds() <= LIMITE_ONLINE_S
-        except ValueError:
-            online = False
-    return {"ultimoContato": ultimo, "online": online}
+    return itens[0].get("recebidoEm") if itens else None
+
+
+def estado_do_dispositivo(doc, leitura_recebida):
+    """Último contato, online e estado do sensor, a partir do cadastro e da última leitura.
+
+    Contato é a leitura ou o heartbeat, o que chegou por último. O sensor está em
+    falha quando o heartbeat mais recente veio com motivo `sensor_falha` e nenhuma
+    leitura válida chegou depois dele; `sensor` é None se a placa nunca falou.
+    """
+    lido = _instante(leitura_recebida) if leitura_recebida else None
+    batido = _instante(doc.get("heartbeatEm")) if doc.get("heartbeatEm") else None
+    heartbeat_mais_novo = batido is not None and (lido is None or batido > lido)
+    ultimo, quando = ((doc["heartbeatEm"], batido) if heartbeat_mais_novo
+                      else (leitura_recebida, lido))
+    online = (quando is not None
+              and (datetime.now(timezone.utc) - quando).total_seconds() <= LIMITE_ONLINE_S)
+    falha = heartbeat_mais_novo and doc.get("heartbeatMotivo") == "sensor_falha"
+    sensor = "falha" if falha else ("ok" if lido is not None else None)
+    return {"ultimoContato": ultimo, "online": online, "sensor": sensor,
+            "sensorFalhaDesde": doc.get("sensorFalhaDesde") if falha else None}
 
 
 def id_externo(doc):
@@ -337,6 +357,55 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
     # A faixa volta na resposta: o sensor acende o LED certo para a carga do veículo.
     return resposta({"id": leitura["id"], "status": leitura["status"],
                      "perfil": perfil, "faixa": faixa(perfil)}, 201)
+
+
+@app.route(route="heartbeat", methods=["POST"])
+def heartbeat(req: func.HttpRequest) -> func.HttpResponse:
+    """Sinal de vida da placa sem leitura válida (hoje: sensor em falha).
+
+    Não cria leitura (leitura inválida nunca é gravada como válida). Atualiza no
+    cadastro do dispositivo o último heartbeat e desde quando o sensor falha, para
+    o painel separar "placa viva com sensor em falha" de "placa sem rede".
+    """
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+
+    erros = validar_heartbeat(dados)
+    if erros:
+        logging.warning("heartbeat rejeitado: %s", erros)
+        return resposta({"erros": erros}, 400)
+
+    dispositivo = ler("dispositivos", dados["deviceId"].lower())
+    if dispositivo is None or not conferir_chave(req.headers.get("x-device-key"),
+                                                 dispositivo.get("chaveHash")):
+        logging.warning("heartbeat sem chave válida para %s", dados["deviceId"])
+        return resposta({"erros": ["dispositivo não registrado ou chave inválida"]}, 401)
+
+    if not LIMITES.permitir(f"heartbeat:{dispositivo['id']}", HEARTBEAT_POR_MINUTO,
+                            limites.MINUTO):
+        return resposta({"erros": ["muitos heartbeats seguidos. Tente de novo em 1 min."]}, 429)
+
+    agora = datetime.now(timezone.utc)
+    lido = _instante(ultima_leitura_recebida(dispositivo["id"]))
+    desde = _instante(dispositivo.get("sensorFalhaDesde"))
+    # A falha continua enquanto nenhuma leitura válida chegou depois do início dela;
+    # leitura válida no meio encerra a falha anterior e esta começa agora.
+    if desde is None or (lido is not None and lido >= desde):
+        desde = agora
+
+    operacoes = [
+        {"op": "set", "path": "/heartbeatEm", "value": agora.isoformat()},
+        {"op": "set", "path": "/heartbeatMotivo", "value": dados["motivo"]},
+        {"op": "set", "path": "/sensorFalhaDesde", "value": desde.isoformat()},
+        {"op": "set", "path": "/fw", "value": dados["fw"]},
+        {"op": "set", "path": "/heartbeatRssi", "value": dados.get("rssi")},
+    ]
+    if "seq" in dados:
+        operacoes.append({"op": "set", "path": "/ultimaSeq", "value": dados["seq"]})
+    container("dispositivos").patch_item(item=dispositivo["id"], partition_key=dispositivo["id"],
+                                         patch_operations=operacoes)
+    return resposta({"sensor": "falha", "sensorFalhaDesde": desde.isoformat()}, 200)
 
 
 # ------------------------------------------------------------ alertas push
@@ -995,7 +1064,11 @@ def motorista(req: func.HttpRequest) -> func.HttpResponse:
 
     perfil = veiculo.get("perfil", PERFIL_PADRAO)
     agora = datetime.now(timezone.utc)
-    ultima = consultar_leituras(veiculo["deviceId"], empresa, 1) if veiculo.get("deviceId") else []
+    device = veiculo.get("deviceId")
+    ultima = consultar_leituras(device, empresa, 1) if device else []
+    disp = ler("dispositivos", device) if device else None
+    estado = (estado_do_dispositivo(disp, ultima[0].get("recebidoEm") if ultima else None)
+              if disp is not None and disp.get("empresaId") == empresa else {})
     leitura, minutos, status = None, None, "SEM_LEITURA"
     if ultima:
         u = ultima[0]
@@ -1015,6 +1088,8 @@ def motorista(req: func.HttpRequest) -> func.HttpResponse:
         "status": status,
         "minutosSemLeitura": minutos,
         "viagem": viagem_ativa(empresa, codigo, agora),
+        "sensor": estado.get("sensor"),
+        "sensorFalhaDesde": estado.get("sensorFalhaDesde"),
     })
 
 
@@ -1052,9 +1127,13 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         usuario, erro = autorizar(req, TODOS)
         if erro:
             return erro
-        itens = lista("dispositivos", usuario["empresaId"], campos)
+        itens = lista("dispositivos", usuario["empresaId"],
+                      campos + ", c.heartbeatEm, c.heartbeatMotivo, c.sensorFalhaDesde")
         for item in itens:
-            item.update(contato_do_dispositivo(item["id"]))
+            estado = estado_do_dispositivo(item, ultima_leitura_recebida(item["id"]))
+            for interno in ("heartbeatEm", "heartbeatMotivo"):
+                item.pop(interno, None)
+            item.update(estado)
         return resposta({"dispositivos": itens})
 
     gestor, erro = autorizar(req, GESTOR)
