@@ -26,7 +26,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | CLD-01 | API publicada em HTTPS, configuração por variáveis de ambiente | `cloud/function`, `infra/main.bicep` | Function App com `httpsOnly`; `local.settings.example.json` | Atendido |
 | CLD-02 | Segredos fora do código | `secrets.example.h`, app settings | `secrets.h` fora do Git | Atendido |
 | CLD-03 | Dockerfile | `infra/Dockerfile` | Imagem oficial de Azure Functions; build executado no CI a cada push | Atendido |
-| CLD-04 | Deploy automático pelo CI | `.github/workflows/publicar-api.yml` | Login OIDC, publica a branch `everson` | Atendido |
+| CLD-04 | Deploy automático pelo CI | `.github/workflows/publicar-api.yml` (back), `publicar-site.yml` (front) | Login OIDC; publica a cada merge na `main` | Atendido |
 | CLD-06 | Logs centralizados | `infra/main.bicep` | Application Insights ligado a um workspace do Log Analytics, retenção de 90 dias | Atendido |
 | CLD-07 | Contêiner com reinício automático e verificação de saúde | `infra/docker-compose.yml`, `.github/workflows/compose-zap.yml` | Compose com a API e o emulador do Cosmos sobe no CI; healthcheck `healthy`; queda do processo volta a responder em 4,4 s (medido no CI, detalhes em `infra/README.md`) | Atendido |
 | CLD-08 | `.env.example` na raiz | `.env.example` | Nomes das variáveis, sem valores reais | Atendido |

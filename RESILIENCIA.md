@@ -21,9 +21,9 @@ resultado foi observado e registrado aqui.
 
 | Teste | Critério | Situação |
 |---|---|---|
-| F1 Queda de rede (60 s) | Reconecta em até 30 s; sem lacuna na sequência | A executar e registrar |
+| F1 Queda de rede (60 s) | Reconecta em até 30 s; sem lacuna na sequência | Aprovado na placa física (17/11) |
 | F3 Falha de sensor | Leitura marcada inválida, alerta visível, nada gravado como válido | A executar e registrar |
-| F2, F4, F5, F6 | Ver prévia técnica | Entrega final |
+| F2, F4, F5, F6 | Ver prévia técnica | F5 observado na placa física (reenvio após timeout respondido como `duplicada: true`); F2, F4 e F6 na entrega final |
 
 Resultados de F1 e F3 (data, procedimento, tempo medido) devem ser anotados abaixo depois da
 execução. Enquanto estiverem em branco, valem como não evidenciados.
@@ -32,5 +32,5 @@ execução. Enquanto estiverem em branco, valem como não evidenciados.
 
 | Teste | Data | Procedimento | Resultado medido |
 |---|---|---|---|
-| F1 | | | |
+| F1 | 17/11/2026 | Placa física (ESP32-C3, firmware 2026.11.16.2) no hotspot de celular "AAA" (2.4 GHz, WPA2/WPA3); hotspot desligado às 00:31:07 e religado após cerca de 2,5 min; log serial com horário | Queda detectada em 00:31:07; leituras `seq` 120 a 125 guardadas na fila em flash; reconectada às 00:34:07, menos de 30 s após a rede voltar; as 6 leituras foram reenviadas em ordem em 35 s; `GET /api/leituras` com `seq` 89 a 128 contínua e `lacunas: []` |
 | F3 | | | |
