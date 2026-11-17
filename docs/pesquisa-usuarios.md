@@ -14,6 +14,9 @@ públicas**, que não conta para a meta acima:
   (não são participantes reais), seguindo o roteiro abaixo, cada resposta com sua fonte.
 - [`ux/persona-jornada-proposta.md`](ux/persona-jornada-proposta.md): persona, jornada, proposta
   de valor e indicadores do painel ligados a decisões; provisório até a validação.
+- [`ux/roteiro-pesquisa-real.md`](ux/roteiro-pesquisa-real.md): roteiro para a coleta com pessoas
+  reais (perguntas por perfil, versão WhatsApp, campos do Forms, SUS) e
+  [`ux/respostas-pesquisa-real.md`](ux/respostas-pesquisa-real.md), o registro, vazio até haver respostas.
 
 A validação com usuários reais (≥ 5 entrevistas ou ≥ 20 respostas) segue pendente para a
 entrega final.
