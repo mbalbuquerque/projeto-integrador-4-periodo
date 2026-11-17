@@ -46,6 +46,7 @@ acrescenta; os anteriores podem ter sido escritos pelo cliente).
 | `POST /login` | por conta: espera de 1 min a partir da 5ª senha errada seguida, dobrando até 15 min | `401` (mesma resposta de senha errada) |
 | `POST /empresas` | 5 cadastros por hora por IP (pedido inválido não conta) | `429` |
 | `POST /senha` | por conta, junto com o login: espera de 1 min a partir da 5ª senha atual errada seguida, dobrando até 15 min | `429` |
+| `DELETE /empresa` | 5 pedidos bem formados por hora por gestor; a senha errada conta na mesma espera do login | `429` |
 | `POST /chat` | 10 perguntas por minuto por IP; 2000 por dia no site todo | `429` |
 | `POST /assistente` | 15 perguntas por minuto por usuário; 300 por dia por empresa | `429` |
 | `GET /motorista` | 30 consultas por minuto por usuário (a tela consulta a cada 20 s) | `429` |
@@ -181,6 +182,41 @@ Acesso: operador, gestor, motorista. Sem corpo. Encerra **todas** as sessões do
 aparelhos): sobe a versão da sessão e todo token já emitido passa a receber `401`.
 Resposta: `204`. O painel deve chamar antes de apagar o token guardado no navegador.
 Também apaga as inscrições de alerta push do usuário.
+
+### `DELETE /empresa`
+
+Acesso: gestor, só da própria empresa (a do token). Exclui a empresa e **todos** os dados dela
+(direito de eliminação da LGPD, art. 18, VI). Não há como desfazer.
+
+```json
+{"confirmacao": "Transportes Exemplo", "senha": "********"}
+```
+
+| campo | regra |
+|---|---|
+| `confirmacao` | o nome da empresa como foi cadastrado, ou o código dela (`empresaId`, de `GET /eu`); maiúsculas e espaços nas pontas não importam |
+| `senha` | a senha atual do gestor (até 128 caracteres) |
+
+Ordem da exclusão: (1) sobe a versão da sessão e tira o push dos outros usuários, que saem na
+hora e não cadastram nada durante a exclusão; (2) sensores, cuja chave para de valer; (3) todas
+as leituras da empresa, inclusive de sensores removidos antes; (4) viagens; (5) veículos;
+(6) os outros usuários; (7) a empresa; (8) por último, o gestor que pediu. Item que já sumiu é
+ignorado.
+
+| resposta | corpo |
+|---|---|
+| `200` | `{"excluida": true, "removidos": {"dispositivos": 1, "leituras": 240, "viagens": 1, "veiculos": 1, "usuarios": 2, "empresas": 1}}` (contagem deste pedido) |
+| `202` | `{"excluida": false, "removidos": {...}, "mensagem": "exclusão em andamento: repita o mesmo pedido para continuar de onde parou."}` |
+| `400` | validação; `confirmacao: não confere com o nome da empresa`; `senha: senha atual incorreta` |
+| `401` | sem token ou sessão derrubada (inclusive depois da exclusão concluída) |
+| `403` | perfil diferente de gestor |
+| `429` | `muitos pedidos de exclusão. Tente de novo em 1 hora.` ou conta em espera por senha errada |
+
+Cada pedido trabalha até 120 s. Empresa com muitas leituras pode precisar de mais de um pedido:
+o `202` diz para repetir, e o pedido seguinte continua de onde o anterior parou. Um pedido que
+falhou no meio (erro do banco) também é repetido do mesmo jeito. Enquanto a empresa existe, a
+confirmação aceita o nome; depois que ela foi apagada (falha entre a empresa e o gestor), só o
+código. O log registra só o código da empresa e as contagens, sem e-mail nem nome.
 
 ## Alertas push (`/push`)
 
