@@ -2,7 +2,15 @@
 
 import unittest
 
-from contrato import classificar, faixa, filtros_de_leitura, id_leitura, mesma_leitura, validar
+from contrato import (
+    classificar,
+    faixa,
+    filtros_de_leitura,
+    id_leitura,
+    lacunas_de_sequencia,
+    mesma_leitura,
+    validar,
+)
 
 VALIDO = {"deviceId": "coldtrack-01", "temperatura": 12.4, "umidade": 81.0, "rssi": -58}
 
@@ -53,6 +61,49 @@ class TestValidar(unittest.TestCase):
 
     def test_campo_extra(self):
         self.assertTrue(validar({**VALIDO, "senha": "x"}))
+
+
+class TestSeq(unittest.TestCase):
+    def test_ausente_continua_valido(self):
+        # Placa com firmware antigo não manda seq.
+        self.assertEqual(validar(VALIDO), [])
+
+    def test_valido(self):
+        self.assertEqual(validar({**VALIDO, "seq": 1}), [])
+        self.assertEqual(validar({**VALIDO, "seq": 2**32 - 1}), [])
+
+    def test_invalido(self):
+        for valor in (0, -1, 2**32, 1.5, "7", True, None):
+            with self.subTest(seq=valor):
+                self.assertIn("seq: inteiro de 1 a 4294967295", validar({**VALIDO, "seq": valor}))
+
+
+class TestLacunas(unittest.TestCase):
+    @staticmethod
+    def leitura(seq, minuto):
+        item = {"medidoEm": f"2026-11-16T12:{minuto:02d}:00+00:00"}
+        if seq is not None:
+            item["seq"] = seq
+        return item
+
+    def test_sem_lacuna(self):
+        itens = [self.leitura(s, s) for s in (12, 11, 10)]
+        self.assertEqual(lacunas_de_sequencia(itens), [])
+
+    def test_lacuna_no_meio(self):
+        # Ordem da consulta: da mais nova para a mais antiga.
+        itens = [self.leitura(15, 9), self.leitura(14, 8), self.leitura(11, 5), self.leitura(10, 4)]
+        self.assertEqual(lacunas_de_sequencia(itens), [{"de": 12, "ate": 13, "faltam": 2}])
+
+    def test_contador_zerado_nao_e_lacuna(self):
+        itens = [self.leitura(40, 1), self.leitura(41, 2), self.leitura(1, 3), self.leitura(3, 4)]
+        self.assertEqual(lacunas_de_sequencia(itens), [{"de": 2, "ate": 2, "faltam": 1}])
+
+    def test_leitura_sem_seq_ignorada(self):
+        itens = [self.leitura(None, 1), self.leitura(5, 2),
+                 self.leitura(None, 3), self.leitura(6, 4)]
+        self.assertEqual(lacunas_de_sequencia(itens), [])
+        self.assertEqual(lacunas_de_sequencia([]), [])
 
 
 class TestMedidoEm(unittest.TestCase):
@@ -152,6 +203,11 @@ class TestLeituraDuplicada(unittest.TestCase):
         self.assertFalse(mesma_leitura(gravada, {**gravada, "temperatura": 12.0}))
         self.assertFalse(mesma_leitura(gravada, {**gravada, "umidade": 70.0}))
         self.assertFalse(mesma_leitura(gravada, {**gravada, "rssi": -60}))
+
+    def test_seq_diferente_nao_e_reenvio(self):
+        gravada = {"temperatura": 30.2, "umidade": 66.0, "rssi": -48, "seq": 7}
+        self.assertTrue(mesma_leitura(gravada, dict(gravada)))
+        self.assertFalse(mesma_leitura(gravada, {**gravada, "seq": 8}))
 
 
 if __name__ == "__main__":

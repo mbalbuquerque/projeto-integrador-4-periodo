@@ -108,6 +108,157 @@ máquina, rodar a API local (`func start`) e apontar o painel para ela.
 - A URL da API (`func-coldtrack-7319.azurewebsites.net`) está gravada na memória das placas
   físicas. Renomear a Function App deixa as placas sem destino.
 
+## Custo mensal estimado
+
+Estimativa feita em 16/11/2026 com os recursos reais do grupo `rg-coldtrack`, o uso dos
+últimos 30 dias (17/10 a 16/11/2026) e os preços públicos da Azure Retail Prices API
+(região `brazilsouth`, moeda USD). Cotação usada: **US$ 1 = R$ 5,7897** (AwesomeAPI, compra,
+16/11/2026). É uma estimativa de ordem de grandeza, não uma fatura.
+
+### Recursos e SKUs encontrados
+
+| recurso | SKU / configuração real |
+|---|---|
+| Function App | Flex Consumption (FC1), Python 3.11, 2048 MB, sem instância sempre pronta |
+| Cosmos DB | conta com free tier, vazão provisionada de 1000 RU/s compartilhada no banco (não é serverless), uma região |
+| Storage da função e do painel | 2 contas StorageV2, Standard_LRS, camada Hot |
+| Application Insights | baseado em workspace do Log Analytics, retenção de 90 dias |
+| Azure OpenAI | S0; `gpt-4.1-mini` e `text-embedding-3-small`, GlobalStandard |
+
+### Uso medido nos últimos 30 dias (piloto)
+
+Medido com `az monitor metrics list` (Function, Cosmos, Storage, Azure OpenAI) e com consulta
+à tabela `Usage` do workspace (Log Analytics):
+
+| item | medido |
+|---|---|
+| Execuções da Function | 3.039 (3.535 GB-s de execução) |
+| Cosmos DB | 43.628 requisições, 15.267 RU no mês; 3,4 MB de dados |
+| Storage (função + painel) | 23.167 transações; 76 MB armazenados |
+| Log Analytics | 68,8 MB ingeridos (traces 52 MB, métricas 11 MB, contadores 2 MB, requisições 4 MB) |
+| Azure OpenAI | 183 requisições; 171 mil tokens de entrada, 2,5 mil de saída |
+
+`az consumption usage list` respondeu, mas com custo e quantidade vazios para todos os itens
+(a assinatura Azure for Students não expõe valores de cobrança por essa rota). Por isso não há
+comparação com fatura real: os valores abaixo são calculados, não lidos da cobrança.
+
+### Preços unitários usados (USD, Brazil South)
+
+| item | preço | franquia gratuita |
+|---|---|---|
+| Flex Consumption, execução sob demanda | 0,000037 por GB-s | 100.000 GB-s por mês |
+| Flex Consumption, execuções | 0,40 por milhão | 250.000 por mês |
+| Cosmos DB provisionado | 0,012 por 100 RU/s por hora | free tier: 1000 RU/s e 25 GB |
+| Cosmos DB armazenamento | 0,375 por GB por mês | (dentro do free tier) |
+| Cosmos DB serverless (alternativa) | 0,375 por milhão de RU | nenhuma |
+| Blob Hot LRS, armazenamento | 0,0326 por GB por mês | nenhuma |
+| Blob Hot LRS, leitura / escrita | 0,0056 / 0,07 por 10 mil operações | nenhuma |
+| Log Analytics, ingestão | 4,60 por GB | 5 GB por mês |
+| `gpt-4.1-mini` GlobalStandard | entrada 0,0004 e saída 0,0016 por mil tokens | nenhuma |
+| `text-embedding-3-small` | não retornado pela API para a região; preço de tabela global na ordem de US$ 0,02 por milhão de tokens, não conferido na API (desprezível aqui) | nenhuma |
+
+### Hoje (piloto)
+
+| recurso | SKU | uso (30 dias) | US$/mês | R$/mês |
+|---|---|---|---|---|
+| Function App | Flex Consumption | 3.039 execuções; 3.535 GB-s | 0,00 (dentro da franquia) | 0,00 |
+| Cosmos DB | free tier, 1000 RU/s | 15.267 RU; 3,4 MB | 0,00 (free tier) | 0,00 |
+| Storage (2 contas) | Standard_LRS Hot | 76 MB; 23 mil transações | 0,02 | 0,09 |
+| Application Insights / Log Analytics | workspace, 90 dias | 0,069 GB ingeridos | 0,00 (menos de 5 GB) | 0,00 |
+| Azure OpenAI | gpt-4.1-mini + embedding | 171 mil tokens de entrada, 2,5 mil de saída | 0,07 | 0,42 |
+| **Total** | | | **cerca de 0,09** | **cerca de 0,50** |
+
+O custo do piloto é praticamente zero porque o uso cabe nas franquias da Function, do free tier
+do Cosmos e dos 5 GB do Log Analytics. O gasto real é o do Azure OpenAI, e sai do crédito da
+assinatura.
+
+### Uma transportadora com 10 caminhões
+
+Premissas (todas declaradas, nenhuma medida em campo):
+
+- 10 sensores, um por caminhão, ligados 24 h por dia, 30 dias, uma leitura a cada 20 s:
+  10 x 129.600 = **1.296.000 chamadas** a `POST /telemetria` por mês (sem perdas nem reenvio).
+- Painel: 5 usuários com a tela aberta 8 h por dia, 22 dias, atualizando a cada 20 s, o que
+  soma cerca de 300 mil chamadas. Total de **cerca de 1,6 milhão de execuções** por mês.
+- Consumo da Function e volume de logs por execução iguais à média medida no piloto
+  (1,16 GB-s e 22,6 KB por execução). É uma estimativa conservadora: o piloto inclui chamadas
+  longas de IA e testes, e a telemetria é mais curta, então o valor real tende a ser menor.
+- Cosmos: cerca de 12 RU por telemetria (leitura do sensor, consulta do veículo e gravação),
+  16 milhões de RU por mês, média de 6 RU/s, muito abaixo dos 1000 RU/s. Cada leitura ocupa
+  cerca de 0,5 a 1 KB com índice, ou seja, cerca de 1 GB novo por mês; o container `leituras`
+  não tem TTL, então os 25 GB do free tier duram mais de 2 anos. O valor de 12 RU é uma
+  suposição, não foi medido.
+- Storage: transações proporcionais às execuções (8,5 milhões por mês), todas a preço de leitura.
+- Azure OpenAI: 200 perguntas por dia ao assistente do painel (6.000 por mês, abaixo do teto de
+  300 por dia por empresa), com 5.000 tokens de entrada e 300 de saída cada. O chat do site
+  fica no nível do piloto.
+- Os 5 GB gratuitos do Log Analytics são por assinatura (outros usos dela os consomem) e a
+  retenção de 90 dias das tabelas do Application Insights não tem cobrança extra.
+
+| recurso | SKU | uso estimado | US$/mês | R$/mês |
+|---|---|---|---|---|
+| Function App | Flex Consumption | 1,6 milhão de execuções (US$ 0,54 acima da franquia) e 1,86 milhão de GB-s (US$ 65,16 acima da franquia) | 65,70 | 380 |
+| Cosmos DB | free tier, 1000 RU/s | 16 milhões de RU; cerca de 1 GB | 0,00 | 0 |
+| Storage (2 contas) | Standard_LRS Hot | 8,5 milhões de transações; menos de 1 GB | 4,78 | 28 |
+| Application Insights / Log Analytics | workspace, 90 dias | 36,2 GB ingeridos (31,2 GB acima da franquia) | 143,62 | 832 |
+| Azure OpenAI | gpt-4.1-mini + embedding | 30 milhões de tokens de entrada, 1,8 milhão de saída | 14,88 | 86 |
+| **Total** | | | **cerca de 229** | **cerca de 1.326** |
+
+Leitura do resultado:
+
+- **Log Analytics é o maior item e é evitável.** No piloto, mais de 99% dos traces são de
+  nível Information (linhas de início e fim de cada execução do host). Subir o nível de log da
+  Function para Warning (`logging.logLevel` no `host.json`) tira cerca de 60% do volume
+  ingerido (de 68,8 para 27,1 MB no piloto), o que leva o item a cerca de US$ 43 e o total a
+  cerca de US$ 128 (R$ 741). Não foi aplicado: mexer em `cloud/function/` na `everson`
+  publica a API em produção.
+- **Function:** o valor usa a média medida e funciona como teto; com execuções curtas de
+  telemetria o gasto deve ficar abaixo. Medir com sensores ligados por alguns dias melhora a
+  estimativa.
+- **Cosmos sem free tier:** o free tier vale para uma conta por assinatura. Em outra assinatura,
+  1000 RU/s provisionados custam 10 x 0,012 x 730 h = US$ 87,60 por mês (R$ 507). Como o uso
+  estimado é de 6 RU/s, o Cosmos serverless (US$ 0,375 por milhão de RU, cerca de US$ 6 por
+  mês neste volume) seria bem mais barato, mas exige criar outra conta: o modo da conta não
+  muda depois de criada.
+- **Azure OpenAI:** os tetos de uso da API (ver `docs/seguranca.md`) limitam o gasto: 300
+  perguntas por dia por empresa no assistente e 2000 por dia no chat do site. A cota de
+  tokens por minuto dos deploys limita a vazão, não o gasto.
+- Fora desta estimativa: tráfego de saída (a API devolve JSON pequeno e a Azure dá 100 GB
+  gratuitos por mês), domínio próprio, suporte pago, backup além do periódico padrão do
+  Cosmos e impostos (IOF e outros, que se somam na fatura em reais).
+- O crédito do Azure for Students cobre o piloto. Para uso real por uma transportadora é
+  necessária assinatura paga, e os valores acima passam a ser cobrados.
+
+## Contêiner e compose (testado no CI)
+
+`infra/Dockerfile` empacota a API (imagem oficial de Azure Functions, Python 3.11) e
+`infra/docker-compose.yml` sobe a API junto com o emulador oficial do Cosmos DB para Linux
+(`mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview`, em HTTP). Para
+desenvolvimento: `cp .env.example .env` (os valores de exemplo já apontam para o emulador),
+`docker compose -f infra/docker-compose.yml up --build` e, uma vez, `python infra/ci/preparar_banco.py`
+(cria o banco, os containers e um usuário de teste). A API fica em `http://localhost:7071/api`.
+
+O workflow `Compose e ZAP` (`.github/workflows/compose-zap.yml`) executa esse mesmo compose no
+runner do GitHub Actions, sem segredo real (a chave do emulador é pública e a senha do usuário
+de teste é fictícia). Sem o emulador, `/api/health` responde `503` com `"banco": "indisponivel"`,
+porque a sonda consulta o Cosmos; com ele, responde `200`. Os tempos ficam no artefato
+`compose-e-zap` (`resultados/reinicio.txt`, `resultados/saude.txt`).
+
+Medição de 16/11/2026 (execução do PR, runner `ubuntu-latest`; valores de uma execução, não média):
+
+| verificação | resultado |
+|---|---|
+| `docker compose up -d --build` até `/api/health` responder 200 | 60,6 s (imagem e emulador baixados do zero) |
+| `healthcheck` do contêiner da API | `healthy` logo depois da subida |
+| Queda do processo (SIGKILL no PID 1 do contêiner, como o OOM killer) com `restart: unless-stopped` | volta a responder 200 em **4,4 s**; contagem de reinícios 0 para 1; `healthy` 2,1 s depois |
+| `docker kill` | **não reinicia**: o Docker trata como parada pedida pelo operador (estado `exited` 30 s depois, 0 reinícios novos) |
+| `docker stop` | não reinicia, como esperado em `unless-stopped`; `docker start` volta em 3,9 s |
+
+Conclusão: a política `unless-stopped` recupera a API de uma queda do processo em poucos
+segundos, mas não de uma parada manual. A primeira medição desse CI usou `docker kill` e ficou 180 s
+sem reinício, o que revelou essa diferença. Em produção (Function App), a recuperação é da plataforma
+Azure; o compose vale para desenvolvimento e para a demonstração em contêiner.
+
 ## Validar e conferir
 
 ```bash

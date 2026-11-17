@@ -3,6 +3,7 @@
 Material da atividade "Aplicação de Métricas de Qualidade no Projeto Integrador". A coleta foi feita em 10/11/2026.
 
 - [`apresentacao-metricas.pptx`](apresentacao-metricas.pptx): pitch de até 10 minutos. Tem cinco slides e um anexo com o quadro de diagnóstico; as falas estão nas notas de cada slide.
+- [`plano-de-testes.md`](plano-de-testes.md): plano de testes formal (QS-03): escopo, níveis, ambientes, critérios de entrada e saída, casos de resiliência F1 a F6, casos de segurança, rastreabilidade e ISO/IEC 25010.
 - [`metricas-de-qualidade.md`](metricas-de-qualidade.md): os dados brutos, os critérios, a lista de defeitos com a severidade, as limitações e os comandos usados.
 - [`gerar-slides.py`](gerar-slides.py): regera o `.pptx`. Precisa do `python-pptx`; rode `python gerar-slides.py` dentro desta pasta.
 - [`guia-da-atividade.pdf`](guia-da-atividade.pdf): o enunciado do professor.

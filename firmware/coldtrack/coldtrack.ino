@@ -5,8 +5,12 @@
 #include <time.h>
 #include "driver/gpio.h"
 #include <Preferences.h>
+#include <esp_task_wdt.h>
 #include "secrets.h"
 #include "azure_ca.h"
+// Montagem do payload, leitura de numero no JSON e classificacao da faixa:
+// as mesmas funcoes que o firmware/tests/test_firmware.cpp testa no CI.
+#include "payload_core.h"
 
 // MQTT (ThingSpeak) so entra com as credenciais no secrets.h; sem elas
 // (Wokwi) o firmware segue so com o HTTPS.
@@ -89,7 +93,7 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.09.28"
+#define FW_VERSAO "2026.11.16"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
@@ -123,6 +127,12 @@ String cfgChave;
 // Teste: finge relogio sem sincronizar nos primeiros N segundos (0 = desligado).
 #ifndef SIMULAR_SEM_RELOGIO_S
 #define SIMULAR_SEM_RELOGIO_S 0
+#endif
+
+// Teste: trava o loop uma vez depois de N segundos ligado (0 = desligado),
+// para conferir o watchdog. Depois do reinicio por watchdog nao trava de novo.
+#ifndef SIMULAR_TRAVAMENTO_S
+#define SIMULAR_TRAVAMENTO_S 0
 #endif
 
 // Epoch minimo aceito como relogio sincronizado (nov/2023).
@@ -208,6 +218,50 @@ int esperarNivel(int nivel, int limiteUs) {
 }
 
 
+// DHT22 (simulador Wokwi): a leitura dos 40 bits roda sem interrupcoes.
+// No simulador, as tarefas do Wi-Fi interrompem o laco no meio dos pulsos:
+// o pulso medido estica (bit 0 vira 1) ou passa do limite, e nenhuma
+// leitura fecha o checksum. Com os limites de cada pulso, o trecho sem
+// interrupcoes dura no maximo ~10 ms, bem abaixo do watchdog. O DHT11 da
+// placa fisica segue lendo com as interrupcoes ligadas, como antes.
+#if DHT_TYPE == DHT22
+portMUX_TYPE dhtTrava = portMUX_INITIALIZER_UNLOCKED;
+#define DHT_TRAVAR()  portENTER_CRITICAL(&dhtTrava)
+#define DHT_LIBERAR() portEXIT_CRITICAL(&dhtTrava)
+#else
+#define DHT_TRAVAR()
+#define DHT_LIBERAR()
+#endif
+
+
+// Resposta do sensor e os 40 bits. false = sensor mudo ou pulso fora do tempo.
+bool lerBitsDht(uint8_t d[5]) {
+
+  // Resposta: sobe, cai ~80 us, sobe ~80 us.
+  if (esperarNivel(1, 200) < 0 || esperarNivel(0, 200) < 0 || esperarNivel(1, 200) < 0) {
+    return false;
+  }
+
+  // 40 bits: ~50 us em baixo + alto de ~27 us (0) ou ~70 us (1).
+  for (int i = 0; i < 40; i++) {
+
+    if (esperarNivel(0, 120) < 0) {
+      return false;
+    }
+
+    int alto = esperarNivel(1, 120);
+
+    if (alto < 0) {
+      return false;
+    }
+
+    d[i / 8] = (d[i / 8] << 1) | (alto > 45 ? 1 : 0);
+  }
+
+  return true;
+}
+
+
 bool lerDhtUmaVez(float *temperatura, float *umidade) {
 
   static bool preparado = false;
@@ -228,29 +282,15 @@ bool lerDhtUmaVez(float *temperatura, float *umidade) {
   } else {
     delayMicroseconds(1100);
   }
-  gpio_set_level((gpio_num_t)DHT_PIN, 1);
-
-  // Resposta: sobe, cai ~80 us, sobe ~80 us.
-  if (esperarNivel(1, 200) < 0 || esperarNivel(0, 200) < 0 || esperarNivel(1, 200) < 0) {
-    return false;
-  }
-
-  // 40 bits: ~50 us em baixo + alto de ~27 us (0) ou ~70 us (1).
   uint8_t d[5] = {0, 0, 0, 0, 0};
 
-  for (int i = 0; i < 40; i++) {
+  DHT_TRAVAR();
+  gpio_set_level((gpio_num_t)DHT_PIN, 1);
+  bool recebido = lerBitsDht(d);
+  DHT_LIBERAR();
 
-    if (esperarNivel(0, 120) < 0) {
-      return false;
-    }
-
-    int alto = esperarNivel(1, 120);
-
-    if (alto < 0) {
-      return false;
-    }
-
-    d[i / 8] = (d[i / 8] << 1) | (alto > 45 ? 1 : 0);
+  if (!recebido) {
+    return false;
   }
 
   return decodificarDht(d, DHT_TYPE, temperatura, umidade);
@@ -327,10 +367,98 @@ float faixaMax = 15.0;
 float faixaMargem = 5.0;
 
 
+// ================= NUMERO DE SEQUENCIA =================
+//
+// Cada leitura valida ganha um numero: 1, 2, 3... Vai no payload e na fila
+// offline, e fica na flash (Preferences): depois de um reinicio a contagem
+// continua de onde parou. Buraco na sequencia, no banco, e leitura perdida
+// entre o sensor e a nuvem. Gravar a cada 20 s da ~4.300 escritas/dia; o NVS
+// espalha as escritas pelas paginas da particao (desgaste da ordem de anos).
+
+uint32_t seqAtual = 0;   // ultimo numero usado
+
+
+void carregarSeq() {
+
+  preferencias.begin("coldtrack", true);
+  seqAtual = preferencias.getULong("seq", 0);
+  preferencias.end();
+}
+
+
+uint32_t proximaSeq() {
+
+  seqAtual++;
+
+  if (seqAtual == 0) {   // deu a volta no uint32 (~2.700 anos a cada 20 s)
+    seqAtual = 1;
+  }
+
+  preferencias.begin("coldtrack", false);
+  preferencias.putULong("seq", seqAtual);
+  preferencias.end();
+
+  return seqAtual;
+}
+
+
+// ================= WATCHDOG =================
+//
+// Watchdog de tarefa (TWDT) no loop: se o loop passar WATCHDOG_S sem
+// alimentar o watchdog (travou em rede, flash ou sensor), a placa reinicia.
+// A fila (LittleFS) e a sequencia (Preferences) estao na flash, entao o
+// envio retoma sozinho depois do reinicio. Os trechos longos (Wi-Fi, reenvio
+// da fila) alimentam o watchdog no meio; o pior caso legitimo entre duas
+// alimentacoes e uma requisicao HTTPS (conexao + TLS + 5 s de resposta).
+
+#ifndef WATCHDOG_S
+#define WATCHDOG_S 60
+#endif
+
+
+void iniciarWatchdog() {
+
+  esp_task_wdt_config_t config = {
+    .timeout_ms = WATCHDOG_S * 1000,
+    .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,   // tarefa ociosa tambem
+    .trigger_panic = true,   // estourou: reinicia a placa
+  };
+
+  // O core do Arduino ja inicia o watchdog (5 s, so a tarefa ociosa):
+  // reconfigura; se nao estiver iniciado, inicia.
+  if (esp_task_wdt_reconfigure(&config) == ESP_ERR_INVALID_STATE) {
+    esp_task_wdt_init(&config);
+  }
+
+  if (esp_task_wdt_status(NULL) == ESP_ERR_NOT_FOUND) {
+    esp_task_wdt_add(NULL);   // tarefa do loop
+  }
+}
+
+
+void alimentarWatchdog() {
+
+  esp_task_wdt_reset();
+}
+
+
+bool reiniciouPorWatchdog() {
+
+  esp_reset_reason_t motivo = esp_reset_reason();
+
+  return motivo == ESP_RST_TASK_WDT || motivo == ESP_RST_INT_WDT || motivo == ESP_RST_WDT;
+}
+
+
 // ================= TEMPORIZAÇÃO =================
 
 // Uma leitura a cada 20 segundos: detecta desvio rapido sem
 // gastar dado a toa quando a conexao for celular.
+//
+// Heartbeat: a propria leitura e o sinal de vida. A nuvem marca o sensor
+// online pelo horario da ultima leitura recebida; nao ha mensagem separada.
+// Sensor mudo (DHT sem resposta) para de enviar e aparece offline no painel:
+// sem medicao nao ha garantia da carga, e esse e o alerta certo.
 
 const unsigned long INTERVALO_ENVIO = 20000;
 
@@ -500,6 +628,7 @@ void conectarWiFi() {
   while (WiFi.status() != WL_CONNECTED && tentativas < 20) {
 
     delay(500);
+    alimentarWatchdog();
 
     Serial.print(".");
 
@@ -535,61 +664,9 @@ void conectarWiFi() {
 // ENVIO PARA AZURE (JSON via HTTPS)
 // ==========================================================
 
-void montarPayload(char *destino, size_t tamanho,
-                   float temperatura, float umidade, long rssi, time_t medidoEm) {
-
-  // RSSI de Wi-Fi e sempre negativo. Valor >= 0 (ex.: simulador) vai como null,
-  // em vez de mandar um numero falso para o banco.
-  char rssiJson[12];
-
-  if (rssi < 0) {
-    snprintf(rssiJson, sizeof(rssiJson), "%ld", rssi);
-  } else {
-    snprintf(rssiJson, sizeof(rssiJson), "null");
-  }
-
-  // Sem relogio sincronizado (medidoEm = 0) o campo e omitido
-  // e a nuvem usa o horario de recebimento.
-  char medidoJson[24] = "";
-
-  if (medidoEm > 0) {
-    snprintf(medidoJson, sizeof(medidoJson), ",\"medidoEm\":%lld", (long long)medidoEm);
-  }
-
-  snprintf(destino, tamanho,
-    "{\"deviceId\":\"%s\",\"temperatura\":%.1f,\"umidade\":%.1f,\"rssi\":%s%s}",
-    cfgId.c_str(), temperatura, umidade, rssiJson, medidoJson);
-}
-
-
 // ==========================================================
 // FAIXA DA CARGA (vem da nuvem, fica na flash)
 // ==========================================================
-
-// Le o numero depois de "chave": no JSON. null ou ausente = NAN.
-float numeroDoJson(const String &json, const char *chave) {
-
-  String alvo = String("\"") + chave + "\":";
-  int inicio = json.indexOf(alvo);
-
-  if (inicio < 0) {
-    return NAN;
-  }
-
-  inicio += alvo.length();
-
-  // A nuvem responde com espaco depois dos dois-pontos ("min": null).
-  while (inicio < (int)json.length() && json[inicio] == ' ') {
-    inicio++;
-  }
-
-  if (json.startsWith("null", inicio)) {
-    return NAN;
-  }
-
-  return json.substring(inicio).toFloat();
-}
-
 
 void carregarFaixa() {
 
@@ -610,11 +687,11 @@ void atualizarFaixa(const String &resposta) {
     return;
   }
 
-  String trecho = resposta.substring(pos);
+  std::string trecho(resposta.c_str() + pos);
 
-  float novoMin = numeroDoJson(trecho, "min");
-  float novoMax = numeroDoJson(trecho, "max");
-  float novaMargem = numeroDoJson(trecho, "margem");
+  float novoMin = extrairNumeroJson(trecho, "min");
+  float novoMax = extrairNumeroJson(trecho, "max");
+  float novaMargem = extrairNumeroJson(trecho, "margem");
 
   if (isnan(novoMax) || isnan(novaMargem)) {
     return;
@@ -1144,6 +1221,11 @@ void reenviarFila() {
       break;
     }
 
+    alimentarWatchdog();
+
+    Serial.print("FILA: reenviando ");
+    Serial.println(linha);
+
     int status = postarAzure(linha.c_str());
 
     if (falhaTemporaria(status)) {
@@ -1360,6 +1442,7 @@ String testarWiFi(const String &ssid, const String &senha) {
     }
 
     delay(250);
+    alimentarWatchdog();
   }
 
   if (status == WL_CONNECTED) {
@@ -1505,6 +1588,8 @@ void setup() {
   Serial.setRxBufferSize(1024);
   Serial.begin(115200);
 
+  iniciarWatchdog();
+
   delay(1000);
 
 #ifdef TELA_OLED
@@ -1544,6 +1629,8 @@ void setup() {
 
   carregarFaixa();
 
+  carregarSeq();
+
   carregarConfig();
 
   // Modo estacao antes de tudo: o MAC (ID sugerido) so aparece com o radio ligado.
@@ -1559,6 +1646,13 @@ void setup() {
   Serial.print(filaTamanho);
   Serial.println(" leituras pendentes na flash.");
 
+  Serial.print("SEQ: ultima leitura numerada ");
+  Serial.println(seqAtual);
+
+  if (reiniciouPorWatchdog()) {
+    Serial.println("WATCHDOG: placa reiniciada por travamento; retomando fila e sequencia.");
+  }
+
   conectarWiFi();
 
   sincronizarRelogio();
@@ -1573,6 +1667,17 @@ void setup() {
 // ==========================================================
 
 void loop() {
+
+  alimentarWatchdog();
+
+  // Teste do watchdog: para de alimentar e espera o reinicio.
+  if (SIMULAR_TRAVAMENTO_S > 0 && millis() > SIMULAR_TRAVAMENTO_S * 1000UL &&
+      !reiniciouPorWatchdog()) {
+    Serial.println("TESTE: loop travado de proposito; o watchdog deve reiniciar a placa.");
+    while (true) {
+      delay(1000);
+    }
+  }
 
   // --------------------------------------------------------
   // Configuracao chegando pelo cabo
@@ -1696,28 +1801,24 @@ void loop() {
     // ======================================================
 
     // Mesma regra da nuvem (contrato.py): sem limite inferior quando faixaMin e NAN.
-    float minimo = isnan(faixaMin) ? -1000.0 : faixaMin;
-
     const char *statusTela;
 
-    if (temperatura >= minimo && temperatura <= faixaMax) {
+    switch (classificarFaixa(temperatura, faixaMin, faixaMax, faixaMargem)) {
 
-      statusNormal();
-      statusTela = "NORMAL";
+      case StatusTermico::NORMAL:
+        statusNormal();
+        statusTela = "NORMAL";
+        break;
 
-    }
+      case StatusTermico::ATENCAO:
+        statusAtencao();
+        statusTela = "ATENCAO";
+        break;
 
-    else if (temperatura >= minimo - faixaMargem && temperatura <= faixaMax + faixaMargem) {
-
-      statusAtencao();
-      statusTela = "ATENCAO";
-
-    }
-
-    else {
-
-      statusCritico();
-      statusTela = "CRITICO";
+      default:
+        statusCritico();
+        statusTela = "CRITICO";
+        break;
     }
 
 #ifdef TELA_OLED
@@ -1747,8 +1848,11 @@ void loop() {
 
     char payload[160];
 
-    montarPayload(payload, sizeof(payload),
-                  temperatura, umidade, rssi, medidoEm);
+    // RSSI >= 0 (simulador) vai como null; sem relogio, medidoEm e omitido.
+    uint32_t seq = proximaSeq();
+
+    montarPayloadCore(payload, sizeof(payload), cfgId.c_str(),
+                      temperatura, umidade, rssi, medidoEm, seq);
 
     Serial.print("Payload JSON: ");
     Serial.println(payload);
@@ -1767,9 +1871,12 @@ void loop() {
 
       Serial.println("Enviando telemetria ao Azure...");
 
+      alimentarWatchdog();
+
       int status = postarAzure(payload);
 
 #ifdef COM_MQTT
+      alimentarWatchdog();
       publicarMqtt(temperatura, umidade, rssi);
 #endif
 

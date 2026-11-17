@@ -274,6 +274,50 @@ Resposta `200`, da medição mais recente para a mais antiga:
 `medidoEm` e `recebidoEm` em ISO 8601 UTC. Erros: `400` (`informe ?deviceId=`,
 `limite deve ser inteiro`, filtros inválidos); `404` `dispositivo não encontrado`.
 
+## Risco térmico (modelo)
+
+### `GET /predict?mes=<1..12>&hora=<0..23>`
+
+Acesso: operador, gestor.
+
+Chance de a temperatura **externa** passar de 30 °C no mês e na hora da saída. O modelo é a
+tabela 12 × 24 de `cloud/function/modelo_risco.json`, gerada por
+[`analise/exportar_modelo.py`](../analise/exportar_modelo.py) com os dados horários da estação
+INMET A307 (Petrolina): treino 2019–2022, teste 2023–2025. A Function só consulta a célula
+pedida (sem pandas nem scikit-learn no pacote). Ficha do modelo:
+[`model-card.md`](model-card.md).
+
+| parâmetro | regra |
+|---|---|
+| `mes` | obrigatório; inteiro de 1 a 12 |
+| `hora` | obrigatório; inteiro de 0 a 23, horário de Brasília |
+
+Resposta `200`:
+
+```json
+{"mes": 10, "hora": 15, "limiarC": 30.0,
+ "probabilidade": 0.9839, "nivel": "alto", "horasDeHistorico": 62,
+ "baseline": {"probabilidade": 0.2143, "nivel": "moderado"},
+ "modelo": {"versao": "clima-a307-30c-v1", "fonte": "INMET, estação automática A307 (Petrolina), dados horários",
+            "anosTreino": [2019, 2020, 2021, 2022], "anosTeste": [2023, 2024, 2025],
+            "brierModelo": 0.0911, "brierBaseline": 0.2017, "usaLeiturasDoSensor": false}}
+```
+
+- `nivel`: `baixo` até 0,20; `moderado` até 0,50; `alto` acima de 0,50 (o mesmo corte de 50%
+  usado na avaliação).
+- `baseline`: modelo ingênuo para comparação, a fração de horas acima de 30 °C nos anos de
+  treino, igual para qualquer mês e hora.
+- `horasDeHistorico`: horas de treino que sustentam a célula (tamanho da amostra).
+- `usaLeiturasDoSensor` é sempre `false`: o modelo usa a estação pública, não as leituras do
+  sensor do baú.
+
+Erros: `400` (`mes: inteiro de 1 a 12`, `hora: inteiro de 0 a 23`); `401` sem token;
+`503` `modelo indisponível` (arquivo do modelo ausente no pacote publicado).
+
+Atualizar o modelo: `cd analise && python exportar_modelo.py` (precisa de
+`dados/inmet_rota_horario.csv`, ver [`analise/README.md`](../analise/README.md)) e publicar a
+API com o novo `modelo_risco.json`.
+
 ## Sensores (`/dispositivos`)
 
 | método e rota | acesso | corpo | resposta |

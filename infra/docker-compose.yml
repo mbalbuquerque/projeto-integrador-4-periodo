@@ -1,10 +1,19 @@
-# API do ColdTrack em contêiner, com reinício automático e verificação de saúde.
+# API do ColdTrack em contêiner, com emulador do Cosmos DB, reinício automático e verificação de saúde.
 # Uso (da raiz do repositório):
-#   cp .env.example .env     # preencher com os valores de desenvolvimento
+#   cp .env.example .env     # os valores de exemplo já servem para desenvolvimento local
 #   docker compose -f infra/docker-compose.yml up --build
+#   python infra/ci/preparar_banco.py    # uma vez: cria o banco, os containers e um usuário de teste
 # A API sobe em http://localhost:7071/api (ex.: /api/health, /api/docs).
-# Não testado localmente ainda: validar na máquina da equipe antes da entrega final.
+# Teste automatizado (subida, saúde, reinício, ZAP): workflow "Compose e ZAP" no GitHub Actions.
 services:
+  cosmos:
+    # Emulador oficial do Cosmos DB para Linux, em HTTP (sem certificado autoassinado).
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview
+    command: ["--protocol", "http"]
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
   api:
     build:
       context: ../cloud/function
@@ -12,6 +21,8 @@ services:
     env_file: ../.env
     ports:
       - "7071:80"
+    depends_on:
+      - cosmos
     restart: unless-stopped
     healthcheck:
       test:

@@ -197,17 +197,21 @@ Detalhes e convenção de commits em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 | documento | conteúdo |
 |---|---|
+| [`docs/como-funciona.md`](docs/como-funciona.md) | guia único de estudo: como cada camada funciona, do firmware à IA, com respostas para o banco de perguntas da banca |
 | [`docs/funcionalidades.md`](docs/funcionalidades.md) | mapeamento de funcionalidades: tudo o que a plataforma faz, por camada |
 | [`docs/apresentacao.md`](docs/apresentacao.md) | apresentação do projeto em slides, com roteiro da demonstração ([versão .pptx](docs/apresentacao.pptx)) |
 | [`docs/stack-tecnica.md`](docs/stack-tecnica.md) | arquitetura, componentes, modelo de dados, publicação |
 | [Swagger da API](https://func-coldtrack-7319.azurewebsites.net/api/docs) | documentação interativa das rotas (OpenAPI 3.0, `cloud/function/openapi.json`) |
 | [`docs/api.md`](docs/api.md) | referência das rotas da API em texto, com as regras em detalhe |
 | [`docs/seguranca.md`](docs/seguranca.md) | controles de segurança e limitações conhecidas |
+| [`docs/ux/`](docs/ux/) | pesquisa de usuários preliminar: [pesquisa secundária](docs/ux/pesquisa-secundaria.md), [entrevistas simuladas](docs/ux/entrevistas-simuladas.md) e [persona, jornada e proposta de valor](docs/ux/persona-jornada-proposta.md); roteiro em [`docs/pesquisa-usuarios.md`](docs/pesquisa-usuarios.md) |
+| [`docs/lgpd.md`](docs/lgpd.md) | inventário dos dados pessoais, retenção e direitos do titular |
+| [`docs/politica-de-privacidade.md`](docs/politica-de-privacidade.md) | política de privacidade, direitos do titular e como pedir a exclusão |
 | [`docs/slides/previa-tecnica.pdf`](docs/slides/previa-tecnica.pdf) | slides da prévia técnica (pitch em inglês e blocos da apresentação) |
 | [`docs/implantacao.md`](docs/implantacao.md) | passo a passo para pôr uma transportadora em operação |
 | [`docs/memorial-descritivo.md`](docs/memorial-descritivo.md) | memorial descritivo do protótipo |
 | [`cloud/function/README.md`](cloud/function/README.md) | API: rodar, testar e publicar |
-| [`infra/README.md`](infra/README.md) | recursos do Azure e publicação por OIDC |
+| [`infra/README.md`](infra/README.md) | recursos do Azure, custo mensal estimado e publicação por OIDC |
 | [`analise/README.md`](analise/README.md) | análise climática da rota |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | branches, commits e verificações |
 | [Documentação do painel](https://github.com/mbalbuquerque/Front-End-pi#readme) | README, arquitetura, guia de uso e relatório de testes do front |

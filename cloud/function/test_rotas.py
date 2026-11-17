@@ -266,6 +266,34 @@ class TestTelemetria(BaseRotas):
         self.assertEqual(status, 409)
 
 
+    def test_telemetria_com_seq_grava_o_numero(self):
+        payload = {"deviceId": "dev-01", "temperatura": 12.5, "umidade": 85.0, "rssi": -65,
+                   "medidoEm": self.agora + 20, "seq": 42}
+        status, corpo = self.chamar(TELEMETRIA, "POST", "/api/telemetria", payload,
+                                    headers={"x-device-key": self.chave_dev1})
+        self.assertEqual(status, 201)
+        gravada = self.containers["leituras"].read_item(corpo["id"], partition_key="dev-01")
+        self.assertEqual(gravada["seq"], 42)
+
+        # Reenvio da fila depois de resposta perdida: mesmo seq, 200 duplicada.
+        status, corpo = self.chamar(TELEMETRIA, "POST", "/api/telemetria", payload,
+                                    headers={"x-device-key": self.chave_dev1})
+        self.assertEqual(status, 200)
+        self.assertTrue(corpo["duplicada"])
+
+        # Mesmo segundo, outro seq: é outra leitura, não sobrescreve.
+        status, _ = self.chamar(TELEMETRIA, "POST", "/api/telemetria", {**payload, "seq": 43},
+                                headers={"x-device-key": self.chave_dev1})
+        self.assertEqual(status, 409)
+
+    def test_telemetria_seq_invalido(self):
+        payload = {"deviceId": "dev-01", "temperatura": 12.5, "umidade": 85.0, "rssi": -65,
+                   "seq": 0}
+        status, corpo = self.chamar(TELEMETRIA, "POST", "/api/telemetria", payload,
+                                    headers={"x-device-key": self.chave_dev1})
+        self.assertEqual(status, 400)
+
+
 class TestLeituras(BaseRotas):
     def test_leituras_sem_device_id(self):
         status, corpo = self.chamar(LEITURAS, "GET", "/api/leituras", email="operador@a.com")
@@ -294,6 +322,22 @@ class TestLeituras(BaseRotas):
                                             "horas": "24", "status": "NORMAL,ATENCAO"})
         self.assertEqual(status, 200)
         self.assertEqual(corpo["deviceId"], "dev-01")
+        # Com filtro de status as lacunas não se calculam.
+        self.assertNotIn("lacunas", corpo)
+
+    def test_leituras_lacunas_de_sequencia(self):
+        base = {"deviceId": "dev-01", "empresaId": "E-A", "temperatura": 12.0, "umidade": 85.0,
+                "rssi": -60, "perfil": "manga", "status": "NORMAL",
+                "recebidoEm": "2026-05-10T11:00:01+00:00"}
+        for i, seq in enumerate((7, 8, 11)):
+            self.containers["leituras"].create_item({
+                **base, "id": f"dev-01~s{seq}", "seq": seq,
+                "medidoEm": f"2026-05-10T11:0{i}:00+00:00"})
+        status, corpo = self.chamar(LEITURAS, "GET", "/api/leituras", email="operador@a.com",
+                                    params={"deviceId": "dev-01"})
+        self.assertEqual(status, 200)
+        self.assertEqual(corpo["lacunas"], [{"de": 9, "ate": 10, "faltam": 2}])
+        self.assertEqual(corpo["leituras"][0]["seq"], 11)
 
 
 class TestDispositivos(BaseRotas):
@@ -470,6 +514,19 @@ class TestVeiculosEViagens(BaseRotas):
 
 
 class TestBordasUsuariosESenha(BaseRotas):
+    def test_login_e_cadastro_com_caractere_proibido_no_id(self):
+        # Achado do ZAP ativo: e-mail com "/" virava erro 500 no SDK do Cosmos.
+        LOGIN = function_app.login.build().get_user_function()
+        barra_invertida = chr(92)
+        for email in ("http://www.google.com/", "a/b@c.com", "a@b.com?x", "a@b#.com",
+                      "a" + barra_invertida + "b@c.com"):
+            status, _ = self.chamar(LOGIN, "POST", "/api/login",
+                                    {"email": email, "senha": "qualquer-123"})
+            self.assertEqual(status, 401, email)
+            status, _ = self.chamar(EMPRESAS, "POST", "/api/empresas", {
+                "empresa": "X", "nome": "Y", "email": email, "senha": "senha-forte-123"})
+            self.assertEqual(status, 400, email)
+
     def test_login_corpo_invalido(self):
         LOGIN = function_app.login.build().get_user_function()
         status, corpo = self.chamar(LOGIN, "POST", "/api/login", corpo_raw=b"nao-json")

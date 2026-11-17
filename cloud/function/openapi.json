@@ -25,6 +25,10 @@
       "description": "Query of the stored readings."
     },
     {
+      "name": "Risco térmico",
+      "description": "Thermal risk model (outdoor temperature above 30 °C) served from a lightweight table."
+    },
+    {
       "name": "Veículos",
       "description": "The company's fleet."
     },
@@ -69,7 +73,7 @@
         ],
         "operationId": "enviarTelemetria",
         "summary": "Sends a sensor reading",
-        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values returns `200` with `duplicada: true`.",
+        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nValidates the reading, classifies it by the range of the cargo profile of the vehicle that uses the sensor (no vehicle: `demonstrativo`) and stores it. A reading is never overwritten; a resend with the same values (including `seq`) returns `200` with `duplicada: true`.",
         "security": [
           {
             "dispositivo": []
@@ -798,7 +802,7 @@
         ],
         "operationId": "listarLeituras",
         "summary": "Latest readings of a company sensor",
-        "description": "**Who can call:** operator or manager (token from the login). From the most recent measurement to the oldest. A sensor of another company answers exactly like a missing sensor (`404`).",
+        "description": "**Who can call:** operator or manager (token from the login). From the most recent measurement to the oldest. A sensor of another company answers exactly like a missing sensor (`404`). Without the `status` filter, `lacunas` lists the gaps in the sequence numbers of the returned readings (lost readings); a sequence that goes back is a counter reset, not a gap.",
         "security": [
           {
             "bearerAuth": []
@@ -871,6 +875,13 @@
                       "items": {
                         "$ref": "#/components/schemas/Leitura"
                       }
+                    },
+                    "lacunas": {
+                      "type": "array",
+                      "description": "Present only without the `status` filter.",
+                      "items": {
+                        "$ref": "#/components/schemas/LacunaSequencia"
+                      }
                     }
                   }
                 },
@@ -885,7 +896,15 @@
                       "perfil": "manga",
                       "status": "NORMAL",
                       "medidoEm": "2026-11-09T12:00:00+00:00",
-                      "recebidoEm": "2026-11-09T12:00:01.532000+00:00"
+                      "recebidoEm": "2026-11-09T12:00:01.532000+00:00",
+                      "seq": 42
+                    }
+                  ],
+                  "lacunas": [
+                    {
+                      "de": 38,
+                      "ate": 39,
+                      "faltam": 2
                     }
                   ]
                 }
@@ -952,6 +971,138 @@
                 "example": {
                   "erros": [
                     "dispositivo não encontrado"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/predict": {
+      "get": {
+        "tags": [
+          "Risco térmico"
+        ],
+        "operationId": "preverRiscoTermico",
+        "summary": "Probability of outdoor temperature above 30 °C for a departure month and hour",
+        "description": "**Who can call:** operator or manager (token from the login). Climatological model trained on the hourly data of the INMET automatic station A307 (Petrolina), training years 2019–2022 and test years 2023–2025 (temporal split). The answer includes the naive baseline and both Brier scores, so the user can compare. **Limitation:** the model describes the typical outdoor climate, not the forecast of the day, and it does not use the readings of the cargo sensor. It supports a human decision (departure time, reinforced monitoring) and never triggers an automatic action. Model card: `docs/model-card.md`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "mes",
+            "in": "query",
+            "required": true,
+            "description": "Month of the departure (1 to 12).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            },
+            "example": 10
+          },
+          {
+            "name": "hora",
+            "in": "query",
+            "required": true,
+            "description": "Hour of the departure, Brasília time (0 to 23).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 23
+            },
+            "example": 15
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Probability, risk level, baseline and model version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Predicao"
+                },
+                "example": {
+                  "mes": 10,
+                  "hora": 15,
+                  "limiarC": 30.0,
+                  "probabilidade": 0.9839,
+                  "nivel": "alto",
+                  "horasDeHistorico": 62,
+                  "baseline": {
+                    "probabilidade": 0.2143,
+                    "nivel": "moderado"
+                  },
+                  "modelo": {
+                    "versao": "clima-a307-30c-v1",
+                    "fonte": "INMET, estação automática A307 (Petrolina), dados horários",
+                    "anosTreino": [
+                      2019,
+                      2020,
+                      2021,
+                      2022
+                    ],
+                    "anosTeste": [
+                      2023,
+                      2024,
+                      2025
+                    ],
+                    "brierModelo": 0.0911,
+                    "brierBaseline": 0.2017,
+                    "usaLeiturasDoSensor": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "mes: inteiro de 1 a 12",
+                    "value": {
+                      "erros": [
+                        "mes: inteiro de 1 a 12"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "hora: inteiro de 0 a 23",
+                    "value": {
+                      "erros": [
+                        "hora: inteiro de 0 a 23"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          },
+          "503": {
+            "description": "Model file missing from the deployed package.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "modelo indisponível"
                   ]
                 }
               }
@@ -2614,6 +2765,12 @@
           "medidoEm": {
             "type": "number",
             "description": "Optional. UTC epoch in seconds of the measurement: up to 5 min in the future and up to 7 days in the past. Without it, the time of receipt is used."
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295,
+            "description": "Optional. Sequence number of the reading, kept by the sensor in flash: it grows by 1 per reading and survives a reboot, so a gap means a lost reading. Older firmware without it is still accepted. A resend must repeat the same `seq`."
           }
         },
         "example": {
@@ -2621,7 +2778,8 @@
           "temperatura": 12.4,
           "umidade": 81.0,
           "rssi": -58,
-          "medidoEm": 1794240000
+          "medidoEm": 1794240000,
+          "seq": 42
         }
       },
       "TelemetriaGravada": {
@@ -2739,6 +2897,10 @@
           "recebidoEm": {
             "type": "string",
             "format": "date-time"
+          },
+          "seq": {
+            "type": "integer",
+            "description": "Sequence number sent by the sensor. Absent for readings of firmware without it."
           }
         },
         "example": {
@@ -2749,7 +2911,8 @@
           "perfil": "manga",
           "status": "NORMAL",
           "medidoEm": "2026-11-09T12:00:00+00:00",
-          "recebidoEm": "2026-11-09T12:00:01.532000+00:00"
+          "recebidoEm": "2026-11-09T12:00:01.532000+00:00",
+          "seq": 42
         }
       },
       "Dispositivo": {
@@ -3128,6 +3291,148 @@
             "docs/api.md"
           ],
           "origem": "ia"
+        }
+      },
+      "Predicao": {
+        "type": "object",
+        "required": [
+          "mes",
+          "hora",
+          "limiarC",
+          "probabilidade",
+          "nivel",
+          "horasDeHistorico",
+          "baseline",
+          "modelo"
+        ],
+        "properties": {
+          "mes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "hora": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23,
+            "description": "Hour of the day, Brasília time."
+          },
+          "limiarC": {
+            "type": "number",
+            "description": "Temperature threshold in °C."
+          },
+          "probabilidade": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Model probability that the outdoor temperature exceeds the threshold at that month and hour."
+          },
+          "nivel": {
+            "type": "string",
+            "enum": [
+              "baixo",
+              "moderado",
+              "alto"
+            ],
+            "description": "Risk level: `baixo` up to 0.20, `moderado` up to 0.50, `alto` above 0.50 (same 50% cut used in the evaluation)."
+          },
+          "horasDeHistorico": {
+            "type": "integer",
+            "description": "Training hours behind this month and hour cell (sample size)."
+          },
+          "baseline": {
+            "type": "object",
+            "required": [
+              "probabilidade",
+              "nivel"
+            ],
+            "description": "Naive baseline for comparison: the overall share of hours above the threshold in the training years, the same for every month and hour.",
+            "properties": {
+              "probabilidade": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "nivel": {
+                "type": "string",
+                "enum": [
+                  "baixo",
+                  "moderado",
+                  "alto"
+                ],
+                "description": "Risk level: `baixo` up to 0.20, `moderado` up to 0.50, `alto` above 0.50 (same 50% cut used in the evaluation)."
+              }
+            }
+          },
+          "modelo": {
+            "type": "object",
+            "required": [
+              "versao",
+              "fonte",
+              "anosTreino",
+              "anosTeste",
+              "brierModelo",
+              "brierBaseline",
+              "usaLeiturasDoSensor"
+            ],
+            "properties": {
+              "versao": {
+                "type": "string"
+              },
+              "fonte": {
+                "type": "string",
+                "description": "Data source (INMET automatic station)."
+              },
+              "anosTreino": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "anosTeste": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Later years, never seen in training (temporal split)."
+              },
+              "brierModelo": {
+                "type": "number",
+                "description": "Brier score of the model on the test years (lower is better)."
+              },
+              "brierBaseline": {
+                "type": "number",
+                "description": "Brier score of the naive baseline on the same test years."
+              },
+              "usaLeiturasDoSensor": {
+                "type": "boolean",
+                "description": "Always false: the model uses public weather station data, not the cargo sensor readings."
+              }
+            }
+          }
+        }
+      },
+      "LacunaSequencia": {
+        "type": "object",
+        "required": [
+          "de",
+          "ate",
+          "faltam"
+        ],
+        "description": "Readings missing between two received ones, by sequence number.",
+        "properties": {
+          "de": {
+            "type": "integer",
+            "description": "First missing sequence number."
+          },
+          "ate": {
+            "type": "integer",
+            "description": "Last missing sequence number."
+          },
+          "faltam": {
+            "type": "integer",
+            "description": "How many readings are missing."
+          }
         }
       }
     },
