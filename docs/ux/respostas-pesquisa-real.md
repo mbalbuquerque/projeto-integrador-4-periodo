@@ -1,5 +1,7 @@
 # Respostas da pesquisa com usuários reais
 
+> Rodada simulada, declarada como tal, em [`respostas-pesquisa-simulada.md`](respostas-pesquisa-simulada.md); ela não preenche este registro.
+>
 > **Nenhuma resposta coletada até agora.** As tabelas abaixo ficam vazias até existirem
 > respostas reais; não preencher com exemplo, estimativa ou simulação. Instrumento em
 > [`roteiro-pesquisa-real.md`](roteiro-pesquisa-real.md). Registro anônimo: só o código do

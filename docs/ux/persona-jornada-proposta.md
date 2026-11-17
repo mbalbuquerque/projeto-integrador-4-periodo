@@ -86,6 +86,23 @@ Canvas (tabela). Linhas de dor e ganho são as da persona acima.
    claro para essa carga.
 3. Frio demais conta como desvio também (regra existente), coerente com [F1].
 
+## O que a rodada do questionário mudou ou confirmou (simulada)
+
+Rodada **simulada** de 17/11/2026 ([`respostas-pesquisa-simulada.md`](respostas-pesquisa-simulada.md)):
+R1 a R5 são perfis de síntese sobre as fontes, não pessoas. Por isso a persona continua
+provisória e este quadro só ordena o que as fontes sustentam.
+
+| ponto | efeito | respondentes |
+|---|---|---|
+| Como se acompanha a temperatura | **corrige**: além de termógrafo, há telemetria contínua em frotas; a persona deve admitir os dois cenários | R1, R2 (termógrafo [F6]); R3 (telemetria [F10]) |
+| Desvio percebido só no destino | **confirma**, desde que não haja monitoramento contínuo | R1, R2; R3 como exceção |
+| Registro como prova | **confirma** para cliente e exportador; **corrige** para seguradora, o registro não basta [F11]; a promessa do produto já exclui indenização | R1, R2; R1 (seguro) |
+| Aviso curto ao motorista | **confirma como inferência** de [F12]; o medo de o registro ser usado contra ele segue sem fonte | R4, R5 |
+| Fluxo de ação ao alerta, dispositivo, excesso de alerta, preço, quem compra | **sem resposta**: continuam na lista de validação com usuário real | R1 a R5 |
+| Parte 2 (simulada) | atrito provável no rótulo "Faixa registrada" de Viagens (T2) e na tela de Alertas por veículo (T3); SUS simulado 73,5, sem valor como evidência | R1 a R5 |
+
+Nenhuma hipótese foi descartada; H3 e H5 seguem sem fonte.
+
 ## O que falta validar com usuário real
 
 Entra no roteiro e no formulário de [`../pesquisa-usuarios.md`](../pesquisa-usuarios.md):
@@ -97,5 +114,6 @@ Entra no roteiro e no formulário de [`../pesquisa-usuarios.md`](../pesquisa-usu
 - Dispositivo preferido (celular ou computador) e tolerância a alertas em excesso.
 - Se contratos pedem termógrafo certificado ou laudo específico.
 
-A validação (≥ 5 entrevistas ou ≥ 20 respostas) **segue pendente para a entrega final**; este
-documento deve ser revisado com as respostas reais.
+A validação com pessoas reais (≥ 5 entrevistas ou ≥ 20 respostas) **não aconteceu**: a rodada
+de 17/11/2026 foi simulada, por decisão da equipe. Este documento deve ser revisado se houver
+respostas reais.
