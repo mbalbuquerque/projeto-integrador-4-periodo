@@ -93,7 +93,7 @@ class TestCadastrosPuro(unittest.TestCase):
         # Perfil inválido
         erros, _ = validar_usuario({"email": "ana@a.com", "nome": "Ana",
                                     "perfil": "invalido", "senha": "senha-valida-123"})
-        self.assertIn("perfil: use operador ou gestor", erros)
+        self.assertIn("perfil: use operador, gestor ou motorista", erros)
 
     def test_validar_empresa_bordas(self):
         erros, doc = validar_empresa([])

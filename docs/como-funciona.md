@@ -77,7 +77,7 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 |---|---|---|
 | Gestor da transportadora | Cadastra empresa, usuários, sensores, veículos e viagens; acompanha tudo | Painel, perfil `gestor` |
 | Operador logístico | Acompanha a carga, alertas e relatórios; não altera cadastros | Painel, perfil `operador` |
-| Motorista | Vê o semáforo (LED) no sensor | Placa |
+| Motorista | Vê o semáforo (LED) no sensor e, no celular, a temperatura do próprio veículo (somente leitura) | Placa; painel, perfil `motorista` |
 | Sensor | Envia leituras com a chave própria | `POST /api/telemetria` |
 
 ---
@@ -377,11 +377,12 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | GET | `/api/health` | público | 200 se o banco responde, 503 se não (`health`) |
 | POST | `/api/chat` | público | Chat do site com IA (`chat_site`) |
 | GET | `/api/docs`, `/api/openapi.json` | público | Swagger UI e a especificação |
-| GET | `/api/eu` | operador, gestor | Dados do usuário logado e nome da empresa |
-| POST | `/api/senha` | operador, gestor | Troca a própria senha (pede a atual) e devolve token novo |
-| POST | `/api/sair` | operador, gestor | Derruba todas as sessões do usuário (204) e apaga as inscrições de push |
+| GET | `/api/eu` | todos os perfis | Dados do usuário logado e nome da empresa (e `veiculo` do motorista) |
+| POST | `/api/senha` | todos os perfis | Troca a própria senha (pede a atual) e devolve token novo |
+| POST | `/api/sair` | todos os perfis | Derruba todas as sessões do usuário (204) e apaga as inscrições de push |
 | GET | `/api/push/chave` | público | Chave pública VAPID dos alertas push (503 sem configuração) |
 | POST / DELETE | `/api/push/inscricao` | operador, gestor | Inscreve ou remove o aparelho nos alertas push |
+| GET | `/api/motorista` | motorista | Última leitura, faixa, status e viagem em curso **só do veículo vinculado** (`motorista`) |
 | POST | `/api/assistente` | operador, gestor | Assistente do painel com os dados da empresa |
 | GET | `/api/leituras?deviceId=&limite=&horas=&status=` | operador, gestor | Últimas leituras de um sensor da empresa (até 500) |
 | GET | `/api/predict?mes=&hora=` | operador, gestor | Risco de passar de 30 °C no mês e hora |
@@ -389,7 +390,7 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | POST / PUT / DELETE | `/api/dispositivos[/{id}]` | gestor | Registra (devolve a chave uma vez), gera chave nova, remove |
 | GET | `/api/veiculos`, `/api/viagens` | operador, gestor | Frota e viagens |
 | POST / PUT / DELETE | `/api/veiculos[/{id}]`, `/api/viagens[/{id}]` | gestor | Cadastros (`_cadastro`) |
-| GET / POST / PUT / DELETE | `/api/usuarios[/{id}]` | gestor | Usuários da empresa; PUT redefine a senha de outro usuário |
+| GET / POST / PUT / DELETE | `/api/usuarios[/{id}]` | gestor | Usuários da empresa; PUT redefine a senha de outro usuário ou troca o veículo do motorista |
 
 Documentação interativa: <https://func-coldtrack-7319.azurewebsites.net/api/docs>.
 Texto com as regras de cada rota: `docs/api.md`.
@@ -432,7 +433,14 @@ sequenceDiagram
   emitido antes morre na hora, em todos os aparelhos. O perfil usado é o atual do banco, não o do
   token; perfil ausente ou empresa ausente → 403 ("na dúvida, nunca libera").
 - **Perfis**: `TODOS = ("operador", "gestor")` para leitura; `GESTOR = ("gestor",)` para criar,
-  alterar e remover.
+  alterar e remover; `MOTORISTA = ("motorista",)` só para `GET /motorista`. `CONTA` (os três)
+  vale para a própria conta: `/eu`, `/senha`, `/sair`. Qualquer outra rota nega o motorista com
+  403 (`test_motorista.py` chama todas).
+- **Motorista vinculado a um veículo**: o cadastro do usuário motorista guarda `veiculo` (código
+  da frota da mesma empresa), obrigatório nesse perfil e proibido nos outros
+  (`cadastros.validar_vinculo`; a rota confere se o veículo existe na empresa). O gestor troca o
+  vínculo com `PUT /usuarios/{email}` `{"veiculo"}`. `GET /motorista` usa o veículo do cadastro,
+  relido a cada chamada, e nunca um parâmetro da URL: um motorista não tem como ver outro veículo.
 - **Login sem vazar quem tem conta** (`login`): e-mail inexistente, senha errada e conta em espera
   recebem a mesma resposta 401, e o e-mail inexistente também paga o custo do scrypt (`HASH_FALSO`),
   para o tempo de resposta não denunciar. A partir da **5ª senha errada** a conta entra em espera de
@@ -489,6 +497,7 @@ O IP vem de `X-Azure-ClientIP` ou do último item do `X-Forwarded-For` (`ip_do_c
 | `POST /login` | 20 falhas por IP em 15 min; por conta, espera de 1 a 15 min | 429 / 401 |
 | `POST /chat` | 10 por minuto por IP; 2000 por dia no site todo | 429 |
 | `POST /assistente` | 15 por minuto por usuário; 300 por dia por empresa | 429 |
+| `GET /motorista` | 30 por minuto por usuário (a tela consulta a cada 20 s) | 429 |
 
 Sem limite próprio (e por quê, em `docs/seguranca.md`): `/telemetria` (um limite poderia descartar
 leitura legítima; a proteção é a chave), `/empresas` (lacuna conhecida), rotas estáticas, `/health`
@@ -582,7 +591,7 @@ Azure Cosmos DB for NoSQL, conta `cosmos-coldtrack-7319`, banco `coldtrack` (`in
 | container | chave de partição | conteúdo e campos principais |
 |---|---|---|
 | `empresas` | `/id` | `id` (`E-XXXXXXXX`), `nome`, `criadaEm` |
-| `usuarios` | `/id` (e-mail) | `id`, `nome`, `perfil`, `empresaId`, `senhaHash`, `sessao`, e no login `falhas`, `ultimaFalha`, `bloqueadoAte`; `push` (inscrições de alerta push) |
+| `usuarios` | `/id` (e-mail) | `id`, `nome`, `perfil`, `empresaId`, `senhaHash`, `sessao`, `veiculo` (só motorista), e no login `falhas`, `ultimaFalha`, `bloqueadoAte`; `push` (inscrições de alerta push) |
 | `dispositivos` | `/id` (ID do sensor) | `id`, `empresaId`, `descricao`, `chaveHash` (SHA-256), `criadoEm` |
 | `veiculos` | `/id` (`<empresa>~<código>`) | `tipo`, `deviceId`, `dispositivo`, `perfil` |
 | `viagens` | `/id` (`<empresa>~<código>`) | `veiculo`, `origem`, `destino`, `carga`, `inicio`, `fim` |

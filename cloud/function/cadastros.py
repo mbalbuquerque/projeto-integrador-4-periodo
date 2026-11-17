@@ -68,11 +68,37 @@ def validar_usuario(dados):
     nome = _texto(dados, "nome", 80, erros)
     perfil = dados.get("perfil")
     if perfil not in PERFIS:
-        erros.append("perfil: use " + " ou ".join(PERFIS))
+        erros.append("perfil: use " + ", ".join(PERFIS[:-1]) + " ou " + PERFIS[-1])
+    veiculo = validar_vinculo(dados, perfil, erros)
     senha = _senha(dados, "senha", erros)
     if erros:
         return erros, None
-    return [], {"id": email.lower(), "nome": nome, "perfil": perfil, "senha": senha}
+    doc = {"id": email.lower(), "nome": nome, "perfil": perfil, "senha": senha}
+    if veiculo:
+        doc["veiculo"] = veiculo
+    return [], doc
+
+
+def validar_vinculo(dados, perfil, erros):
+    """Veículo do motorista: obrigatório nesse perfil e proibido nos outros.
+
+    Confere só o formato do código; se o veículo existe na empresa, quem confere
+    é a rota (precisa do banco). Devolve o código em maiúsculas ou None.
+    """
+    valor = dados.get("veiculo")
+    vazio = valor is None or (isinstance(valor, str) and not valor.strip())
+    if perfil != "motorista":
+        if not vazio:
+            erros.append("veiculo: só o perfil motorista tem veículo vinculado")
+        return None
+    if vazio or not isinstance(valor, str):
+        erros.append("veiculo: obrigatório para o perfil motorista")
+        return None
+    codigo = valor.strip().upper()
+    if not CODIGO.match(codigo):
+        erros.append("veiculo: 3 a 20 letras, números ou hífen (ex.: CT-001)")
+        return None
+    return codigo
 
 
 def validar_empresa(dados):

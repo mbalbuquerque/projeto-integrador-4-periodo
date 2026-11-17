@@ -22,7 +22,7 @@ faz hoje e a proposta da equipe para um uso real, sem substituir revisão juríd
 
 | dado | de quem | finalidade | base legal (proposta) |
 |---|---|---|---|
-| Nome, e-mail e perfil (operador ou gestor) | usuário da empresa | acesso ao painel e controle de permissão | execução de contrato (art. 7º, V) |
+| Nome, e-mail e perfil (operador, gestor ou motorista) e, do motorista, o código do veículo vinculado | usuário da empresa | acesso ao painel e controle de permissão | execução de contrato (art. 7º, V) |
 | Hash da senha (scrypt, com sal); a senha em si não é guardada | usuário | autenticação | execução de contrato (art. 7º, V) |
 | Empresa vinculada ao usuário | usuário | separar os dados de cada empresa | execução de contrato (art. 7º, V) |
 | Nome da empresa e data de criação | empresa | identificar o cliente | execução de contrato (art. 7º, V) |
