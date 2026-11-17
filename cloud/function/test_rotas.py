@@ -136,6 +136,7 @@ class BaseRotas(unittest.TestCase):
         self.senha.start()
 
     def tearDown(self):
+        function_app.LIMITES.reiniciar()
         self.senha.stop()
         self.cosmos.stop()
         self.env.stop()
@@ -203,6 +204,40 @@ class TestPerfisEEmpresas(BaseRotas):
         self.assertEqual(status, 201)
         self.assertIn("token", corpo)
         self.assertEqual(corpo["usuario"]["empresa"], "Agro Frutas")
+
+
+    def cadastrar(self, n, ip="200.5.5.5", **extra):
+        return self.chamar(EMPRESAS, "POST", "/api/empresas", {
+            "empresa": f"Empresa {n}", "nome": "Gestor", "email": f"g{n}@novo.com",
+            "senha": "senha-forte-123"}, headers={"X-Azure-ClientIP": ip, **extra})
+
+    def test_empresas_limite_por_ip(self):
+        for n in range(function_app.EMPRESAS_POR_HORA_POR_IP):
+            self.assertEqual(self.cadastrar(n)[0], 201)
+        with self.assertLogs(level="WARNING"):
+            status, corpo = self.cadastrar(99)
+        self.assertEqual((status, corpo), (429, {"erros": [function_app.MSG_CADASTRO_LIMITE]}))
+        self.assertNotIn("g99@novo.com", [u["id"] for u in self.containers["usuarios"].itens])
+        # Outro IP não é afetado; a janela de 1 hora libera o IP.
+        self.assertEqual(self.cadastrar(98, ip="200.6.6.6")[0], 201)
+        depois = time.time() + 3601
+        with mock.patch("time.time", lambda: depois):
+            self.assertEqual(self.cadastrar(97)[0], 201)
+
+    def test_empresas_pedido_invalido_nao_gasta_o_limite(self):
+        for _ in range(function_app.EMPRESAS_POR_HORA_POR_IP + 2):
+            status, _ = self.chamar(EMPRESAS, "POST", "/api/empresas", {"empresa": ""},
+                                    headers={"X-Azure-ClientIP": "200.5.5.5"})
+            self.assertEqual(status, 400)
+        self.assertEqual(self.cadastrar(1)[0], 201)
+
+    def test_empresas_email_repetido_conta_no_limite(self):
+        for _ in range(function_app.EMPRESAS_POR_HORA_POR_IP):
+            self.assertEqual(self.chamar(EMPRESAS, "POST", "/api/empresas", {
+                "empresa": "X", "nome": "Y", "email": "gestor@a.com",
+                "senha": "senha-forte-123"}, headers={"X-Azure-ClientIP": "200.5.5.5"})[0], 409)
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(self.cadastrar(1)[0], 429)
 
 
 class TestTelemetria(BaseRotas):

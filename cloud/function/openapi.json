@@ -245,7 +245,7 @@
         ],
         "operationId": "criarEmpresa",
         "summary": "Registers a new company and its first manager",
-        "description": "**Who can call:** public (no authentication). Creates the company (id `E-` + 8 hexadecimal characters) and the first user, with profile `gestor`, and already returns the token.",
+        "description": "**Who can call:** public (no authentication). Creates the company (id `E-` + 8 hexadecimal characters) and the first user, with profile `gestor`, and already returns the token. Limit: 5 successful or e-mail-conflicting sign-ups per IP per hour (invalid bodies are not counted); above that the API answers `429`.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -314,6 +314,21 @@
                 "example": {
                   "erros": [
                     "já existe uma conta com esse e-mail"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many sign-ups from this IP in the last hour.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "muitos cadastros deste IP. Tente de novo em 1 hora."
                   ]
                 }
               }
@@ -440,7 +455,7 @@
         ],
         "operationId": "trocarSenha",
         "summary": "Changes the user's own password",
-        "description": "**Who can call:** operator or manager (token from the login). Returns a new token; the previous tokens (other devices) stop working.",
+        "description": "**Who can call:** operator or manager (token from the login). Returns a new token; the previous tokens (other devices) stop working. A wrong current password counts toward the same escalating wait as the login (per account, shared with it): from the 5th wrong one in a row the account is on hold for 1 min, doubling up to 15 min. While on hold the API answers `429`, even with the right password; a correct change clears the count.",
         "security": [
           {
             "bearerAuth": []
@@ -508,6 +523,21 @@
           },
           "403": {
             "$ref": "#/components/responses/SemPerfil"
+          },
+          "429": {
+            "description": "Account on hold after too many wrong current passwords.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "muitas tentativas de senha atual erradas. Aguarde alguns minutos."
+                  ]
+                }
+              }
+            }
           }
         }
       }

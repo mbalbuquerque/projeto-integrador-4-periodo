@@ -109,6 +109,17 @@ CHAT_POR_DIA = 2000
 ASSISTENTE_POR_MINUTO = 15
 ASSISTENTE_POR_DIA = 300
 
+# Cadastro de empresa: até 5 por IP por hora. Uma empresa se cadastra uma vez;
+# 5 cobre erros de digitação que chegam ao banco (e-mail repetido), um escritório
+# ou uma sala de aula atrás do mesmo IP, e ainda limita um script a 120 contas
+# por dia por IP.
+EMPRESAS_POR_HORA_POR_IP = 5
+MSG_CADASTRO_LIMITE = "muitos cadastros deste IP. Tente de novo em 1 hora."
+
+# Troca de senha: a senha atual errada conta na mesma espera crescente do login.
+MSG_SENHA_EM_ESPERA = ("muitas tentativas de senha atual erradas. "
+                       "Aguarde alguns minutos.")
+
 # Login: até 20 tentativas erradas por IP a cada 15 minutos.
 LOGIN_FALHAS_POR_IP = 20
 LOGIN_JANELA_IP_S = 15 * 60
@@ -319,6 +330,11 @@ def empresas(req: func.HttpRequest) -> func.HttpResponse:
     erros, doc = validar_empresa(dados)
     if erros:
         return resposta({"erros": erros}, 400)
+    # Conta só o pedido válido (que chega ao banco): erro de validação não gasta o limite.
+    if not LIMITES.permitir(f"empresas:ip:{ip_do_cliente(req.headers)}",
+                            EMPRESAS_POR_HORA_POR_IP, limites.HORA):
+        logging.warning("cadastro recusado: IP acima de %d por hora", EMPRESAS_POR_HORA_POR_IP)
+        return resposta({"erros": [MSG_CADASTRO_LIMITE]}, 429)
 
     empresa_id = "E-" + uuid.uuid4().hex[:8].upper()
     usuario = doc["usuario"]
@@ -424,15 +440,25 @@ def senha(req: func.HttpRequest) -> func.HttpResponse:
     erros, doc = validar_troca_senha(dados)
     if erros:
         return resposta({"erros": erros}, 400)
+    # Conta em espera (mesma do login): nem a senha certa troca a senha. Aqui o
+    # dono já está autenticado, então a resposta pode dizer a verdade (429).
+    if bloqueado_ate(usuario) > 0:
+        logging.warning("troca de senha recusada para %s (conta em espera)",
+                        mascarar_email(usuario["id"]))
+        return resposta({"erros": [MSG_SENHA_EM_ESPERA]}, 429)
     if not conferir_senha(doc["atual"], usuario["senhaHash"]):
+        _registrar_falha(usuario)
         return resposta({"erros": ["atual: senha atual incorreta"]}, 400)
 
     # Nova versão da sessão: tokens emitidos antes (outros aparelhos) param de valer.
     # Patch: grava só a senha e a sessão, sem regravar o resto do cadastro.
-    atualizado = _patch_usuario(usuario["id"], [
+    operacoes = [
         {"op": "set", "path": "/senhaHash", "value": gerar_hash(doc["nova"])},
         {"op": "incr", "path": "/sessao", "value": 1},
-    ])
+    ]
+    if usuario.get("falhas") or usuario.get("bloqueadoAte"):
+        operacoes += OPERACOES_DE_SUCESSO  # senha certa zera a contagem de falhas
+    atualizado = _patch_usuario(usuario["id"], operacoes)
     if atualizado is None:
         return resposta({"erros": ["faça login para continuar"]}, 401)
     logging.info("%s trocou a senha", mascarar_email(usuario["id"]))
