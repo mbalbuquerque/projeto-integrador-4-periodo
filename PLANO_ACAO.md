@@ -6,7 +6,7 @@ em branco = ainda não definido pela equipe.
 
 | Lacuna | UC / critério | Ação concreta | Responsável | Prazo | Evidência de conclusão |
 |---|---|---|---|---|---|
-| F3 sem execução registrada | IoT / Resiliência | F1 aprovado na placa física em 17/11; falta rodar o F3 na placa e anotar tempos | | 23/11 | Tabela preenchida em `RESILIENCIA.md` (#34) |
+| F3 sem execução registrada | IoT / Resiliência | F1 e F3 aprovados na placa física em 17/11 (tempos em `RESILIENCIA.md`); falta medir perda em 24 h e disponibilidade junto com a base de 48 h (#39) | | 23/11 | Tabela preenchida em `RESILIENCIA.md` (#34) |
 | Watchdog validado só no simulador | IoT / R4 | Repetir F2 (queda de energia) e um travamento na placa física | | 25/11 | F2 aprovado (#35) |
 | Modelo do sensor não supera o baseline | IA | `GET /api/predict/sensor` publicada com as leituras reais; MAE 0,342 °C contra 0,313 °C da persistência. Re-treinar depois da coleta de 48 h e mostrar a previsão no painel (Front-End-pi #60) | | 28/11 | Modelo com leituras do sensor (#37) |
 | Pesquisa só secundária e simulada | Consumidor | Validar persona e jornada (`docs/ux/`) com ≥ 5 entrevistas ou ≥ 20 respostas reais | | 25/11 | Registro da pesquisa (#38) |
