@@ -68,7 +68,7 @@ flowchart LR
 
 Dois caminhos saem da placa: o **principal** é HTTPS para a API própria, que confirma cada
 gravação e devolve a faixa da carga; o **secundário** é MQTT para o ThingSpeak, usado na
-plataforma de monitoramento da turma e na tela demonstrativa Monitoramento. O painel **só lê a
+plataforma de monitoramento da turma e na tela Monitoramento (com login). O painel **só lê a
 API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 
 **Quem usa.**
@@ -858,8 +858,8 @@ React 18 + Vite 5 + React Router 6, em JavaScript, publicado como site estático
 | `/relatorios` | Média, mínima, máxima, percentual fora da faixa, gráfico e CSV | `/leituras` |
 | `/configuracoes` | Trocar senha; usuários (gestor), com o perfil Motorista e o veículo dele | `/senha`, `/usuarios`, `/veiculos` |
 | `/motorista` | **Só o perfil motorista**, no celular: temperatura grande, status em cor e texto (NORMAL, ATENÇÃO, CRÍTICO, SEM SINAL), faixa, última leitura e viagem; alerta local (vibração, bipe, notificação) quando piora, aviso até voltar ao normal, tela acesa (Wake Lock), faixa sem conexão com o último valor marcado como antigo | `/motorista` |
-| `/monitoramento` | Tela demonstrativa que lê o canal público do ThingSpeak (`thingspeak.js`) | ThingSpeak |
-| `/usuarios`, `/auditoria`, `/cadastro-usuario`, `/logistica` | Telas demonstrativas com dados de exemplo, sem API | — |
+| `/monitoramento` | Tela com login que lê o canal público do ThingSpeak (`thingspeak.js`) | ThingSpeak |
+| `/usuarios`, `/cadastro-usuario`, `/logistica`, `/auditoria` | Endereços antigos, só redirecionam: usuários para Configurações (`/configuracoes#painelUsuarios`, API `/usuarios`), logística para Viagens e auditoria para a Visão geral. As telas com dados de exemplo foram removidas em 17/11 (Front #68) | — |
 | todas as logadas | Botão do **assistente do painel** (`AssistentePainel`, montado no `PainelLayout`) | `POST /assistente` |
 
 A etiqueta QR do veículo aponta para `/dashboard.html?veiculo=<código>`; quem escaneia precisa

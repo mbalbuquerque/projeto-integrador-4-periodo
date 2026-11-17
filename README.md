@@ -52,7 +52,7 @@ Os dois são publicados pela branch `main` (ver [Publicação](#publicação)).
 
 O painel é uma aplicação React + Vite (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)).
 A API é a única fonte dos dados: o painel não lê o ThingSpeak, que aparece apenas na tela
-demonstrativa de Monitoramento e no envio MQTT opcional do firmware. Os perfis de carga
+Monitoramento (com login) e no envio MQTT opcional do firmware. Os perfis de carga
 (manga, uva, demonstrativo) definem a faixa de temperatura de cada veículo; a API envia a
 faixa ao sensor a cada leitura.
 

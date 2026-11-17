@@ -174,7 +174,7 @@ entrega de 30/11/2026). Nenhum caso manual consta como executado; o registro de 
 - Passos: usar chave inválida do ThingSpeak ou bloquear o domínio; observar o painel.
 - Resultado esperado: o envio pela API continua e o painel segue atualizado.
 - Critério: fluxo pela API e painel atualizados.
-- Situação: **final**. O painel lê da API, não do ThingSpeak (que fica só na tela demonstrativa Monitoramento); falta executar com o canal bloqueado.
+- Situação: **final**. O painel lê da API, não do ThingSpeak (que fica só na tela Monitoramento); falta executar com o canal bloqueado.
 
 Medidas exigidas no relatório final (entrega de 30/11/2026): taxa de perda em pelo menos 24 h
 (meta: até 1%), disponibilidade do dispositivo (heartbeats recebidos ÷ esperados) e tempo de
