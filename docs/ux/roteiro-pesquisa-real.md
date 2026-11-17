@@ -84,7 +84,7 @@ indicação.
 ## Parte 2 — validação (final)
 
 Aplicar na entrega final, com o PWA publicado e uma pessoa por vez. Link do PWA:
-`[preencher com o endereço publicado]`. O avaliador observa e anota, sem ajudar.
+<https://stcoldtrackweb7319.z15.web.core.windows.net>. O avaliador observa e anota, sem ajudar.
 
 ### Tarefas
 
