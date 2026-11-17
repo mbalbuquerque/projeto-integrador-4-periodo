@@ -31,7 +31,10 @@ uma máscara de CPF no cadastro, mas a API não grava esse campo.
   (TTL do Cosmos); cadastros ficam até a empresa ou o gestor removê-los.
 - **Direitos do titular:** o gestor consegue corrigir (`PUT /usuarios/{id}`) e excluir
   (`DELETE /usuarios/{id}`) o cadastro de um usuário da empresa; a troca de senha é feita pelo
-  próprio usuário (`POST /senha`).
+  próprio usuário (`POST /senha`). O gestor também exclui a empresa inteira (`DELETE /empresa`),
+  com o nome da empresa digitado e a senha atual: saem usuários (com as inscrições de push),
+  sensores, leituras, veículos, viagens e a empresa, e todos os tokens dela param de valer (ver
+  [`api.md`](api.md#delete-empresa)).
 
 ## Base legal proposta
 
@@ -42,7 +45,8 @@ legítimo interesse para os registros de segurança (limite de tentativas e logs
 
 - Termo de uso e publicação da política de privacidade no site (a política está em
   [`politica-de-privacidade.md`](politica-de-privacidade.md)).
-- Rota de exclusão da empresa inteira (hoje só por usuário; o procedimento manual está na
-  política de privacidade).
+- Botão de exclusão da empresa no painel (a rota `DELETE /empresa` existe; a tela ainda não a
+  chama).
+- Rota de exportação dos dados (portabilidade e cópia completa), hoje atendida manualmente.
 - Confirmação de e-mail no cadastro, que evita cadastrar o e-mail de outra pessoa.
 - Definir quem é o encarregado (DPO) caso o sistema vá para uso real.

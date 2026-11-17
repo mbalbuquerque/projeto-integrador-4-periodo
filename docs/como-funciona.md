@@ -523,6 +523,7 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | GET | `/api/eu` | todos os perfis | Dados do usuário logado e nome da empresa (e `veiculo` do motorista) |
 | POST | `/api/senha` | todos os perfis | Troca a própria senha (pede a atual) e devolve token novo |
 | POST | `/api/sair` | todos os perfis | Derruba todas as sessões do usuário (204) e apaga as inscrições de push |
+| DELETE | `/api/empresa` | gestor | Exclui a própria empresa e todos os dados dela, com o nome digitado e a senha atual (`excluir_empresa`) |
 | GET | `/api/push/chave` | público | Chave pública VAPID dos alertas push (503 sem configuração) |
 | POST / DELETE | `/api/push/inscricao` | todos os perfis | Inscreve ou remove o aparelho nos alertas push |
 | GET | `/api/motorista` | motorista | Última leitura, faixa, status e viagem em curso **só do veículo vinculado** (`motorista`) |
@@ -641,6 +642,7 @@ O IP vem de `X-Azure-ClientIP` ou do último item do `X-Forwarded-For` (`ip_do_c
 | `POST /chat` | 10 por minuto por IP; 2000 por dia no site todo | 429 |
 | `POST /assistente` | 15 por minuto por usuário; 300 por dia por empresa | 429 |
 | `GET /motorista` | 30 por minuto por usuário (a tela consulta a cada 20 s) | 429 |
+| `DELETE /empresa` | 5 pedidos bem formados por hora por gestor; senha errada na espera do login | 429 |
 
 Sem limite próprio (e por quê, em `docs/seguranca.md`): `/telemetria` (um limite poderia descartar
 leitura legítima; a proteção é a chave), `/empresas` (lacuna conhecida), rotas estáticas, `/health`
@@ -1041,8 +1043,16 @@ consegue se passar por aquele sensor.
 Dados pessoais: nome, e-mail e perfil do usuário, hash da senha, IP (só como hash nos contadores,
 que expiram). Perguntas ao chat e ao assistente não são gravadas. Não há CPF, telefone ou
 localização na API. Princípios aplicados: necessidade, segurança, logs sem e-mail completo,
-retenção (logs 90 dias, contadores por TTL). O gestor corrige e exclui usuários; exclusão da
-empresa inteira ainda é manual. Base legal proposta: execução de contrato e legítimo interesse.
+retenção (logs 90 dias, contadores por TTL). O gestor corrige e exclui usuários e exclui a
+empresa inteira por `DELETE /api/empresa` (`excluir_empresa` em `function_app.py`): confere o
+perfil, a senha atual e o nome ou código da empresa digitado, e então `excluir_dados_da_empresa`
+derruba as sessões dos outros usuários e apaga, nesta ordem, sensores, leituras (consulta por
+`empresaId` em todas as partições, o que pega até leituras de sensores já removidos), viagens,
+veículos, outros usuários, a empresa e, por último, o gestor. Item que já sumiu é ignorado e
+cada pedido trabalha até 120 s (`EXCLUSAO_PRAZO_S`): passou disso, responde 202 e o pedido
+seguinte continua. Testes em `test_excluir_empresa.py` (duas empresas, falha no meio e
+repetição, prazo, log sem dado pessoal). Base legal proposta: execução de contrato e legítimo
+interesse.
 
 ---
 

@@ -129,6 +129,28 @@ def validar_troca_senha(dados):
     return [], {"atual": atual, "nova": nova}
 
 
+def validar_exclusao_empresa(dados):
+    """Pedido de exclusão da empresa: o texto de confirmação e a senha atual do gestor.
+
+    Só confere o formato; se a confirmação bate com o nome ou o código da empresa
+    e se a senha está certa, quem confere é a rota (precisa do banco).
+    """
+    if not isinstance(dados, dict):
+        return ["corpo deve ser um objeto JSON"], None
+    erros = []
+    confirmacao = dados.get("confirmacao")
+    if not isinstance(confirmacao, str) or not confirmacao.strip():
+        erros.append("confirmacao: digite o nome da empresa para confirmar")
+    senha = dados.get("senha")
+    if not isinstance(senha, str) or not senha:
+        erros.append("senha: informe a sua senha atual")
+    elif len(senha) > 128:
+        erros.append("senha: no máximo 128 caracteres")
+    if erros:
+        return erros, None
+    return [], {"confirmacao": confirmacao.strip(), "senha": senha}
+
+
 def validar_dispositivo(dados):
     if not isinstance(dados, dict):
         return ["corpo deve ser um objeto JSON"], None

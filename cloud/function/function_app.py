@@ -16,6 +16,7 @@ Painel (token do login no header `Authorization: Bearer <token>`):
   POST /api/assistente          pergunta ao assistente do painel        (operador, gestor)
   POST /api/senha               troca a própria senha                   (todos os perfis)
   POST /api/sair                encerra todas as sessões do usuário     (todos os perfis)
+  DELETE /api/empresa           exclui a própria empresa e todos os dados dela (gestor)
   POST/DELETE /api/push/inscricao  inscreve ou remove o aparelho nos alertas push (todos os perfis)
   GET  /api/motorista           leitura, faixa e viagem do veículo vinculado (motorista)
   GET  /api/leituras            últimas leituras de um dispositivo     (operador, gestor)
@@ -60,6 +61,7 @@ from cadastros import (
     SENHA_MIN,
     validar_dispositivo,
     validar_empresa,
+    validar_exclusao_empresa,
     validar_troca_senha,
     validar_usuario,
     validar_veiculo,
@@ -639,6 +641,132 @@ def sair(req: func.HttpRequest) -> func.HttpResponse:
                                    {"op": "set", "path": "/push", "value": []}])
     logging.info("%s saiu (sessões encerradas)", mascarar_email(usuario["id"]))
     return func.HttpResponse(status_code=204)
+
+
+# ------------------------------------------------------------ exclusão da empresa (LGPD)
+
+# Até 5 pedidos por gestor por hora: cada um custa um scrypt e várias consultas, e 5
+# cobrem um pedido que parou no meio e precisa ser repetido.
+EXCLUSOES_POR_HORA = 5
+# Tempo de trabalho de cada pedido. Empresa com muitas leituras não cabe numa
+# requisição só: passado o prazo, a rota para entre dois itens, responde 202 e o
+# gestor repete o pedido, que continua de onde parou.
+EXCLUSAO_PRAZO_S = 120
+MSG_EXCLUSAO_LIMITE = "muitos pedidos de exclusão. Tente de novo em 1 hora."
+MSG_EXCLUSAO_CONTINUAR = ("exclusão em andamento: repita o mesmo pedido para continuar "
+                          "de onde parou.")
+
+
+class PrazoEsgotado(Exception):
+    """O pedido de exclusão passou do prazo; o próximo pedido continua."""
+
+
+def _apagar(nome, itens, chave, prazo, contagem):
+    """Apaga os itens do container, um a um, contando em `contagem[nome]`.
+
+    Item que já sumiu (outro pedido, ou um anterior que parou no meio) é ignorado:
+    a exclusão pode ser repetida quantas vezes for preciso.
+    """
+    alvo = container(nome if nome != "leituras" else None)
+    for item in itens:
+        if time.monotonic() > prazo:
+            raise PrazoEsgotado()
+        try:
+            alvo.delete_item(item["id"], partition_key=item[chave])
+        except exceptions.CosmosResourceNotFoundError:
+            continue
+        contagem[nome] = contagem.get(nome, 0) + 1
+
+
+def _ids_da_empresa(nome, empresa, campos="c.id"):
+    return list(container(nome if nome != "leituras" else None).query_items(
+        f"SELECT {campos} FROM c WHERE c.empresaId = @e",
+        parameters=[{"name": "@e", "value": empresa}],
+        enable_cross_partition_query=True))
+
+
+def excluir_dados_da_empresa(empresa, gestor_id, prazo, contagem):
+    """Apaga tudo da empresa, na ordem que não deixa nada órfão nem gravando.
+
+    1. Sessões dos outros usuários: sobe a versão e tira o push (ninguém mais
+       cadastra nada durante a exclusão).
+    2. Sensores: a chave morre, o sensor para de gravar leitura.
+    3. Leituras da empresa (inclusive de sensores removidos antes).
+    4. Viagens e veículos.
+    5. Outros usuários (com as inscrições de push, que ficam no cadastro).
+    6. A empresa.
+    7. O gestor que pediu, por último: até aqui o token dele vale e o pedido
+       pode ser repetido se parar no meio.
+    Conta em `contagem` os itens apagados por container; levanta PrazoEsgotado
+    se o prazo acabar antes (o que já foi apagado continua apagado).
+    """
+    outros = [u for u in _ids_da_empresa("usuarios", empresa) if u["id"] != gestor_id]
+    for u in outros:
+        if time.monotonic() > prazo:
+            raise PrazoEsgotado()
+        _patch_usuario(u["id"], [{"op": "incr", "path": "/sessao", "value": 1},
+                                 {"op": "set", "path": "/push", "value": []}])
+    _apagar("dispositivos", _ids_da_empresa("dispositivos", empresa), "id", prazo, contagem)
+    _apagar("leituras", _ids_da_empresa("leituras", empresa, "c.id, c.deviceId"),
+            "deviceId", prazo, contagem)
+    _apagar("viagens", _ids_da_empresa("viagens", empresa), "id", prazo, contagem)
+    _apagar("veiculos", _ids_da_empresa("veiculos", empresa), "id", prazo, contagem)
+    _apagar("usuarios", [u for u in _ids_da_empresa("usuarios", empresa)
+                         if u["id"] != gestor_id], "id", prazo, contagem)
+    _apagar("empresas", [{"id": empresa}], "id", prazo, contagem)
+    _apagar("usuarios", [{"id": gestor_id}], "id", prazo, contagem)
+
+
+@app.route(route="empresa", methods=["DELETE"])
+def excluir_empresa(req: func.HttpRequest) -> func.HttpResponse:
+    """Exclui a empresa do gestor e todos os dados dela (direito de eliminação, LGPD).
+
+    Exige o nome (ou o código) da empresa digitado e a senha atual. Pode ser
+    repetida: um pedido que parou no meio (falha ou prazo) continua no próximo.
+    """
+    gestor, erro = autorizar(req, GESTOR)
+    if erro:
+        return erro
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    erros, doc = validar_exclusao_empresa(dados)
+    if erros:
+        return resposta({"erros": erros}, 400)
+    # Conta só o pedido bem formado (o que chega à senha e ao banco).
+    if not LIMITES.permitir(f"excluir-empresa:usuario:{gestor['id']}", EXCLUSOES_POR_HORA,
+                            limites.HORA):
+        return resposta({"erros": [MSG_EXCLUSAO_LIMITE]}, 429)
+    # Mesma espera do login e da troca de senha: o token sozinho não apaga a empresa.
+    if bloqueado_ate(gestor) > 0:
+        return resposta({"erros": [MSG_SENHA_EM_ESPERA]}, 429)
+    if not conferir_senha(doc["senha"], gestor["senhaHash"]):
+        _registrar_falha(gestor)
+        return resposta({"erros": ["senha: senha atual incorreta"]}, 400)
+
+    empresa = gestor["empresaId"]
+    registro = ler("empresas", empresa)
+    # O código vale sempre; o nome, enquanto a empresa existe (um pedido que parou
+    # depois de apagá-la só se confirma pelo código).
+    aceitas = {empresa.casefold()}
+    if registro and registro.get("nome"):
+        aceitas.add(registro["nome"].strip().casefold())
+    if doc["confirmacao"].casefold() not in aceitas:
+        return resposta({"erros": ["confirmacao: não confere com o nome da empresa"]}, 400)
+
+    prazo = time.monotonic() + EXCLUSAO_PRAZO_S
+    contagem = {}
+    try:
+        excluir_dados_da_empresa(empresa, gestor["id"], prazo, contagem)
+    except PrazoEsgotado:
+        # Só o código da empresa e a quantidade: nenhum dado pessoal no log.
+        logging.warning("exclusão da empresa %s parou no prazo; continua no próximo pedido",
+                        empresa)
+        return resposta({"excluida": False, "removidos": contagem,
+                         "mensagem": MSG_EXCLUSAO_CONTINUAR}, 202)
+    logging.info("empresa %s excluída a pedido do gestor: %s", empresa,
+                 ", ".join(f"{n} {k}" for k, n in sorted(contagem.items())))
+    return resposta({"excluida": True, "removidos": contagem})
 
 
 # ------------------------------------------------------------ chat do site

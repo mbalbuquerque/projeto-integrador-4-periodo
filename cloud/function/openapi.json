@@ -50,7 +50,7 @@
     },
     {
       "name": "Empresas",
-      "description": "Registration of a new company."
+      "description": "Registration of a new company and deletion of the own company."
     },
     {
       "name": "Perfis",
@@ -338,6 +338,158 @@
                   "erros": [
                     "muitos cadastros deste IP. Tente de novo em 1 hora."
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/empresa": {
+      "delete": {
+        "tags": [
+          "Empresas"
+        ],
+        "operationId": "excluirEmpresa",
+        "summary": "Deletes the caller's company and all of its data",
+        "description": "**Who can call:** manager (token from the login), and only for the company in the token. Right to erasure (LGPD, art. 18, VI). The body must repeat the company name exactly as registered (or the company code, `empresaId` from `GET /eu`; case and surrounding spaces are ignored) and the manager's current password.\n\nDeletes, in this order: the sessions and push subscriptions of the other users, the sensors (their keys stop working), all readings of the company (including those of sensors removed before), trips, vehicles, the other users, the company and, last, the manager who asked. Every token of the company stops working.\n\n**Idempotent and resumable:** an item already gone is skipped. If a call stops in the middle (failure, or the 120 s work limit answered with `202`), repeating the same call continues where it stopped; while the company record exists the name is accepted, after that only the code. Once the manager is deleted, a repeated call answers `401`.\n\nA wrong password counts toward the same escalating wait as the login. Limit: 5 well-formed calls per manager per hour. The log records only the company code and the counts, with no personal data. Rate-limit counters (hashed, no e-mail or IP in clear) expire by themselves.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExclusaoEmpresa"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Company deleted. `removidos` counts the documents deleted by this call, per container.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExclusaoEmpresaResposta"
+                },
+                "example": {
+                  "excluida": true,
+                  "removidos": {
+                    "dispositivos": 1,
+                    "leituras": 240,
+                    "viagens": 1,
+                    "veiculos": 1,
+                    "usuarios": 2,
+                    "empresas": 1
+                  }
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Work limit reached before the end. What was deleted stays deleted; repeat the same call to continue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExclusaoEmpresaResposta"
+                },
+                "example": {
+                  "excluida": false,
+                  "removidos": {
+                    "dispositivos": 1,
+                    "leituras": 5200
+                  },
+                  "mensagem": "exclusão em andamento: repita o mesmo pedido para continuar de onde parou."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, confirmation that does not match the company, or wrong current password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "corpo não é JSON válido",
+                    "value": {
+                      "erros": [
+                        "corpo não é JSON válido"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "confirmacao: digite o nome da empresa para confirmar",
+                    "value": {
+                      "erros": [
+                        "confirmacao: digite o nome da empresa para confirmar"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "senha: informe a sua senha atual",
+                    "value": {
+                      "erros": [
+                        "senha: informe a sua senha atual"
+                      ]
+                    }
+                  },
+                  "caso4": {
+                    "summary": "confirmacao: não confere com o nome da empresa",
+                    "value": {
+                      "erros": [
+                        "confirmacao: não confere com o nome da empresa"
+                      ]
+                    }
+                  },
+                  "caso5": {
+                    "summary": "senha: senha atual incorreta",
+                    "value": {
+                      "erros": [
+                        "senha: senha atual incorreta"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPermissao"
+          },
+          "429": {
+            "description": "Too many calls from this manager in the hour, or account on hold after too many wrong passwords.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "muitos pedidos de exclusão. Tente de novo em 1 hora.",
+                    "value": {
+                      "erros": [
+                        "muitos pedidos de exclusão. Tente de novo em 1 hora."
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "muitas tentativas de senha atual erradas. Aguarde alguns minutos.",
+                    "value": {
+                      "erros": [
+                        "muitas tentativas de senha atual erradas. Aguarde alguns minutos."
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2946,6 +3098,55 @@
           "nome": "Maria Exemplo",
           "email": "gestor@empresa-exemplo.com.br",
           "senha": "senha-de-exemplo-123"
+        }
+      },
+      "ExclusaoEmpresa": {
+        "type": "object",
+        "required": [
+          "confirmacao",
+          "senha"
+        ],
+        "properties": {
+          "confirmacao": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Company name exactly as registered, or the company code (`empresaId`). Case and surrounding spaces are ignored."
+          },
+          "senha": {
+            "type": "string",
+            "format": "password",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Current password of the manager."
+          }
+        },
+        "example": {
+          "confirmacao": "Frutas do Vale",
+          "senha": "senha-de-exemplo-123"
+        }
+      },
+      "ExclusaoEmpresaResposta": {
+        "type": "object",
+        "required": [
+          "excluida",
+          "removidos"
+        ],
+        "properties": {
+          "excluida": {
+            "type": "boolean",
+            "description": "`true` when nothing of the company is left."
+          },
+          "removidos": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Documents deleted by this call, per container (`dispositivos`, `leituras`, `viagens`, `veiculos`, `usuarios`, `empresas`)."
+          },
+          "mensagem": {
+            "type": "string",
+            "description": "Only with `202`: repeat the call to continue."
+          }
         }
       },
       "TrocaSenha": {
