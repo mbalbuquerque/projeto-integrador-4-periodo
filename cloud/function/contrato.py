@@ -14,6 +14,7 @@ Payload esperado (POST /api/telemetria):
 }
 """
 
+import bisect
 import re
 import time
 
@@ -154,20 +155,46 @@ def validar_heartbeat(dados):
 def lacunas_de_sequencia(leituras):
     """Leituras que faltam entre as recebidas, pelo número de sequência.
 
-    `leituras` em qualquer ordem; vale a ordem do horário da medição. Leitura
-    sem `seq` (placa antiga) não entra na conta. Sequência que volta para trás
-    é contador zerado (flash apagada), não perda: recomeça a contagem dali.
+    `leituras` em qualquer ordem. Leitura sem `seq` (placa antiga) não entra
+    na conta. A falta é calculada pelo número, não pela ordem do horário: a
+    placa pode carimbar uma leitura com o relógio adiantado (reinício antes
+    do NTP) e ela chega fora de ordem sem que nada tenha se perdido. Número
+    presente na resposta nunca é dado como faltando.
+
+    Contador zerado (flash apagada) recomeça a contagem: na ordem do horário,
+    uma leitura com número menor que o menor da contagem atual abre uma
+    contagem nova, e cada contagem tem as suas faltas.
     Retorna [{"de": n, "ate": m, "faltam": m - n + 1}], da mais antiga para a mais nova.
     """
     com_seq = sorted(
         (item for item in leituras if isinstance(item.get("seq"), int)),
-        key=lambda item: item["medidoEm"],
+        key=lambda item: (item["medidoEm"], item["seq"]),
     )
+
+    contagens = []
+    menor = None
+    for item in com_seq:
+        if menor is None or item["seq"] < menor:
+            contagens.append(set())
+            menor = item["seq"]
+        contagens[-1].add(item["seq"])
+
+    presentes = sorted(set().union(*contagens))
     lacunas = []
-    for anterior, atual in zip(com_seq, com_seq[1:]):
-        if atual["seq"] > anterior["seq"] + 1:
-            de, ate = anterior["seq"] + 1, atual["seq"] - 1
-            lacunas.append({"de": de, "ate": ate, "faltam": ate - de + 1})
+    for numeros in contagens:
+        ordenados = sorted(numeros)
+        for anterior, atual in zip(ordenados, ordenados[1:]):
+            # Entre dois números da contagem, o que falta é o que nenhuma
+            # leitura trouxe (nem de outra contagem).
+            inicio = anterior + 1
+            pos = bisect.bisect_left(presentes, inicio)
+            while inicio < atual:
+                proximo = presentes[pos] if pos < len(presentes) else atual
+                fim = min(proximo, atual) - 1
+                if fim >= inicio:
+                    lacunas.append({"de": inicio, "ate": fim, "faltam": fim - inicio + 1})
+                inicio = proximo + 1
+                pos += 1
     return lacunas
 
 

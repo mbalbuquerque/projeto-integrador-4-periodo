@@ -99,6 +99,41 @@ class TestLacunas(unittest.TestCase):
         itens = [self.leitura(40, 1), self.leitura(41, 2), self.leitura(1, 3), self.leitura(3, 4)]
         self.assertEqual(lacunas_de_sequencia(itens), [{"de": 2, "ate": 2, "faltam": 1}])
 
+    def test_fora_de_ordem_nao_e_lacuna(self):
+        # Caso real (coldtrack-0e0b2c, 17/11 03:30): a 266 saiu com o relógio
+        # adiantado depois de um reinício e ficou com horário depois da 270.
+        itens = [self.leitura(264, 28), self.leitura(265, 30), self.leitura(266, 32),
+                 self.leitura(267, 31), self.leitura(268, 31), self.leitura(269, 31),
+                 self.leitura(270, 32), self.leitura(271, 33)]
+        itens[2]["medidoEm"] = "2026-11-16T12:32:24+00:00"
+        itens[5]["medidoEm"] = "2026-11-16T12:31:57+00:00"
+        itens[6]["medidoEm"] = "2026-11-16T12:32:17+00:00"
+        self.assertEqual(lacunas_de_sequencia(itens), [])
+
+    def test_fora_de_ordem_com_falta_de_verdade(self):
+        itens = [self.leitura(10, 1), self.leitura(13, 2), self.leitura(11, 3),
+                 self.leitura(15, 4)]
+        self.assertEqual(lacunas_de_sequencia(itens), [{"de": 12, "ate": 12, "faltam": 1},
+                                                       {"de": 14, "ate": 14, "faltam": 1}])
+
+    def test_primeira_da_janela_fora_de_ordem(self):
+        # A janela começa numa leitura atrasada: a 10 depois da 11 não é contador zerado
+        # a ponto de dar a 11 (que está na resposta) como faltando.
+        itens = [self.leitura(11, 1), self.leitura(10, 2), self.leitura(12, 3)]
+        self.assertEqual(lacunas_de_sequencia(itens), [])
+
+    def test_contador_zerado_com_numeros_repetidos(self):
+        # Contagem nova reaproveita números da antiga: falta só o que ninguém trouxe.
+        itens = [self.leitura(4, 1), self.leitura(5, 2), self.leitura(6, 3),
+                 self.leitura(1, 4), self.leitura(5, 5), self.leitura(8, 6)]
+        self.assertEqual(lacunas_de_sequencia(itens), [{"de": 2, "ate": 3, "faltam": 2},
+                                                       {"de": 7, "ate": 7, "faltam": 1}])
+
+    def test_salto_grande_nao_materializa(self):
+        itens = [self.leitura(1, 1), self.leitura(2_000_000_000, 2)]
+        self.assertEqual(lacunas_de_sequencia(itens),
+                         [{"de": 2, "ate": 1_999_999_999, "faltam": 1_999_999_998}])
+
     def test_leitura_sem_seq_ignorada(self):
         itens = [self.leitura(None, 1), self.leitura(5, 2),
                  self.leitura(None, 3), self.leitura(6, 4)]
