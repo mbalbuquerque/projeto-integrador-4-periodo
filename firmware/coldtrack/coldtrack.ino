@@ -25,7 +25,7 @@
 // Cliente TLS que conta os bytes de aplicacao que passam por ele (antes da
 // criptografia): o que o HTTP ou o MQTT escreveu e leu. Cada envio vira uma
 // linha na serial, lida pelo .specs/ferramentas/medir.py:
-//   MEDIDA;<https|mqtt|mqtt-conexao>;<ms>;<bytes enviados>;<bytes recebidos>;<ok 1/0>
+//   MEDIDA;<https|heartbeat|mqtt|mqtt-conexao>;<ms>;<bytes enviados>;<bytes recebidos>;<ok 1/0>
 
 class ClienteContado : public WiFiClientSecure {
 
@@ -83,6 +83,8 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 
  Envio: POST JSON via HTTPS (TLS validado) na Azure Function
  {"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58,"medidoEm":1790000000}
+ Sem leitura valida (sensor em falha): POST /api/heartbeat
+ {"deviceId":"coldtrack-01","motivo":"sensor_falha","fw":"2026.11.17.2","rssi":-58,"seq":42}
  ==========================================================
 */
 
@@ -93,10 +95,18 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.17.1"
+#define FW_VERSAO "2026.11.17.2"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
+#endif
+
+// Heartbeat (POST /api/heartbeat): enviado no ciclo em que nao ha leitura valida
+// (sensor em falha), para o painel ver a placa viva. Por padrao, a mesma URL da
+// telemetria com /heartbeat no lugar de /telemetria. Nao vai para a fila
+// offline: um sinal de vida atrasado nao diz nada sobre agora.
+#ifndef AZURE_HEARTBEAT_URL
+#define AZURE_HEARTBEAT_URL urlHeartbeatCore(AZURE_FUNCTION_URL).c_str()
 #endif
 
 // Tempo para testar uma rede nova recebida pelo cabo, em ms. Rede que o scan
@@ -1144,6 +1154,66 @@ int postarAzure(const char *payload) {
 
   registrarMedida("https", millis() - inicio, clienteSeguro.enviados, clienteSeguro.recebidos,
                   status == 201 || status == 200);
+
+  return status;
+}
+
+
+// Heartbeat: placa viva sem leitura valida. Retorna o status HTTP (200 = aceito)
+// ou um codigo negativo de falha de rede. Falha nao vai para a fila.
+int enviarHeartbeat(const char *motivo) {
+
+  char payload[160];
+  montarHeartbeatCore(payload, sizeof(payload), cfgId.c_str(), motivo, FW_VERSAO,
+                      WiFi.RSSI(), seqAtual);
+
+  Serial.print("HEARTBEAT: ");
+  Serial.println(payload);
+
+#ifdef SIMULAR_API_STATUS
+  esperarAtualizando(800);
+  // A rota de heartbeat responde 200 (nao cria nada); 201 simulado vira 200.
+  int simulado = SIMULAR_API_STATUS == 201 ? 200 : SIMULAR_API_STATUS;
+  Serial.print("HEARTBEAT (SIMULADO, nada saiu da placa): status ");
+  Serial.println(simulado);
+  return simulado;
+#endif
+
+  String url = AZURE_HEARTBEAT_URL;
+  if (url.length() == 0) {
+    Serial.println("HEARTBEAT: URL da telemetria sem /telemetria; heartbeat desligado.");
+    return -1;
+  }
+
+  ClienteContado clienteSeguro;
+  clienteSeguro.setCACert(AZURE_ROOT_CA);
+
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+
+  unsigned long inicio = millis();
+
+  if (!http.begin(clienteSeguro, url)) {
+
+    Serial.println("HEARTBEAT: falha ao iniciar conexao HTTPS.");
+    registrarMedida("heartbeat", millis() - inicio, 0, 0, false);
+    return -1;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-device-key", cfgChave);
+
+  int status = http.POST(payload);
+
+  Serial.print("HEARTBEAT: status ");
+  Serial.print(status);
+  Serial.print(" ");
+  Serial.println(status > 0 ? http.getString() : http.errorToString(status));
+
+  http.end();
+
+  registrarMedida("heartbeat", millis() - inicio, clienteSeguro.enviados, clienteSeguro.recebidos,
+                  status == 200);
 
   return status;
 }
@@ -2459,13 +2529,39 @@ void loop() {
 
       Serial.println("ERRO: Falha na leitura do sensor!");
 
-      // Nada e enviado nem guardado: leitura invalida nunca sai como valida.
-      // Tela: FALHA SENSOR; LEDs: os tres piscando juntos.
+      // Leitura invalida nunca sai como valida: nada vai para a telemetria nem
+      // para a fila. Tela: FALHA SENSOR; LEDs: os tres piscando juntos.
       indSensorFalhou = true;
       indTemperatura = NAN;
       indUmidade = NAN;
       desenharIndicadores();
 
+      // Heartbeat (R7): a placa avisa que esta viva e que o sensor falhou, para
+      // o painel nao confundir com placa sem rede. So com conexao: heartbeat
+      // nao entra na fila offline. A fila de leituras validas de antes segue
+      // sendo reenviada.
+      if (conexaoDisponivel()) {
+
+        indEnviando = true;
+        desenharIndicadores();
+
+        reenviarFila();
+
+        alimentarWatchdog();
+
+        int status = enviarHeartbeat("sensor_falha");
+
+        indEnviando = false;
+        indUltimoHttp = status;
+        desenharIndicadores();
+      }
+
+      else {
+
+        Serial.println("Sem conexao. Heartbeat nao enviado (heartbeat nao vai para a fila).");
+      }
+
+      Serial.println("----------------------------------------");
       return;
     }
 

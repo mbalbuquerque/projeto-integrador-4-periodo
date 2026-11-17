@@ -112,6 +112,45 @@ def validar(dados, agora=None):
     return erros
 
 
+# Heartbeat (POST /api/heartbeat): sinal de vida da placa quando não há leitura
+# válida para enviar. Hoje o único motivo é o sensor em falha.
+MOTIVOS_HEARTBEAT = ("sensor_falha",)
+FW = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+
+
+def validar_heartbeat(dados):
+    """Erros do corpo do heartbeat. Lista vazia = válido.
+
+    {"deviceId": "coldtrack-01", "motivo": "sensor_falha", "fw": "2026.11.17.2",
+     "rssi": -58 (opcional, null aceito), "seq": 42 (opcional: última leitura enviada)}
+    """
+    if not isinstance(dados, dict):
+        return ["corpo deve ser um objeto JSON"]
+
+    erros = []
+    device = dados.get("deviceId")
+    if not isinstance(device, str) or not DEVICE_ID.match(device):
+        erros.append("deviceId: texto de 3 a 40 caracteres (letras, números, _ ou -)")
+    if dados.get("motivo") not in MOTIVOS_HEARTBEAT:
+        erros.append("motivo: use " + ", ".join(MOTIVOS_HEARTBEAT))
+    fw = dados.get("fw")
+    if not isinstance(fw, str) or not FW.match(fw):
+        erros.append("fw: texto de 1 a 32 caracteres (letras, números, ., _ ou -)")
+    if "rssi" in dados and dados["rssi"] is not None:
+        rssi = dados["rssi"]
+        if not isinstance(rssi, int) or isinstance(rssi, bool) or not RSSI_MIN <= rssi <= RSSI_MAX:
+            erros.append(f"rssi: inteiro de {RSSI_MIN} a {RSSI_MAX} ou null")
+    if "seq" in dados:
+        seq = dados["seq"]
+        if not isinstance(seq, int) or isinstance(seq, bool) or not SEQ_MIN <= seq <= SEQ_MAX:
+            erros.append(f"seq: inteiro de {SEQ_MIN} a {SEQ_MAX}")
+
+    extras = set(dados) - {"deviceId", "motivo", "fw", "rssi", "seq"}
+    if extras:
+        erros.append("campos não previstos: " + ", ".join(sorted(extras)))
+    return erros
+
+
 def lacunas_de_sequencia(leituras):
     """Leituras que faltam entre as recebidas, pelo número de sequência.
 

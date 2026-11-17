@@ -187,6 +187,88 @@
         }
       }
     },
+    "/heartbeat": {
+      "post": {
+        "tags": [
+          "Telemetria"
+        ],
+        "operationId": "enviarHeartbeat",
+        "summary": "Sends a liveness signal without a valid reading",
+        "description": "**Who can call:** device (its own key in the `x-device-key` header). The key is valid only for its own `deviceId`.\n\nSent by the board on every cycle (20 s) in which it has no valid reading to send; today the only reason is `sensor_falha` (the DHT read failed). It never creates a reading: an invalid reading is never stored as valid. It updates the device's last contact (so `GET /dispositivos` shows it `online`) and the sensor state: `sensor` becomes `falha`, with `sensorFalhaDesde` kept from the first heartbeat of the failure until a valid reading arrives. The next valid reading (`POST /telemetria`) ends the failure. Heartbeats are not queued offline by the board: an old liveness signal says nothing about now.\n\nLimit: 6 per minute per device (the board sends 3).",
+        "security": [
+          {
+            "dispositivo": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Heartbeat"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Heartbeat stored; the current sensor state goes back.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatGravado"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "motivo: use sensor_falha"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sensor not registered or wrong key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "dispositivo não registrado ou chave inválida"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than 6 heartbeats in the same minute for this device.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "muitos heartbeats seguidos. Tente de novo em 1 min."
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/perfis": {
       "get": {
         "tags": [
@@ -3364,6 +3446,77 @@
           "duplicada": true
         }
       },
+      "Heartbeat": {
+        "type": "object",
+        "required": [
+          "deviceId",
+          "motivo",
+          "fw"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{3,40}$"
+          },
+          "motivo": {
+            "type": "string",
+            "enum": [
+              "sensor_falha"
+            ],
+            "description": "Why there is no reading to send."
+          },
+          "fw": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,32}$",
+            "description": "Firmware version of the board."
+          },
+          "rssi": {
+            "type": "integer",
+            "minimum": -120,
+            "maximum": 0,
+            "nullable": true,
+            "description": "Wi-Fi signal in dBm; `null` when the radio gives an impossible value (simulator)."
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295,
+            "description": "Sequence number of the last reading the board produced (the heartbeat does not use a number of its own)."
+          }
+        },
+        "example": {
+          "deviceId": "coldtrack-01",
+          "motivo": "sensor_falha",
+          "fw": "2026.11.17.2",
+          "rssi": -61,
+          "seq": 1532
+        }
+      },
+      "HeartbeatGravado": {
+        "type": "object",
+        "required": [
+          "sensor",
+          "sensorFalhaDesde"
+        ],
+        "properties": {
+          "sensor": {
+            "type": "string",
+            "enum": [
+              "falha"
+            ]
+          },
+          "sensorFalhaDesde": {
+            "type": "string",
+            "format": "date-time",
+            "description": "First heartbeat of this failure."
+          }
+        },
+        "example": {
+          "sensor": "falha",
+          "sensorFalhaDesde": "2026-11-17T14:02:20+00:00"
+        }
+      },
       "Leitura": {
         "type": "object",
         "required": [
@@ -3453,11 +3606,26 @@
             "type": "string",
             "format": "date-time",
             "nullable": true,
-            "description": "When the sensor's latest reading arrived; null if it never sent one."
+            "description": "When the sensor's latest contact arrived: a reading or a heartbeat, whichever is newer; null if it never sent anything."
           },
           "online": {
             "type": "boolean",
-            "description": "True if the latest reading arrived at most 120 s ago."
+            "description": "True if the latest contact (reading or heartbeat) arrived at most 120 s ago."
+          },
+          "sensor": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "falha"
+            ],
+            "nullable": true,
+            "description": "Last known state of the temperature sensor: `falha` when the latest contact was a heartbeat with reason `sensor_falha` (no valid reading since), `ok` when it was a valid reading, `null` when the board never sent anything. Read it together with `online`: `online` true and `falha` means a live board with a failed sensor; `online` false means no contact at all."
+          },
+          "sensorFalhaDesde": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the current sensor failure started (first heartbeat of it); `null` unless `sensor` is `falha`."
           }
         },
         "example": {
@@ -3465,7 +3633,9 @@
           "descricao": "Baú do CT-001",
           "criadoEm": "2026-11-01T14:30:00+00:00",
           "ultimoContato": "2026-11-16T19:40:12+00:00",
-          "online": true
+          "online": true,
+          "sensor": "ok",
+          "sensorFalhaDesde": null
         }
       },
       "DispositivoNovo": {
@@ -4147,6 +4317,21 @@
                 "nullable": true
               }
             }
+          },
+          "sensor": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "falha"
+            ],
+            "nullable": true,
+            "description": "Last known state of the temperature sensor: `falha` when the latest contact was a heartbeat with reason `sensor_falha` (no valid reading since), `ok` when it was a valid reading, `null` when the board never sent anything. Read it together with `online`: `online` true and `falha` means a live board with a failed sensor; `online` false means no contact at all."
+          },
+          "sensorFalhaDesde": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the current sensor failure started (first heartbeat of it); `null` unless `sensor` is `falha`."
           }
         },
         "example": {
@@ -4175,7 +4360,9 @@
             "carga": "Manga Tommy, 12 paletes",
             "inicio": "2026-11-10T06:00:00-03:00",
             "fim": null
-          }
+          },
+          "sensor": "ok",
+          "sensorFalhaDesde": null
         }
       }
     },

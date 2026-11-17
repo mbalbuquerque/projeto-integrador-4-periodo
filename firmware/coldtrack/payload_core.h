@@ -34,6 +34,37 @@ inline void montarPayloadCore(char *destino, size_t tamanho, const char *deviceI
              deviceId ? deviceId : "", temperatura, umidade, rssiJson, seqJson, medidoJson);
 }
 
+// Heartbeat (POST /api/heartbeat): placa viva sem leitura valida para enviar.
+// seq: ultima sequencia usada por leitura (0 = omitido); o heartbeat nao gasta numero.
+inline void montarHeartbeatCore(char *destino, size_t tamanho, const char *deviceId,
+                                const char *motivo, const char *fw, long rssi,
+                                uint32_t seq = 0) {
+    char rssiJson[16];
+    if (rssi < 0) {
+        snprintf(rssiJson, sizeof(rssiJson), "%ld", rssi);
+    } else {
+        snprintf(rssiJson, sizeof(rssiJson), "null");
+    }
+
+    char seqJson[24] = "";
+    if (seq > 0) {
+        snprintf(seqJson, sizeof(seqJson), ",\"seq\":%lu", (unsigned long)seq);
+    }
+
+    snprintf(destino, tamanho,
+             "{\"deviceId\":\"%s\",\"motivo\":\"%s\",\"fw\":\"%s\",\"rssi\":%s%s}",
+             deviceId ? deviceId : "", motivo, fw, rssiJson, seqJson);
+}
+
+// URL do heartbeat a partir da URL da telemetria: troca o ultimo "/telemetria"
+// por "/heartbeat". Sem "/telemetria" na URL, devolve vazio (nao envia).
+inline std::string urlHeartbeatCore(const std::string &urlTelemetria) {
+    const std::string rota = "/telemetria";
+    size_t pos = urlTelemetria.rfind(rota);
+    if (pos == std::string::npos) return "";
+    return urlTelemetria.substr(0, pos) + "/heartbeat" + urlTelemetria.substr(pos + rota.size());
+}
+
 inline float extrairNumeroJson(const std::string &json, const std::string &chave) {
     std::string alvo = "\"" + chave + "\":";
     size_t pos = json.find(alvo);

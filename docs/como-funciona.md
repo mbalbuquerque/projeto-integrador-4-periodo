@@ -174,7 +174,10 @@ flowchart TD
     F --> G{passaram 20 s?}
     G -->|não| A
     G -->|sim| H[lerSensor: 2 tentativas]
-    H -->|falhou| I[FALHA SENSOR: três LEDs piscam<br/>nada é enviado]
+    H -->|falhou| I[FALHA SENSOR: três LEDs piscam<br/>nenhuma leitura enviada]
+    I --> P{conexaoDisponivel?}
+    P -->|sim| Q[reenviarFila até 10<br/>enviarHeartbeat sensor_falha]
+    P -->|não| R[heartbeat descartado<br/>não vai para a fila]
     H -->|ok| J[classifica pela faixa<br/>acende LED / tela]
     J --> K[montarPayload com medidoEm]
     K --> L{conexaoDisponivel?}
@@ -199,10 +202,19 @@ watchdog do sistema reiniciava a placa em loop.
   porque uma interrupção do Wi-Fi pode esticar um pulso e errar o checksum. Sem leitura válida,
   devolve `false` e `NAN` nos dois valores.
 - No `loop()`, `NAN` gera "ERRO: Falha na leitura do sensor!", mostra "FALHA SENSOR" na tela (com
-  `--.-°C`), faz os três LEDs piscarem juntos (seção 3.12) e **retorna sem enviar e sem guardar na
-  fila**. Leitura inválida
-  nunca sai como válida. Mesmo que saísse, a API recusaria `NaN` e valores fora da faixa física
-  (`contrato.validar`).
+  `--.-°C`), faz os três LEDs piscarem juntos (seção 3.12) e **não envia nem guarda leitura na
+  fila**. Leitura inválida nunca sai como válida. Mesmo que saísse, a API recusaria `NaN` e valores
+  fora da faixa física (`contrato.validar`).
+- Heartbeat (R7, firmware `2026.11.17.2`): no mesmo ciclo, com conexão, a placa reenvia a fila de
+  leituras válidas de antes e manda `POST /api/heartbeat` com
+  `{"deviceId", "motivo": "sensor_falha", "fw", "rssi", "seq"}` (`seq` é o da última leitura; o
+  heartbeat não gasta número, para não abrir lacuna falsa). A API não cria leitura: atualiza o
+  último contato do dispositivo e grava `sensorFalhaDesde`, e `GET /dispositivos` e
+  `GET /motorista` passam a mostrar `sensor: "falha"` com a placa `online`. Assim o painel separa
+  "placa viva com sensor em falha" de "placa desligada ou sem rede". Sem conexão o heartbeat é
+  descartado, **não vai para a fila**: um sinal de vida atrasado não diz nada sobre o agora, e
+  reenviado depois faria a placa parecer online no passado. A primeira leitura válida encerra a
+  falha. Detalhe da rota em [`api.md`](api.md#post-heartbeat).
 - Autoteste da conversão: compilado com `-DTESTE_DHT`, `autotesteDht` confere 5 casos conhecidos
   (inclusive checksum errado).
 
@@ -302,7 +314,9 @@ sair da placa (prova de tela e LED no simulador sem escrever na API de produçã
   espera crescente no Wi-Fi: a próxima tentativa é na próxima passada. A medição a cada 20 s
   continua acontecendo, e as leituras vão para a fila.
 - **MQTT**: espera crescente de 5 s até 60 s (seção 3.7).
-- **Watchdog**: o firmware **não configura** watchdog de tarefa (R4 pendente).
+- **Watchdog** (R4): watchdog de tarefa (TWDT) de `WATCHDOG_S` (60 s) no `loop()`; travou, a placa
+  reinicia, avisa `REINICIO WDT` e retoma a fila e a sequência, que estão na flash
+  (`iniciarWatchdog`, `alimentarWatchdog`; provado no Wokwi com `tela/erro-wdt.yaml`).
 
 ### 3.11 Configuração pelo cabo (Web Serial) e gravação da placa
 
@@ -496,6 +510,11 @@ solto é o fio puxado (o Wokwi não tem controle para desligar o DHT). O envio u
 - `tela/sem-config.yaml`: placa sem rede e sem identidade (`SEM CONFIG` / `LIGUE O CABO`);
 - `tela/erro-wdt.yaml`: API recusando (401) e reinício por watchdog (`SIMULAR_TRAVAMENTO_S 25`,
   `WATCHDOG_S 8`);
+- `tela/heartbeat.yaml` (R7): queda simulada de 25 s a 80 s (`SIMULAR_QUEDA_INICIO_S 25`,
+  `SIMULAR_QUEDA_S 55`). Leitura válida sem rede vai para a fila; o fio do sensor é puxado; sem
+  rede o heartbeat é descartado (fila continua com 1); a rede volta, a fila sai primeiro e depois
+  o heartbeat `sensor_falha` (simulado, `200`); outro heartbeat no ciclo seguinte; o fio volta e a
+  leitura válida sai de novo (`201`);
 - `leds/leds.yaml`: os padrões dos três LEDs (log `LED:` e `expect-pin`), com o analisador lógico
   gravando os três pinos.
 
@@ -925,11 +944,11 @@ Fonte: `RESILIENCIA.md`, `docs/qa/plano-de-testes.md` (seção 6) e o código.
 |---|---|---|---|
 | R1 | Reconexão automática | Implementado | `conectarWiFi` a cada passada do `loop()`; MQTT com espera de 5 a 60 s |
 | R2 | Armazenar e reenviar | Implementado | Fila `/fila.jsonl`, até 500, reenvio de 10 por ciclo com o `medidoEm` original |
-| R3 | Identidade da mensagem | Parcial | `deviceId` + `medidoEm` → id determinístico, `duplicada: true`, 409. **Não há número de sequência** |
-| R4 | Watchdog | Pendente | Nenhum watchdog de tarefa configurado no firmware |
+| R3 | Identidade da mensagem | Implementado | `deviceId` + `medidoEm` → id determinístico, `duplicada: true`, 409; `seq` por leitura (na flash), e `GET /leituras` devolve as `lacunas` da sequência |
+| R4 | Watchdog | Implementado | Watchdog de tarefa de 60 s no `loop()`; reinício retoma fila e sequência da flash (Wokwi `tela/erro-wdt.yaml`); **teste na placa física pendente** |
 | R5 | Falha de sensor | Implementado | Checksum, 2 tentativas, nada inválido é enviado; RSSI inválido vira `null` |
 | R6 | Degradação controlada | Implementado | "Sem dados desde HH:MM" no dashboard; API indisponível não trava a tela |
-| R7 | Observabilidade | Parcial | `/health` 200/503; `ultimoContato` e `online` por sensor, selo na tela de Sensores. Sem heartbeat próprio do firmware (a leitura faz esse papel) |
+| R7 | Observabilidade | Implementado | `/health` 200/503; `ultimoContato` e `online` por sensor; heartbeat `POST /heartbeat` a cada 20 s quando o sensor falha, com `sensor`/`sensorFalhaDesde` em `GET /dispositivos` e `GET /motorista` (Wokwi `tela/heartbeat.yaml`); **teste na placa física e exibição no painel pendentes** |
 | R8 | Recuperação na nuvem | Parcial | Backup periódico do Cosmos; restauração não testada; compose com reinício não testado |
 
 ### 8.2 Testes de falha F1 a F6
@@ -937,8 +956,8 @@ Fonte: `RESILIENCIA.md`, `docs/qa/plano-de-testes.md` (seção 6) e o código.
 | teste | critério | situação |
 |---|---|---|
 | F1 Queda de rede (60 s) | Reconecta em até 30 s, sem lacuna | Lógica implementada; **execução na placa não registrada** |
-| F2 Queda de energia | Volta a enviar em até 60 s | Final; a fila em flash sobrevive ao reinício; sem watchdog |
-| F3 Falha de sensor | Nada inválido gravado, alerta visível | Lógica implementada; **execução não registrada** |
+| F2 Queda de energia | Volta a enviar em até 60 s | Final; a fila e a sequência em flash sobrevivem ao reinício; watchdog de 60 s |
+| F3 Falha de sensor | Nada inválido gravado, alerta visível | Simulado no Wokwi (`tela/fases.yaml`, `tela/heartbeat.yaml`): `FALHA SENSOR` na tela, três LEDs piscando, nenhuma leitura enviada, heartbeat `sensor_falha` deixa a placa online com `sensor: "falha"`; testes da API em `test_heartbeat.py`. **Execução na placa física não registrada** |
 | F4 Nuvem fora | Serviço volta sozinho, zero perda | Final; reinício do contêiner não testado |
 | F5 Mensagem duplicada | Um só registro | **Automatizado**, passa no CI |
 | F6 ThingSpeak fora | API e painel seguem | Final; por desenho o painel não depende do ThingSpeak |
@@ -974,18 +993,20 @@ novo no ciclo seguinte. Se a fila passar de 500, as mais antigas são descartada
 - **Duplicada**: sabe. O id da leitura é `deviceId~medidoEm`; o segundo envio bate no mesmo id, a
   API compara os valores e responde 200 `duplicada: true` (reenvio legítimo) ou 409 (mesmo
   horário com valores diferentes).
-- **Perdida**: hoje **não há número de sequência**, então a API não detecta a perda de uma
-  mensagem específica. O que existe é detecção por tempo: o sensor deveria mandar a cada 20 s, o
-  painel avisa "Sem dados desde" após 2 min, o selo fica Offline após 120 s, e
-  `analise/sensor/descrever.py` conta lacunas (intervalo maior que 40 s) na base real. A placa
-  registra no log quando descarta leitura (fila cheia, flash indisponível). O plano de ação prevê
-  incluir uma sequência no payload e no contrato, com teste automático de lacuna.
+- **Perdida**: cada leitura leva `seq` (1, 2, 3..., guardado na flash); buraco na sequência é
+  leitura perdida entre o sensor e o banco, e `GET /leituras` devolve essas `lacunas`. Além disso
+  há a detecção por tempo: o sensor deveria mandar a cada 20 s, o painel avisa "Sem dados desde"
+  após 2 min, o selo fica Offline após 120 s, e `analise/sensor/descrever.py` conta lacunas
+  (intervalo maior que 40 s) na base real. A placa registra no log quando descarta leitura (fila
+  cheia, flash indisponível).
 
 ### 8.5 Outros cenários
 
-- **Sensor solta**: `lerSensor` falha duas vezes → pisca vermelho / "ERRO SENSOR", nada é enviado
-  nem enfileirado; o painel mostra "Sem dados desde" depois de 2 min. Ao religar, a próxima
-  leitura válida sai sozinha.
+- **Sensor solta**: `lerSensor` falha duas vezes → "FALHA SENSOR" e os três LEDs piscando; nenhuma
+  leitura é enviada nem enfileirada. Com rede, a placa manda heartbeat `sensor_falha` a cada 20 s:
+  na API ela continua `online`, com `sensor: "falha"` e `sensorFalhaDesde`. Sem heartbeat por
+  120 s, aí sim ela fica offline (placa desligada ou sem rede). Ao religar, a próxima leitura
+  válida sai sozinha e encerra a falha.
 - **API fora**: `postarAzure` recebe erro de rede ou 5xx → `falhaTemporaria` → a leitura vai para
   a fila e o reenvio acontece quando a API volta. No painel, "Sem conexão com Azure" e o aviso de
   dados antigos; a tela não trava.
@@ -1205,8 +1226,8 @@ buraco. No painel, durante a queda, aparece 'Sem dados desde' depois de 2 minuto
 mesma leitura chega de novo, bate no mesmo id; a API compara e responde 200 com `duplicada: true`,
 ou 409 se os valores forem diferentes. Perdida, hoje ele só sabe pelo tempo: o sensor deveria
 mandar a cada 20 segundos, então o painel avisa quando passa de 2 minutos sem dado, e a análise da
-base conta as lacunas. Não temos número de sequência ainda; está no plano de ação, com teste
-automático de lacuna."
+base conta as lacunas. E cada leitura leva um número de sequência guardado na flash: se falta um
+número, a API aponta a lacuna em `GET /leituras`."
 
 **Cloud — Onde cada serviço está implantado e quanto custa por mês?**
 "Tudo no Azure, região Brazil South, grupo `rg-coldtrack`. A API é uma Azure Function em Python no
@@ -1222,7 +1243,8 @@ sozinha, e, como não temos instância sempre pronta, uma requisição depois de
 uma instância nova. Não medimos esse tempo. Para rodar fora do Azure temos o contêiner com
 `restart: unless-stopped` e healthcheck no `/api/health` a cada 30 segundos, mas isso ainda não foi
 testado; é o teste F4 da entrega final. A placa não depende do serviço estar no ar: guarda na
-flash e reenvia quando volta. O que falta é watchdog no firmware, que está pendente."
+flash e reenvia quando volta, e se o programa da placa travar o watchdog reinicia em até 60
+segundos e o envio retoma da fila."
 
 **Segurança — Qual a ameaça de maior risco no seu modelo STRIDE e qual controle a mitiga?**
 "Para nós é uma empresa ver dados de outra, porque é dado de cliente e toda rota que recebe um id
@@ -1359,6 +1381,7 @@ idempotency and per-device authentication."
 | **LGPD** | Lei Geral de Proteção de Dados (Lei 13.709/2018) |
 | **CI** | Integração contínua: testes automáticos a cada push (GitHub Actions) |
 | **Cobertura** | Percentual de linhas e ramos do código executados pelos testes |
-| **Watchdog** | Temporizador que reinicia a placa se o programa travar (pendente no firmware) |
+| **Watchdog** | Temporizador que reinicia a placa se o programa travar (60 s no firmware) |
+| **Heartbeat** | Sinal de vida da placa sem leitura válida (sensor em falha), em `POST /heartbeat` |
 | **Healthcheck** | Verificação periódica de saúde do serviço (`/api/health`) |
 | **SUS** | System Usability Scale, questionário de usabilidade (meta ≥ 68) |

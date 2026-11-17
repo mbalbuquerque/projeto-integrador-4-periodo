@@ -24,7 +24,7 @@ Base: `https://func-coldtrack-7319.azurewebsites.net/api`
 
 | tipo | como | usado por |
 |---|---|---|
-| chave do sensor | header `x-device-key: <chave>` | `POST /telemetria` |
+| chave do sensor | header `x-device-key: <chave>` | `POST /telemetria`, `POST /heartbeat` |
 | token do painel | header `Authorization: Bearer <token>` | rotas do painel, `POST /assistente` e `POST /sair` |
 | nenhuma | — | `POST /empresas`, `POST /login`, `GET /perfis`, `POST /chat`, `GET /docs`, `GET /openapi.json` |
 
@@ -50,6 +50,7 @@ acrescenta; os anteriores podem ter sido escritos pelo cliente).
 | `POST /chat` | 10 perguntas por minuto por IP; 2000 por dia no site todo | `429` |
 | `POST /assistente` | 15 perguntas por minuto por usuário; 300 por dia por empresa | `429` |
 | `GET /motorista` | 30 consultas por minuto por usuário (a tela consulta a cada 20 s) | `429` |
+| `POST /heartbeat` | 6 por minuto por sensor (a placa envia 3: um a cada 20 s) | `429` |
 
 As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 
@@ -107,6 +108,38 @@ veículo usa `demonstrativo`). Dentro de `[min, max]` é `NORMAL`; até `margem`
 **Alerta push**: quando a leitura piora de faixa, os operadores e gestores inscritos da empresa e
 os motoristas inscritos vinculados ao veículo do sensor recebem uma notificação (ver
 [Alertas push](#alertas-push-push)).
+
+### `POST /heartbeat`
+
+Acesso: chave do sensor (`x-device-key`), igual a `POST /telemetria`. Sinal de vida da placa
+no ciclo (20 s) em que ela não tem leitura válida para enviar; hoje o único motivo é o sensor
+em falha (leitura do DHT falhou).
+
+```json
+{"deviceId": "coldtrack-01", "motivo": "sensor_falha", "fw": "2026.11.17.2", "rssi": -61, "seq": 1532}
+```
+
+| campo | regra |
+|---|---|
+| `deviceId` | igual à telemetria |
+| `motivo` | `sensor_falha` |
+| `fw` | versão do firmware: 1 a 32 caracteres, letras, números, `.`, `_` ou `-` |
+| `rssi` | opcional; inteiro de -120 a 0, ou `null` |
+| `seq` | opcional; número de sequência da **última leitura** produzida pela placa (o heartbeat não gasta número, para não abrir lacuna falsa em `GET /leituras`) |
+
+| resposta | corpo |
+|---|---|
+| `200` | `{"sensor": "falha", "sensorFalhaDesde": "<ISO 8601>"}` |
+| `400` | erros de validação |
+| `401` | `dispositivo não registrado ou chave inválida` |
+| `429` | `muitos heartbeats seguidos. Tente de novo em 1 min.` |
+
+O heartbeat **não cria leitura**: leitura inválida nunca é gravada como válida. Ele grava no
+cadastro do dispositivo o horário do heartbeat (conta como último contato em
+`GET /dispositivos`), o motivo, a versão do firmware, o RSSI e `sensorFalhaDesde`, que é mantido
+desde o primeiro heartbeat da falha até chegar uma leitura válida (`POST /telemetria`), que
+encerra a falha. A placa não guarda heartbeat na fila offline: sinal de vida atrasado não diz
+nada sobre o agora.
 
 ## Acesso
 
@@ -360,7 +393,9 @@ do usuário, relido do banco a cada chamada, nunca da URL.
   "status": "NORMAL",
   "minutosSemLeitura": 1,
   "viagem": {"origem": "Petrolina - PE", "destino": "Suape - PE",
-             "carga": "Manga Tommy, 12 paletes", "inicio": "2026-11-10T06:00:00-03:00", "fim": null}
+             "carga": "Manga Tommy, 12 paletes", "inicio": "2026-11-10T06:00:00-03:00", "fim": null},
+  "sensor": "ok",
+  "sensorFalhaDesde": null
 }
 ```
 
@@ -372,6 +407,9 @@ do usuário, relido do banco a cada chamada, nunca da URL.
 - `minutosSemLeitura`: minutos inteiros desde a medição da última leitura; `null` sem leitura.
 - `viagem`: a viagem do veículo em curso (começou e não tem fim, ou o fim ainda não chegou); com
   mais de uma, a que começou por último. `null` quando não há.
+- `sensor` e `sensorFalhaDesde`: estado do sensor de temperatura, com a mesma regra de
+  `GET /dispositivos` (`falha` quando o contato mais recente foi um heartbeat `sensor_falha`).
+  `null` quando o veículo não tem sensor ou o sensor nunca falou.
 
 Erros: `401`; `403` para outro perfil; `404` `nenhum veículo vinculado a este motorista; fale com o
 gestor` (o veículo saiu da frota); `429` `muitas consultas seguidas. Tente de novo em 1 min.`
@@ -447,13 +485,20 @@ API com o novo `modelo_risco.json`.
 
 | método e rota | acesso | corpo | resposta |
 |---|---|---|---|
-| `GET /dispositivos` | operador, gestor | — | `200 {"dispositivos": [{"id", "descricao", "criadoEm"}]}` |
+| `GET /dispositivos` | operador, gestor | — | `200 {"dispositivos": [{"id", "descricao", "criadoEm", "ultimoContato", "online", "sensor", "sensorFalhaDesde"}]}` |
 | `POST /dispositivos` | gestor | `{"id", "descricao"}` | `201 {"id", "descricao", "criadoEm", "chave"}` |
 | `PUT /dispositivos/{id}` | gestor | — | `200 {"id", "chave"}`: gera chave nova, a anterior para de valer |
 | `DELETE /dispositivos/{id}` | gestor | — | `204` |
 
 - `id`: 3 a 40 caracteres, letras, números, `_` ou `-` (gravado em minúsculas);
   `descricao`: opcional, até 60.
+- `ultimoContato`: quando chegou o contato mais recente da placa, leitura ou heartbeat (o que for
+  mais novo); `null` se ela nunca enviou nada. `online`: contato há no máximo 120 s.
+- `sensor`: último estado conhecido do sensor de temperatura: `falha` quando o contato mais
+  recente foi um heartbeat `sensor_falha` (nenhuma leitura válida depois dele), `ok` quando foi
+  uma leitura válida, `null` quando a placa nunca falou. `sensorFalhaDesde`: início da falha
+  atual, `null` fora de falha. Lidos juntos: `online` com `falha` é placa viva com sensor em
+  falha; `online` falso é placa sem contato (desligada ou sem rede).
 - A `chave` aparece só na resposta do `POST` e do `PUT`; o banco guarda apenas o SHA-256.
 - Erros: `409` `o ID ... já está em uso; escolha outro`; `404` `dispositivo não encontrado`;
   `409` no `DELETE` quando um veículo usa o sensor.

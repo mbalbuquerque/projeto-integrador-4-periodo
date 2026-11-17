@@ -1,0 +1,38 @@
+# Uso: compilar o coldtrack.ino com o secrets.h do Wokwi (Wokwi-GUEST, DEVICE_ID e
+# DEVICE_KEY de teste) mais estas linhas:
+#   #define TELA_OLED / LED_PLACA 8 / LED_PLACA_RGB / SIMULAR_API_STATUS 201 /
+#   SIMULAR_QUEDA_INICIO_S 25 / SIMULAR_QUEDA_S 55
+# e rodar, na pasta com wokwi.toml e este diagram.json:
+#   wokwi-cli --timeout 400000 --scenario heartbeat.yaml .
+# SIMULAR_API_STATUS: o envio nao sai da placa (nada e escrito na API); o
+# heartbeat simulado responde 200, como a rota real.
+# Os prints saem em shots/ (take-screenshot da tela).
+# Heartbeat com o sensor em falha (issue 35, R7). "fio" e um botao no fio de
+# dados do DHT: pressionado = fio ligado; solto = fio puxado. Queda simulada de
+# 25 s a 80 s: a leitura valida feita sem rede vai para a fila; o heartbeat
+# feito sem rede nao vai; quando a rede volta, a fila sai antes do heartbeat.
+name: Heartbeat com sensor em falha
+version: 1
+author: ColdTrack
+steps:
+  - set-control: { part-id: fio, control: pressed, value: 1 }
+  - wait-serial: "Azure (SIMULADO"
+  - wait-serial: "FILA: leitura guardada offline (1 na fila)"
+  - set-control: { part-id: fio, control: pressed, value: 0 }
+  - wait-serial: "ERRO: Falha na leitura do sensor!"
+  - wait-serial: "Sem conexao. Heartbeat nao enviado (heartbeat nao vai para a fila)."
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/30-falha-sem-rede.png }
+  - wait-serial: "ERRO: Falha na leitura do sensor!"
+  - wait-serial: "FILA: 1 reenviadas, 0 restantes."
+  - wait-serial: "HEARTBEAT: {\"deviceId\":\"coldtrack-sim\",\"motivo\":\"sensor_falha\",\"fw\":\"2026.11.17.2\",\"rssi\":"
+  - wait-serial: "HEARTBEAT (SIMULADO, nada saiu da placa): status 200"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/31-falha-heartbeat.png }
+  - wait-serial: "ERRO: Falha na leitura do sensor!"
+  - wait-serial: "HEARTBEAT (SIMULADO, nada saiu da placa): status 200"
+  - set-control: { part-id: fio, control: pressed, value: 1 }
+  - wait-serial: "STATUS DA CARGA: NORMAL"
+  - wait-serial: "Azure (SIMULADO, nada saiu da placa): status 201"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/32-sensor-volta.png }
