@@ -93,7 +93,7 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.16.2"
+#define FW_VERSAO "2026.11.16.3"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
@@ -113,6 +113,11 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 
 // Maximo de redes na resposta do comando "redes".
 #define REDES_MAX 15
+
+// Scan recusado pelo driver (estacao no meio de uma conexao): quantas vezes
+// tentar, e a espera antes da proxima (cresce a cada tentativa), em ms.
+#define SCAN_TENTATIVAS 4
+#define SCAN_ESPERA_MS 500
 
 String cfgSsid;
 String cfgSenha;
@@ -1342,6 +1347,7 @@ void reenviarFila() {
 //       sinal_fraco | sem_ip | tempo | rede_invalida | ...; motivo = codigo do
 //       driver (wifi_err_reason_t); rssi/canal/seguranca so quando o scan achou a rede.
 //   CT>{"ok":true,"redes":[{"ssid":"..","rssi":-60,"canal":6,"seguranca":"wpa2"}]}
+//   CT>{"pronto":true,"fw":".."}     uma vez, ao fim do setup (placa pronta para comandos)
 // Senha e chave nunca voltam pela serial nem aparecem no log.
 
 String bufferSerial;
@@ -1511,17 +1517,39 @@ bool redeCorporativa(wifi_auth_mode_t modo) {
 }
 
 
-// Scan bloqueante; se o driver estiver no meio de uma tentativa de conexao
-// (scan recusado) e a placa nao estiver conectada, para a tentativa e repete.
+// Scan bloqueante. O driver recusa o scan enquanto a estacao esta no meio de
+// uma tentativa de conexao (logo depois do boot, por exemplo): nesse caso
+// para a tentativa, espera o estado assentar e repete, ate SCAN_TENTATIVAS.
 int16_t escanear(const char *ssid) {
 
-  int16_t n = WiFi.scanNetworks(false, true, false, 300, 0, ssid);
+  int16_t n = WIFI_SCAN_FAILED;
 
-  if (n == WIFI_SCAN_FAILED && WiFi.status() != WL_CONNECTED) {
-    WiFi.disconnect();
-    delay(200);
-    ultimaTentativaWiFi = 0;   // o loop reconecta logo depois
+  for (int tentativa = 1; tentativa <= SCAN_TENTATIVAS; tentativa++) {
+
     n = WiFi.scanNetworks(false, true, false, 300, 0, ssid);
+
+    if (n >= 0) {
+      return n;
+    }
+
+    Serial.printf("WIFI: scan recusado (%d), tentativa %d de %d.\n", n, tentativa, SCAN_TENTATIVAS);
+    WiFi.scanDelete();
+
+    if (tentativa == SCAN_TENTATIVAS) {
+      break;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+      WiFi.disconnect();
+      ultimaTentativaWiFi = 0;   // o loop reconecta logo depois
+    }
+
+    // Espera crescente, alimentando o watchdog, para o driver sair do "connecting".
+    unsigned long inicio = millis();
+    while (millis() - inicio < SCAN_ESPERA_MS * (unsigned long)tentativa) {
+      delay(50);
+      alimentarWatchdog();
+    }
   }
 
   return n;
@@ -2002,6 +2030,10 @@ void setup() {
 
   Serial.println();
   Serial.println("Sistema iniciado.");
+
+  // Linha de prontidao: o painel espera por ela (ou por um "info" respondido)
+  // antes de mandar comandos, porque abrir a porta pode reiniciar a placa.
+  responder(String("{\"pronto\":true,\"fw\":") + emJson(FW_VERSAO) + "}");
 }
 
 
