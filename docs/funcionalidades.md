@@ -263,15 +263,15 @@ em `infra/main.bicep` e `infra/README.md`.
 
 ```mermaid
 flowchart LR
-    DEV["commit na branch everson"] --> GH["GitHub Actions"]
+    DEV["merge na branch main"] --> GH["GitHub Actions"]
     GH --> T["lint + testes<br/>(+ build no painel)"]
     T -- "passou" --> OIDC["login no Azure por OIDC<br/>(sem senha no repositório)"]
     OIDC --> API["Function App<br/>(cloud/function/)"]
     OIDC --> SITE["Storage $web<br/>(painel)"]
 ```
 
-A identidade de publicação só tem permissão no grupo `rg-coldtrack` e só é aceita para a
-branch `everson` dos dois repositórios. O firmware é compilado e gravado pelo cabo USB.
+A identidade de publicação só tem permissão no grupo `rg-coldtrack` e só é aceita para as
+branches `main` (a que publica) e `everson` (reserva) dos dois repositórios. O firmware é compilado e gravado pelo cabo USB.
 
 ## 9. Monitoramento ThingSpeak e plataforma da turma
 

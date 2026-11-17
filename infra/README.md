@@ -210,7 +210,7 @@ Leitura do resultado:
   nível Information (linhas de início e fim de cada execução do host). Subir o nível de log da
   Function para Warning (`logging.logLevel` no `host.json`) tira cerca de 60% do volume
   ingerido (de 68,8 para 27,1 MB no piloto), o que leva o item a cerca de US$ 43 e o total a
-  cerca de US$ 128 (R$ 741). Não foi aplicado: mexer em `cloud/function/` na `everson`
+  cerca de US$ 128 (R$ 741). Não foi aplicado: mexer em `cloud/function/` na `main`
   publica a API em produção.
 - **Function:** o valor usa a média medida e funciona como teto; com execuções curtas de
   telemetria o gasto deve ficar abaixo. Medir com sensores ligados por alguns dias melhora a
@@ -377,18 +377,29 @@ O workflow `.github/workflows/publicar-api.yml` entra no Azure por OIDC, sem sen
    **Contributor** apenas no grupo `rg-coldtrack`.
 2. Esse aplicativo tem uma credencial federada com emissor
    `https://token.actions.githubusercontent.com`, público `api://AzureADTokenExchange` e
-   *subject* restrito à branch `everson` deste repositório
-   (`repo:<dono>/projeto-integrador-4-periodo:ref:refs/heads/everson`, no formato com os IDs
-   do GitHub).
+   *subject* restrito a uma branch deste repositório. São duas credenciais:
+   `gh-projeto-integrador-4-periodo-main` (branch `main`, a que publica) e
+   `gh-projeto-integrador-4-periodo-everson` (branch `everson`, reserva). O *subject* usa o
+   formato com os IDs do GitHub:
+   `repo:<dono>@<id do dono>/projeto-integrador-4-periodo@<id do repo>:ref:refs/heads/main`.
 3. Os secrets do repositório `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` e
    `AZURE_SUBSCRIPTION_ID` só dizem **qual** identidade usar; não são senhas.
 4. Na execução, o GitHub emite um token assinado para o job, o `azure/login` troca esse
    token por um acesso ao Azure e o job publica o pacote.
 
-Consequência: um push em outra branch (inclusive `main`) não consegue publicar. Para
-publicar a partir de outra branch é preciso criar outra credencial federada com o
-*subject* dessa branch.
+O workflow dispara em push na `main` (e manualmente, por `workflow_dispatch`). Um push em
+outra branch não consegue publicar, porque o Azure recusa o token. Para publicar a partir de
+outra branch é preciso criar outra credencial federada com o *subject* dessa branch, copiando o
+formato de uma existente:
 
-O painel (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)) usa o mesmo aplicativo com uma segunda credencial
-federada, também presa à branch `everson` daquele repositório. Por isso a `everson` dos dois repositórios
-nunca deve ser apagada: o deploy e o login por OIDC dependem dela.
+```bash
+az ad app federated-credential list --id <AZURE_CLIENT_ID> -o table
+az ad app federated-credential create --id <AZURE_CLIENT_ID> --parameters credencial.json
+```
+
+O painel (repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)) usa o mesmo
+aplicativo, com as credenciais `gh-Front-End-pi-main` e `gh-Front-End-pi-everson`.
+
+A `everson` dos dois repositórios deixou de disparar a publicação, mas a credencial dela foi
+mantida como reserva: se a publicação pela `main` falhar, basta voltar o gatilho do workflow
+para a `everson`. Por isso a `everson` não deve ser apagada enquanto essa credencial existir.

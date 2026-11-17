@@ -1,11 +1,13 @@
 name: Publicar API
 
-# A cada push na branch everson que mexa na API: testa e publica no Azure.
+# A cada push na branch main que mexa na API: testa e publica no Azure.
 # Login no Azure por OIDC (sem senha guardada): a identidade só é aceita
-# para esta branch deste repositório e só enxerga o grupo rg-coldtrack.
+# para as branches main e everson deste repositório e só enxerga o grupo
+# rg-coldtrack. A everson não dispara mais a publicação, para o mesmo código
+# não ser publicado duas vezes; a credencial dela fica como reserva.
 on:
   push:
-    branches: [everson]
+    branches: [main]
     paths:
       - "cloud/function/**"
       - ".github/workflows/publicar-api.yml"

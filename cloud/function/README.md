@@ -146,7 +146,7 @@ pip install ruff==0.17.4 && ruff check .
 
 ## Deploy
 
-Automático pelo GitHub Actions (`publicar-api.yml`) a cada push na branch `everson` que altere
+Automático pelo GitHub Actions (`publicar-api.yml`) a cada push na branch `main` que altere
 esta pasta. Manual: `bash publicar.sh`. Os dois publicam exatamente os arquivos listados em
 `pacote.txt`; o `test_pacote.py` falha se um módulo novo da API ficar de fora. Testes,
 `scripts/` e configuração de lint não são publicados.

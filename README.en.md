@@ -17,7 +17,7 @@ The project has two repositories:
 | [projeto-integrador-4-periodo](https://github.com/mbalbuquerque/projeto-integrador-4-periodo) (this one) | ESP32-C3 firmware, API (Azure Functions, Python), infrastructure, climate analysis and documentation |
 | [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) | web dashboard (React + Vite) published on Azure Storage |
 
-Both are published from the `everson` branch (see [Deployment](#deployment)).
+Both are published from the `main` branch (see [Deployment](#deployment)).
 
 | | address |
 |---|---|
@@ -97,6 +97,22 @@ Note: the linked documents under `docs/`, the other READMEs and the code comment
 └── .github/workflows/       tests (API and firmware) and API deployment
 ```
 
+### Required delivery structure
+
+The folders were not renamed to the delivery names because the path is part of the
+deployment (workflows, `pacote.txt`, links in the documentation and in Wokwi). Mapping:
+
+| required folder | where it is | contents |
+|---|---|---|
+| `/firmware` | [`firmware/`](firmware/) | ESP32-C3 firmware, firmware tests and the Wokwi circuit |
+| `/backend` | [`cloud/function/`](cloud/function/) | API on Azure Functions (Python), tests and deployment |
+| `/database` | [`infra/main.bicep`](infra/main.bicep) (Cosmos DB), [`infra/ci/preparar_banco.py`](infra/ci/preparar_banco.py), [`infra/backup/`](infra/backup/), [`cloud/function/scripts/`](cloud/function/scripts/) | database and container definition, test environment seeding, logical backup and restore, migration |
+| `/frontend` | [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) repository | web dashboard (React + Vite) |
+| `/mobile` | [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) repository | the same dashboard as a PWA installable on the phone (`public/manifest.json`, `public/sw.js`); there is no native app |
+| `/ia` | [`analise/`](analise/), [`cloud/function/chat.py`](cloud/function/chat.py), [`cloud/function/assistente.py`](cloud/function/assistente.py) | climate analysis of the route (INMET data) and chat/assistant with Azure OpenAI |
+| `/infra` | [`infra/`](infra/), [`.github/workflows/`](.github/workflows/) | Bicep, Dockerfile, compose, backup and test/deployment workflows |
+| `/docs` | [`docs/`](docs/) | technical documentation, API, security, deployment |
+
 ## How to run
 
 ### Firmware
@@ -152,16 +168,18 @@ See [`analise/README.md`](analise/README.md).
 ## Deployment
 
 - **API**: the `publicar-api.yml` workflow runs the tests and publishes to the Function App on every
-  push to the `everson` branch that changes `cloud/function/`. Azure login uses OIDC, accepted only
-  for that branch. Manual deployment: `bash cloud/function/publicar.sh`.
+  push to the `main` branch that changes `cloud/function/`. Azure login uses OIDC, accepted only
+  for `main` and for `everson` (a fallback that no longer triggers deployment). Manual deployment:
+  `bash cloud/function/publicar.sh`.
 - **Dashboard**: published by the [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) repository,
-  also on every push to `everson`.
+  also on every push to `main`.
 - **Infrastructure**: `infra/main.bicep` documents the environment; do not apply it without `what-if`
   (see [`infra/README.md`](infra/README.md)).
 
-Workflow: commits on `everson`, pull request to `main` when a stage is ready.
-**The `everson` branch must never be deleted**, because deployment and the OIDC login depend on it.
-Details and commit convention in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Workflow: branch off `main`, pull request to `main` with green tests.
+The `everson` branch stays as a deployment fallback and must not be deleted. Protecting `main`
+(required pull request and tests) needs a repository administrator; the command is in
+[`CONTRIBUTING.md`](CONTRIBUTING.md), along with the commit convention.
 
 ## Security
 
