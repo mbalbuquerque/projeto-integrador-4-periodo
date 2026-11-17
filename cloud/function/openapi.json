@@ -1446,6 +1446,167 @@
         }
       }
     },
+    "/predict/sensor": {
+      "get": {
+        "tags": [
+          "Risco térmico"
+        ],
+        "operationId": "preverTemperaturaDoSensor",
+        "summary": "Sensor temperature forecast 10 minutes ahead, with the persistence baseline",
+        "description": "**Who can call:** operator or manager (choose the sensor with `deviceId`, which must belong to the company of the token) or driver (always the sensor of the vehicle linked to the driver; `deviceId` is ignored). A sensor of another company answers like a missing one (404). Uses the last readings of the sensor itself: a ridge regression (no intercept) on the change over the last 5 and 10 minutes and the 10-minute mean, trained and evaluated with a temporal split on the real readings of the team's board (`analise/sensor/modelo_previsao.py`). The answer always carries the persistence baseline and both test errors; `recomendada` says which one won on the test split, and the screen should show that one. **Limitation:** few hours of data, sensor on a bench and not inside a refrigerated box; with the current data the model does **not** beat the baseline (see `modelo.superaBaseline`). It supports a human decision and never triggers an automatic action. Model card: `docs/model-card.md`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "query",
+            "required": false,
+            "description": "Sensor of the user's company. Required for operator and manager; ignored for the driver.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "coldtrack-01"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Forecast, baseline, recommended source and model version. `previsao` and `baseline` are null when `motivo` explains why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrevisaoSensor"
+                },
+                "example": {
+                  "deviceId": "coldtrack-01",
+                  "horizonteMin": 10,
+                  "ultimaLeitura": {
+                    "medidoEm": "2026-11-17T06:17:05+00:00",
+                    "perfil": "demonstrativo",
+                    "temperatura": 32.8,
+                    "status": "CRITICO"
+                  },
+                  "previsao": {
+                    "para": "2026-11-17T06:27:05+00:00",
+                    "temperatura": 32.8,
+                    "status": "CRITICO"
+                  },
+                  "baseline": {
+                    "para": "2026-11-17T06:27:05+00:00",
+                    "temperatura": 32.8,
+                    "status": "CRITICO"
+                  },
+                  "recomendada": "baseline",
+                  "antecipaExcursao": false,
+                  "motivo": null,
+                  "modelo": {
+                    "versao": "sensor-ridge-10min-v1",
+                    "fonte": "ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe, em bancada)",
+                    "treino": {
+                      "de": "2026-09-29T19:23:00+00:00",
+                      "ate": "2026-11-17T02:18:00+00:00",
+                      "amostras": 496
+                    },
+                    "teste": {
+                      "de": "2026-11-17T02:29:00+00:00",
+                      "ate": "2026-11-17T06:06:00+00:00",
+                      "amostras": 218
+                    },
+                    "maeModelo": 0.342,
+                    "maeBaseline": 0.3128,
+                    "rmseModelo": 0.4711,
+                    "rmseBaseline": 0.4941,
+                    "superaBaseline": false,
+                    "usaLeiturasDoSensor": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Operator or manager without `deviceId`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "informe ?deviceId="
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          },
+          "404": {
+            "description": "Sensor not found in the company, or driver without a linked vehicle or sensor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "sensor": {
+                    "summary": "dispositivo não encontrado",
+                    "value": {
+                      "erros": [
+                        "dispositivo não encontrado"
+                      ]
+                    }
+                  },
+                  "motorista": {
+                    "summary": "sem veículo",
+                    "value": {
+                      "erros": [
+                        "nenhum sensor vinculado a este motorista; fale com o gestor"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many calls by the same user in one minute (limit 30).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "muitas consultas seguidas. Tente de novo em 1 min."
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Model file missing from the deployed package.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "modelo indisponível"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/dispositivos": {
       "get": {
         "tags": [
@@ -4363,6 +4524,232 @@
           },
           "sensor": "ok",
           "sensorFalhaDesde": null
+        }
+      },
+      "PrevisaoSensor": {
+        "type": "object",
+        "required": [
+          "deviceId",
+          "horizonteMin",
+          "ultimaLeitura",
+          "previsao",
+          "baseline",
+          "recomendada",
+          "antecipaExcursao",
+          "motivo",
+          "modelo"
+        ],
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "horizonteMin": {
+            "type": "integer",
+            "description": "Forecast horizon in minutes."
+          },
+          "ultimaLeitura": {
+            "type": "object",
+            "nullable": true,
+            "required": [
+              "medidoEm",
+              "perfil",
+              "temperatura",
+              "status"
+            ],
+            "properties": {
+              "medidoEm": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "perfil": {
+                "type": "string",
+                "description": "Cargo profile stored with the reading."
+              },
+              "temperatura": {
+                "type": "number"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NORMAL",
+                  "ATENCAO",
+                  "CRITICO"
+                ]
+              }
+            }
+          },
+          "previsao": {
+            "type": "object",
+            "required": [
+              "para",
+              "temperatura",
+              "status"
+            ],
+            "properties": {
+              "para": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Instant the forecast refers to: last reading time plus horizonteMin."
+              },
+              "temperatura": {
+                "type": "number",
+                "description": "Forecast temperature in °C (one decimal)."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NORMAL",
+                  "ATENCAO",
+                  "CRITICO"
+                ],
+                "description": "Status of the forecast temperature in the cargo profile of the last reading."
+              }
+            },
+            "nullable": true,
+            "description": "Model forecast (ridge regression on the sensor's own recent readings). Null when there is no basis (see motivo)."
+          },
+          "baseline": {
+            "type": "object",
+            "required": [
+              "para",
+              "temperatura",
+              "status"
+            ],
+            "properties": {
+              "para": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Instant the forecast refers to: last reading time plus horizonteMin."
+              },
+              "temperatura": {
+                "type": "number",
+                "description": "Forecast temperature in °C (one decimal)."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "NORMAL",
+                  "ATENCAO",
+                  "CRITICO"
+                ],
+                "description": "Status of the forecast temperature in the cargo profile of the last reading."
+              }
+            },
+            "nullable": true,
+            "description": "Persistence baseline: the last reading repeated. Null when there is no recent reading."
+          },
+          "recomendada": {
+            "type": "string",
+            "enum": [
+              "modelo",
+              "baseline"
+            ],
+            "description": "Which forecast won on the temporal test split (lower MAE). The screen should show this one."
+          },
+          "antecipaExcursao": {
+            "type": "boolean",
+            "description": "True when the recommended forecast has a worse status than the last reading (the cargo is expected to leave the range)."
+          },
+          "motivo": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "sem_leituras",
+              "sem_leitura_recente",
+              "historico_insuficiente",
+              null
+            ],
+            "description": "Why a forecast is missing: no readings, last reading older than the gap limit (5 min), or less than janelaMin minutes of continuous history (model only)."
+          },
+          "modelo": {
+            "type": "object",
+            "required": [
+              "versao",
+              "fonte",
+              "treino",
+              "teste",
+              "maeModelo",
+              "maeBaseline",
+              "rmseModelo",
+              "rmseBaseline",
+              "superaBaseline",
+              "usaLeiturasDoSensor"
+            ],
+            "properties": {
+              "versao": {
+                "type": "string"
+              },
+              "fonte": {
+                "type": "string"
+              },
+              "treino": {
+                "type": "object",
+                "required": [
+                  "de",
+                  "ate",
+                  "amostras"
+                ],
+                "properties": {
+                  "de": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "ate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "amostras": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "One sample per minute of continuous readings."
+                  }
+                }
+              },
+              "teste": {
+                "type": "object",
+                "required": [
+                  "de",
+                  "ate",
+                  "amostras"
+                ],
+                "properties": {
+                  "de": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "ate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "amostras": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "One sample per minute of continuous readings."
+                  }
+                }
+              },
+              "maeModelo": {
+                "type": "number",
+                "description": "Mean absolute error on the test split, °C."
+              },
+              "maeBaseline": {
+                "type": "number"
+              },
+              "rmseModelo": {
+                "type": "number"
+              },
+              "rmseBaseline": {
+                "type": "number"
+              },
+              "superaBaseline": {
+                "type": "boolean",
+                "description": "True only if the model MAE is lower than the baseline MAE on the test split."
+              },
+              "usaLeiturasDoSensor": {
+                "type": "boolean"
+              }
+            }
+          }
         }
       }
     },

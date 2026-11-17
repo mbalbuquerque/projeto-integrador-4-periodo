@@ -48,3 +48,17 @@ python descrever.py           # gera relatorio.md e figuras/
 Resultado: [sensor/relatorio.md](sensor/relatorio.md). O CSV está no Git por ser dado real e público
 (coluna `origem` = `placa_fisica_thingspeak`). Lacuna = intervalo entre leituras maior que 2x o
 período esperado (40 s). Os testes (`sensor/test_sensor_*.py`) usam dados sintéticos e rodam no CI.
+
+### Previsão da temperatura do sensor (10 min à frente)
+
+```bash
+cd analise/sensor
+python modelo_previsao.py            # treina e avalia com o CSV versionado
+python modelo_previsao.py --baixar   # baixa o canal de novo antes (re-treino com dados novos)
+```
+
+Limpa a série, divide por tempo (30% mais recentes = teste), compara uma regressão ridge sobre
+as variações recentes com a persistência (MAE e RMSE) e exporta
+`../../cloud/function/modelo_sensor.json` (rota `GET /api/predict/sensor`). Resultado e
+limitações: [sensor/relatorio_previsao.md](sensor/relatorio_previsao.md); ficha do modelo:
+[`docs/model-card.md`](../docs/model-card.md).

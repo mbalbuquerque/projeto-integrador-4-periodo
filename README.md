@@ -199,6 +199,7 @@ request e testes obrigatórios) depende de um administrador do repositório; o c
 - [x] Dashboard web publicado no Azure
 - [x] Login com perfis (operador logístico e gestor)
 - [x] Análise climática da rota (INMET) e modelo preliminar de risco térmico
+- [x] Previsão da temperatura do sensor 10 min à frente (`GET /api/predict/sensor`), comparada com a persistência; com os dados atuais ainda não a supera
 - [x] Testes automáticos e compilação do firmware no GitHub Actions
 - [x] Várias empresas com dados separados, cadastro de empresa e chave por sensor
 - [x] Faixa por perfil de carga (manga, uva) enviada ao sensor

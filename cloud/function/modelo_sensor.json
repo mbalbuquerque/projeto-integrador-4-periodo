@@ -1,0 +1,36 @@
+{
+  "versao": "sensor-ridge-10min-v1",
+  "fonte": "ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe, em bancada)",
+  "horizonteMin": 10,
+  "janelaMin": 10,
+  "lacunaMaxS": 300,
+  "atributos": [
+    "d5",
+    "d10",
+    "m10"
+  ],
+  "coeficientes": [
+    0.186177,
+    -0.386984,
+    0.216406
+  ],
+  "lambda": 1.0,
+  "baseline": "persistencia",
+  "treino": {
+    "de": "2026-09-29T19:23:00+00:00",
+    "ate": "2026-11-17T02:18:00+00:00",
+    "amostras": 496
+  },
+  "teste": {
+    "de": "2026-11-17T02:29:00+00:00",
+    "ate": "2026-11-17T06:06:00+00:00",
+    "amostras": 218
+  },
+  "metricas": {
+    "maeModelo": 0.342,
+    "maeBaseline": 0.3128,
+    "rmseModelo": 0.4711,
+    "rmseBaseline": 0.4941
+  },
+  "superaBaseline": false
+}
