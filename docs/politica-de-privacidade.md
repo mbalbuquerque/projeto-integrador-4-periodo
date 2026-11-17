@@ -109,9 +109,8 @@ Dados que permanecem e saem sozinhos: os logs do Application Insights (até 90 d
 mascarado) e os contadores de limite (hash, até 2 dias). Não há como apagar um item isolado
 desses logs; a política de retenção é o mecanismo de eliminação.
 
-O painel ainda não tem o botão de exclusão em Configurações; até ele existir, o gestor chama a
-rota pela documentação interativa (`/api/docs`, botão **Authorize** com o token) ou pede à
-equipe pelo canal acima. Empresa sem gestor que a represente (por exemplo, o único gestor
+O gestor faz a exclusão no painel, em **Configurações**, seção **Excluir empresa** (a tela chama
+a mesma rota), ou pede à equipe pelo canal acima. Empresa sem gestor que a represente (por exemplo, o único gestor
 removido por fora) segue o procedimento manual: a equipe, no *Data Explorer* do Cosmos DB
 `cosmos-coldtrack-7319` (banco `coldtrack`), executa em cada container
 `SELECT * FROM c WHERE c.empresaId = "E-XXXXXXXX"` e exclui os itens na mesma ordem da rota,
@@ -121,7 +120,6 @@ apagando por último o item de `empresas` com `id` igual ao código.
 
 - Não existe rota de exportação dos dados; a cópia completa e a portabilidade dependem de
   procedimento manual da equipe, sem prazo garantido por sistema.
-- A exclusão da empresa existe na API, mas ainda não tem botão no painel.
 - Leituras de sensores não têm prazo de retenção; só saem com a exclusão da empresa.
 - Não há confirmação de e-mail no cadastro, então a identidade do solicitante é conferida
   pela equipe, fora do sistema.
