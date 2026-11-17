@@ -197,7 +197,7 @@ request e testes obrigatórios) depende de um administrador do repositório; o c
 - [x] Envio em JSON via HTTPS para o Azure
 - [x] Armazenamento das leituras sem conexão e reenvio
 - [x] Dashboard web publicado no Azure
-- [x] Login com perfis (operador logístico e gestor)
+- [x] Login com perfis (operador logístico, gestor e motorista vinculado a um veículo)
 - [x] Análise climática da rota (INMET) e modelo preliminar de risco térmico
 - [x] Previsão da temperatura do sensor 10 min à frente (`GET /api/predict/sensor`), comparada com a persistência; com os dados atuais ainda não a supera
 - [x] Testes automáticos e compilação do firmware no GitHub Actions
@@ -207,6 +207,10 @@ request e testes obrigatórios) depende de um administrador do repositório; o c
 - [x] Previsão de calor na rota (Open-Meteo + histórico INMET) no dashboard
 - [x] Chat do site com modelo de linguagem do Azure OpenAI, respondendo pela documentação do projeto
 - [x] Assistente do painel (Azure OpenAI), com os dados da empresa de quem está logado
+- [x] Alertas push no celular (Web Push) quando um sensor piora de faixa
+- [x] Heartbeat da placa com o sensor em falha (`POST /api/heartbeat`)
+- [x] Exclusão da empresa pelo gestor (`DELETE /api/empresa`)
+- [x] Backup lógico do banco com restauração testada no CI
 - [ ] Montagem física
 - [ ] Gabinete reciclado
 - [ ] Testes de campo

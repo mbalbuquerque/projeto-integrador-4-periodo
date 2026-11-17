@@ -45,8 +45,6 @@ legítimo interesse para os registros de segurança (limite de tentativas e logs
 
 - Termo de uso e publicação da política de privacidade no site (a política está em
   [`politica-de-privacidade.md`](politica-de-privacidade.md)).
-- Botão de exclusão da empresa no painel (a rota `DELETE /empresa` existe; a tela ainda não a
-  chama).
 - Rota de exportação dos dados (portabilidade e cópia completa), hoje atendida manualmente.
 - Confirmação de e-mail no cadastro, que evita cadastrar o e-mail de outra pessoa.
 - Definir quem é o encarregado (DPO) caso o sistema vá para uso real.

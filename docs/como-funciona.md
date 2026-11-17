@@ -5,7 +5,7 @@ camada do jeito que ela pode ser contada em voz alta, e cada afirmação técnic
 arquivo e a função onde está no código. O que ainda não existe aparece como "não implementado",
 com o que está no plano.
 
-Estado: 16/11/2026, `main` dos dois repositórios
+Estado: 17/11/2026, `main` dos dois repositórios
 ([projeto-integrador-4-periodo](https://github.com/mbalbuquerque/projeto-integrador-4-periodo),
 chamado aqui de **back**, e [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi),
 chamado de **front**). Caminhos sem prefixo são do back; os do front vêm marcados com `front:`.
@@ -89,10 +89,10 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 | pasta / arquivo | o que tem |
 |---|---|
 | `firmware/coldtrack/coldtrack.ino` | Firmware do ESP32-C3 (Arduino): leitura do DHT, classificação, LEDs/tela, HTTPS, MQTT, fila offline, configuração pelo cabo |
-| `firmware/coldtrack/payload_core.h` | Cópia testável de três funções do firmware (montar o JSON, ler número do JSON, classificar). O `.ino` ainda não inclui esse arquivo |
+| `firmware/coldtrack/payload_core.h` | Funções puras incluídas pelo `.ino` e testadas no CI: montar o JSON da leitura e do heartbeat, URL do heartbeat, vencimento do ciclo fixo, linha da fila com horário, ler número do JSON, classificar a faixa |
 | `firmware/coldtrack/azure_ca.h` | Certificado raiz (DigiCert Global Root G2) usado para validar o TLS |
 | `firmware/coldtrack/secrets.example.h` | Modelo do `secrets.h` (o real nunca vai para o Git) |
-| `firmware/tests/test_firmware.cpp` | 4 testes C++ do `payload_core.h`, rodados no CI com `g++` |
+| `firmware/tests/test_firmware.cpp` | 11 testes C++ do `payload_core.h`, rodados no CI com `g++` |
 | `firmware/wokwi/` | Circuito da simulação (`diagram.json`, `libraries.txt`) |
 | `cloud/function/function_app.py` | Todas as rotas da API |
 | `cloud/function/contrato.py` | Contrato da telemetria, perfis de carga, classificação, idempotência |
@@ -104,12 +104,13 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 | `cloud/function/previsao_sensor.py`, `modelo_sensor.json` | Previsão da temperatura do sensor 10 min à frente, servida em `GET /api/predict/sensor` |
 | `cloud/function/openapi.json` | Especificação OpenAPI 3.0, em inglês, exibida em `/api/docs` |
 | `cloud/function/test_*.py` | Testes da API (pytest/unittest, com Cosmos falso) |
+| `cloud/function/push.py` | Alertas Web Push (VAPID): inscrição, mensagem e regra de quando avisar |
 | `cloud/function/pacote.txt`, `publicar.sh` | Lista do que é publicado e publicação manual |
 | `cloud/function/scripts/` | Criar usuário, gerar a base do chat, migração para multiempresa |
-| `infra/` | `main.bicep` (o ambiente Azure descrito em código), `Dockerfile`, `docker-compose.yml`, `README.md` com custos e OIDC |
+| `infra/` | `main.bicep` (o ambiente Azure descrito em código), `Dockerfile`, `docker-compose.yml`, `README.md` com custos e OIDC; `infra/backup/` (exportação e restauração lógica do Cosmos); `infra/ci/` (preparo do banco de teste no CI) |
 | `analise/` | Análise climática do INMET e o modelo de risco; `analise/sensor/` descreve a base real da placa |
 | `docs/` | Documentação (API, segurança, STRIDE, LGPD, QA, UX, model card, implantação, slides) |
-| `.github/workflows/` | `testes.yml` (CI), `publicar-api.yml` (deploy), `seguranca.yml` (pip-audit e ZAP) |
+| `.github/workflows/` | `testes.yml` (CI), `publicar-api.yml` (deploy), `seguranca.yml` (pip-audit e ZAP), `backup-logico.yml` (restauração do backup lógico no emulador), `compose-zap.yml` (compose, reinício e ZAP ativo) |
 | `RESILIENCIA.md`, `REQUISITOS_UC.md`, `PLANO_ACAO.md` | Requisitos R1–R8/F1–F6, matriz por disciplina e plano de ação |
 
 ### Front (`Front-End-pi`)
@@ -118,20 +119,20 @@ API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 |---|---|
 | `front: src/main.jsx`, `src/App.jsx`, `src/rotas.js` | Entrada do React, rotas (cada tela com `lazy`), menu e URLs antigas |
 | `front: src/pages/<Tela>/` | Uma pasta por tela, com as regras puras em `.js` e testes ao lado |
-| `front: src/lib/` | Lógica sem React: `api.js`, `sessao.js`, `leituras.js`, `faixas.js`, `predicao.js`, `chat.js`, `assistente.js`, `armazenamento.js` |
-| `front: src/hooks/` | `useSessao`, `usePolling`, `useVeiculoEscolhido`, `useTitulo`, `useMovimentoReduzido` |
-| `front: src/components/` | `PainelLayout`, `RequireAuth`, `Estado`, `StatusSelo`, gráfico, chat e assistente |
+| `front: src/lib/` | Lógica sem React: `api.js`, `sessao.js`, `leituras.js`, `faixas.js`, `predicao.js`, `chat.js`, `assistente.js`, `armazenamento.js`, `push.js`, `regua.js`, `sensorFalha.js`, `conectividade.js`, `veiculo.js`, `formatar.js`, `config.js` |
+| `front: src/hooks/` | `useSessao`, `usePolling`, `useVeiculoEscolhido`, `useTitulo`, `useMovimentoReduzido`, `useAlertasPush`, `useTelaAcesa` |
+| `front: src/components/` | `PainelLayout`, `AcessoLayout`, `RequireAuth`, `Estado`, `StatusSelo`, `ReguaFaixa` (régua da faixa, compartilhada entre dashboard e motorista), `FaixaOffline`, `Gaveta`, `Icone`, `FiltroPeriodo`, `SeletorVeiculo`, gráfico, chat e assistente |
 | `front: public/sw.js`, `public/manifest.json` | Service worker e manifesto do PWA |
 | `front: vite.config.js` | Build, escopo de CSS por família, cópias `.html` antigas e CSP |
 | `front: coldtrack-qa/` | Testes e2e (Playwright): simulados (`tests/`) e contra produção (`real/`) |
-| `front: docs/` | `ARQUITETURA.md`, `guia-de-uso.md`, `relatorio-de-testes.md` |
+| `front: docs/` | `ARQUITETURA.md`, `design-system.md`, `guia-de-uso.md`, `relatorio-de-testes.md` |
 | `front: .github/workflows/` | `testes.yml`, `publicar-site.yml`, `seguranca.yml` (npm audit) |
 
 ---
 
 ## 3. Firmware passo a passo
 
-Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.11.17.1"`).
+Arquivo: `firmware/coldtrack/coldtrack.ino` (versão `FW_VERSAO "2026.11.17.3"`).
 
 ### 3.1 Hardware e variantes
 
@@ -572,6 +573,7 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | POST | `/api/empresas` | público | Cria empresa e o primeiro gestor; devolve token (`empresas`) |
 | POST | `/api/login` | público | E-mail e senha → token de 8 h (`login`) |
 | GET | `/api/perfis` | público | Perfis de carga e faixas (`perfis`) |
+| POST | `/api/heartbeat` | sensor (`x-device-key`) | Sinal de vida com o sensor em falha: atualiza o último contato e `sensorFalhaDesde`, não grava leitura (`heartbeat`) |
 | GET | `/api/health` | público | 200 se o banco responde, 503 se não (`health`) |
 | POST | `/api/chat` | público | Chat do site com IA (`chat_site`) |
 | GET | `/api/docs`, `/api/openapi.json` | público | Swagger UI e a especificação |
@@ -695,13 +697,17 @@ O IP vem de `X-Azure-ClientIP` ou do último item do `X-Forwarded-For` (`ip_do_c
 | rota | limite | resposta |
 |---|---|---|
 | `POST /login` | 20 falhas por IP em 15 min; por conta, espera de 1 a 15 min | 429 / 401 |
+| `POST /empresas` | 5 cadastros por hora por IP (pedido inválido não conta) | 429 |
+| `POST /senha` | senha atual errada entra na mesma espera do login (1 a 15 min) | 429 |
+| `POST /heartbeat` | 6 por minuto por sensor (a placa envia 3) | 429 |
+| `GET /predict/sensor` | 30 por minuto por usuário | 429 |
 | `POST /chat` | 10 por minuto por IP; 2000 por dia no site todo | 429 |
 | `POST /assistente` | 15 por minuto por usuário; 300 por dia por empresa | 429 |
 | `GET /motorista` | 30 por minuto por usuário (a tela consulta a cada 20 s) | 429 |
 | `DELETE /empresa` | 5 pedidos bem formados por hora por gestor; senha errada na espera do login | 429 |
 
 Sem limite próprio (e por quê, em `docs/seguranca.md`): `/telemetria` (um limite poderia descartar
-leitura legítima; a proteção é a chave), `/empresas` (lacuna conhecida), rotas estáticas, `/health`
+leitura legítima; a proteção é a chave), rotas estáticas, `/health`
 e as rotas autenticadas (o painel consulta a cada 20 s).
 
 ### 4.8 `/health`, `/predict`, chat e assistente
@@ -822,8 +828,11 @@ Azure Cosmos DB for NoSQL, conta `cosmos-coldtrack-7319`, banco `coldtrack` (`in
   o `ttl` de cada contador). O container `leituras` **não tem TTL**: leituras ficam até alguém
   remover (pela estimativa de `infra/README.md`, os 25 GB do free tier durariam mais de 2 anos com
   10 caminhões).
-- **Backup**: `backupPolicy: { type: 'Periodic' }` no Bicep (backup periódico padrão do Cosmos).
-  A **restauração nunca foi testada** (R8 parcial).
+- **Backup**: duas camadas (`infra/README.md`, "Backup e restauração"). Backup periódico do Cosmos
+  (`backupPolicy: Periodic`: cópia a cada 240 min, retenção de 8 h; restauração só por chamado ao
+  suporte da Azure, **não testada**). Backup lógico em `infra/backup/` (`exportar.py`,
+  `restaurar.py`): ida e volta testada no CI contra o emulador, com dados sintéticos
+  (`backup-logico.yml`). A restauração de um export real de produção **não foi executada** (R8 parcial).
 - O formato dos documentos é validado no código da API antes de gravar (o Cosmos não tem schema).
 
 ---
@@ -879,8 +888,9 @@ de verdade é a API (403).
   quando a última leitura tem mais de 2 min (`LIMITE_SEM_DADOS_MS`, 6 ciclos de 20 s) ou quando a
   API não respondeu. A tela mostra "**Sem dados desde HH:MM** — Os valores abaixo são os últimos
   recebidos, não os atuais", ou "Sem conexão com a API" se nunca houve leitura.
-- **Topo de toda tela** (`PainelLayout`): "Conectando...", "Azure conectado" ou "Sem conexão com
-  Azure".
+- **Topo de toda tela** (`PainelLayout`): "Conectando...", "Azure conectado", "Sem conexão com
+  Azure" ou "Sem internet" (navegador offline); sem internet aparece também a faixa "Sem conexão"
+  (`FaixaOffline`) com o horário do último dado recebido.
 - **Sensores**: `GET /api/dispositivos` devolve `ultimoContato` e `online` (leitura há no máximo
   120 s, `LIMITE_ONLINE_S` em `function_app.py`, calculado por `contato_do_dispositivo`).
   `seloConexao` mostra **Online/Offline** e `textoUltimoContato` mostra "Último contato: dd/mm
@@ -901,8 +911,11 @@ de verdade é a API (403).
 
 - `front: public/manifest.json`: nome "ColdTrack Control", `display: standalone`, retrato,
   ícones 192 e 512 → instalável no celular.
-- `front: public/sw.js` (`CACHE_NAME = "coldtrack-v12"`), registrado só no build:
-  - na instalação, guarda `/`, `/index.html` e `/manifest.json`;
+- `front: public/sw.js` (`CACHE_NAME = "coldtrack-v14"`), registrado só no build:
+  - na instalação, guarda o shell: `/`, `/index.html`, `/manifest.json`, o JS/CSS com hash e os
+    pedaços de tela (`guardarShell`);
+  - trata os eventos `push` e `notificationclick` (alertas no celular; o clique abre a tela de
+    alertas do veículo);
   - **rede primeiro**: busca na rede e guarda uma cópia; sem internet, devolve a cópia guardada, e
     uma navegação cai no `/index.html` guardado;
   - **a API nunca entra no cache**: só GET da própria origem é interceptado; qualquer
@@ -963,7 +976,7 @@ nas app settings da Function, não no repositório.
   imagem constrói (job `docker` em `testes.yml`).
 - `infra/docker-compose.yml`: sobe a API em `localhost:7071` com `restart: unless-stopped` e
   `healthcheck` em `/api/health` (a cada 30 s, tempo limite 10 s, 3 tentativas, 40 s de partida).
-  **Ainda não foi validado** na máquina da equipe (arquivo diz isso no cabeçalho; CLD-07).
+  Validado no CI (workflow `compose-zap.yml`: subida, `/health`, reinício e ZAP ativo; CLD-07).
   Observação para a banca: o `restart` do Docker reinicia o contêiner quando o processo sai; o
   `healthcheck` sozinho só marca o contêiner como `unhealthy`.
 
@@ -994,18 +1007,18 @@ Fonte: `RESILIENCIA.md`, `docs/qa/plano-de-testes.md` (seção 6) e o código.
 | R4 | Watchdog | Implementado | Watchdog de tarefa de 60 s no `loop()`; reinício retoma fila e sequência da flash (Wokwi `tela/erro-wdt.yaml`); **teste na placa física pendente** |
 | R5 | Falha de sensor | Implementado | Checksum, 2 tentativas, nada inválido é enviado; RSSI inválido vira `null` |
 | R6 | Degradação controlada | Implementado | "Sem dados desde HH:MM" no dashboard; API indisponível não trava a tela |
-| R7 | Observabilidade | Implementado | `/health` 200/503; `ultimoContato` e `online` por sensor; heartbeat `POST /heartbeat` a cada 20 s quando o sensor falha, com `sensor`/`sensorFalhaDesde` em `GET /dispositivos` e `GET /motorista` (Wokwi `tela/heartbeat.yaml`); **teste na placa física e exibição no painel pendentes** |
-| R8 | Recuperação na nuvem | Parcial | Backup periódico do Cosmos; restauração não testada; compose com reinício não testado |
+| R7 | Observabilidade | Implementado | `/health` 200/503; `ultimoContato` e `online` por sensor; heartbeat `POST /heartbeat` a cada 20 s quando o sensor falha, com `sensor`/`sensorFalhaDesde` em `GET /dispositivos` e `GET /motorista` (Wokwi `tela/heartbeat.yaml`); **teste na placa física pendente** (exibição no painel implementada: aviso no dashboard, selo em Sensores e na tela do motorista) |
+| R8 | Recuperação na nuvem | Parcial | Backup periódico do Cosmos (restauração por chamado, não testada); backup lógico com restauração testada no CI (dados sintéticos); restauração de produção não executada; reinício do contêiner validado no CI (volta em 4,4 s) |
 
 ### 8.2 Testes de falha F1 a F6
 
 | teste | critério | situação |
 |---|---|---|
-| F1 Queda de rede (60 s) | Reconecta em até 30 s, sem lacuna | Lógica implementada; **execução na placa não registrada** |
+| F1 Queda de rede (60 s) | Reconecta em até 30 s, sem lacuna | **Aprovado na placa física** em 17/11/2026: queda de cerca de 2,5 min, 6 leituras na fila, reconexão em menos de 30 s após a rede voltar, reenvio em ordem, sequência sem lacuna (`RESILIENCIA.md`, Registro) |
 | F2 Queda de energia | Volta a enviar em até 60 s | Final; a fila e a sequência em flash sobrevivem ao reinício; watchdog de 60 s |
 | F3 Falha de sensor | Nada inválido gravado, alerta visível | Simulado no Wokwi (`tela/fases.yaml`, `tela/heartbeat.yaml`): `FALHA SENSOR` na tela, três LEDs piscando, nenhuma leitura enviada, heartbeat `sensor_falha` deixa a placa online com `sensor: "falha"`; testes da API em `test_heartbeat.py`. **Execução na placa física não registrada** |
-| F4 Nuvem fora | Serviço volta sozinho, zero perda | Final; reinício do contêiner não testado |
-| F5 Mensagem duplicada | Um só registro | **Automatizado**, passa no CI |
+| F4 Nuvem fora | Serviço volta sozinho, zero perda | Final; reinício do contêiner validado no CI (`compose-zap.yml`); teste F4 completo pendente |
+| F5 Mensagem duplicada | Um só registro | **Automatizado**, passa no CI; observado também na placa física (reenvio após timeout respondido como `duplicada: true`) |
 | F6 ThingSpeak fora | API e painel seguem | Final; por desenho o painel não depende do ThingSpeak |
 
 ### 8.3 Linha a linha: Wi-Fi cai por 2 minutos
@@ -1040,7 +1053,11 @@ novo no ciclo seguinte. Se a fila passar de 500, as mais antigas são descartada
   API compara os valores e responde 200 `duplicada: true` (reenvio legítimo) ou 409 (mesmo
   horário com valores diferentes).
 - **Perdida**: cada leitura leva `seq` (1, 2, 3..., guardado na flash); buraco na sequência é
-  leitura perdida entre o sensor e o banco, e `GET /leituras` devolve essas `lacunas`. Além disso
+  leitura perdida entre o sensor e o banco, e `GET /leituras` devolve essas `lacunas`. A conta é
+  pelo número de `seq`, não pela ordem do horário: leitura com horário adiantado (relógio antes do
+  NTP) que chega fora de ordem não gera falta falsa; leitura sem `seq` não entra; `seq` menor que
+  o da contagem atual (contador zerado) abre contagem nova. Só aparece sem filtro de `status` e
+  vale para as leituras devolvidas (`limite`). Além disso
   há a detecção por tempo: o sensor deveria mandar a cada 20 s, o painel avisa "Sem dados desde"
   após 2 min, o selo fica Offline após 120 s, e `analise/sensor/descrever.py` conta lacunas
   (intervalo maior que 40 s) na base real. A placa registra no log quando descarta leitura (fila
@@ -1076,7 +1093,7 @@ novo no ciclo seguinte. Se a fila passar de 500, as mais antigas são descartada
 | Repudiation | Negar uma ação | Logs sem senha nem token, e-mail mascarado (`mascarar_email`) |
 | Information disclosure | Ver dados de outra empresa | `empresaId` do token em toda consulta; 404 para item de outra empresa |
 | Information disclosure | Interceptar tráfego | Só HTTPS, TLS 1.2 mínimo, certificado raiz fixado na placa, CORS só para o painel |
-| Denial of service | Excesso de chamadas | Limites no Cosmos para login, chat e assistente |
+| Denial of service | Excesso de chamadas | Limites no Cosmos para login, cadastro de empresa, troca de senha, exclusão de empresa, chat, assistente, motorista, heartbeat e previsão do sensor |
 | Elevation of privilege | Operador fazer ação de gestor; token roubado | Perfil relido do banco a cada chamada; sessão revogável |
 
 **Ameaça de maior risco.** O `docs/stride.md` não dá nota numérica de risco. Com o critério
@@ -1103,7 +1120,9 @@ consegue se passar por aquele sensor.
 - Front: **npm audit** `--omit=dev --audit-level=high`.
 - Resultado em 16/11/2026 (`docs/relatorio-seguranca.md`): pip-audit sem vulnerabilidade, npm audit
   sem alerta alto, ZAP com **0 alertas altos** e 12 avisos triados (os da API corrigidos; os da
-  página padrão do Azure Functions não são do projeto). Varredura ativa ainda não feita.
+  página padrão do Azure Functions não são do projeto). Varredura ativa (ZAP API scan) feita no CI
+  contra o contêiner com o emulador do Cosmos, nunca contra produção: 0 altos, 1 médio (CSP
+  `unsafe-inline` do Swagger, aceito), 6 baixos (`compose-zap.yml`).
 
 ### 9.3 LGPD (`docs/lgpd.md`, `docs/politica-de-privacidade.md`)
 
@@ -1136,27 +1155,24 @@ interesse.
 
 ### 10.2 Testes e cobertura
 
-- **API**: 256 testes passando, cobertura de linhas e ramos de **99,6%** (1221 instruções com 4 não
-  cobertas, 384 ramos com 2 parciais), medido em 16/11/2026 na `main`. O CI falha abaixo de 98%.
+- **API**: 424 testes passando, cobertura de linhas e ramos de **99,8%** (1769 instruções com 3 não
+  cobertas, 612 ramos com 1 parcial), medido em 17/11/2026 na `main`. O CI falha abaixo de 98%.
   Ferramentas: pytest, unittest, Hypothesis (testes de propriedade em `test_propriedades.py`) e
   time-machine. O Cosmos é trocado por um falso (`test_falsos.py`), sem rede.
-- **Painel**: Vitest (unitário) com piso no CI de 29% de linhas (medido 29,72%), e Playwright
-  e2e com a API simulada e contra produção (`front: coldtrack-qa/`).
-- **Firmware**: 4 testes C++ (`firmware/tests/test_firmware.cpp`) sobre o `payload_core.h`.
-- **Análise**: 7 testes pytest.
+- **Painel**: Vitest com 615 testes, 99,2% de linhas e 95,2% de ramos (piso no CI: 98% de linhas,
+  94% de ramos), medido em 17/11/2026 na `main`; Playwright e2e com a API simulada (295 passando)
+  e contra produção (`front: coldtrack-qa/`).
+- **Firmware**: 11 testes C++ (`firmware/tests/test_firmware.cpp`) sobre o `payload_core.h`.
+- **Análise**: 27 testes pytest (clima e sensor).
 - Plano formal: `docs/qa/plano-de-testes.md` (níveis, ambientes, critérios de entrada e saída,
   casos F1–F6 e de segurança S01–S14, rastreabilidade). Métricas: `docs/qa/metricas-de-qualidade.md`.
 
 **Parte crítica ainda não coberta**:
 
 - A **fila offline do firmware** (`enfileirar`, `reenviarFila`, `reescreverFilaMs`) não tem teste
-  automático, e os testes C++ rodam sobre uma cópia das funções (`payload_core.h`) que o `.ino`
-  ainda não inclui.
-- As **telas** do painel fora de `src/lib` têm cobertura de linhas baixa (verificadas por e2e, que o
-  Vitest não conta).
+  automático; os testes C++ cobrem só as funções puras de `payload_core.h`, que o `.ino` inclui.
 - A idempotência é testada com Cosmos falso; repetir contra o Cosmos real está previsto.
-- Na API, as linhas sem cobertura são o 401 do `GET /dispositivos` e o 503 quando falta o
-  `openapi.json`.
+- Na API, só fica sem cobertura a leitura do `openapi.json` ausente (503).
 
 ### 10.3 Um teste que falharia se a idempotência quebrasse
 
@@ -1254,8 +1270,8 @@ sensor.
 - **Re-treinar** (um comando, baixa o canal de novo): `cd analise/sensor && python
   modelo_previsao.py --baixar`. Se o MAE do modelo ficar abaixo do da persistência, a rota passa
   a recomendar o modelo sem mudar código; publica-se a API com o novo `modelo_sensor.json`.
-- **Servido em** `GET /api/predict/sensor`. A exibição no dashboard e na tela do motorista é
-  do repositório do painel.
+- **Servido em** `GET /api/predict/sensor`. Na `main` do painel nenhuma tela consome a rota ainda;
+  a exibição no dashboard e na tela do motorista está em andamento (Front-End-pi #60).
 
 ---
 
@@ -1290,8 +1306,9 @@ sensor.
   não vêm do cache. As telas mostram "Sem conexão com Azure"; o dashboard mantém os últimos valores
   já carregados com o aviso "Sem dados desde HH:MM", ou "Sem conexão com a API" se ainda não havia
   dado. Nenhum valor velho aparece como atual.
-- **Não implementado**: alerta push e faixa "sem conexão" própria do PWA (plano de ação, entrega
-  final); tela e rota do motorista estão com outro integrante e não estão na `main`.
+- **Implementado**: alerta push (Web Push/VAPID, no máximo um por sensor e faixa a cada 10 min),
+  faixa "Sem conexão" (`FaixaOffline`) e tela `/motorista` com `GET /api/motorista`. **Não
+  implementado**: app nativo.
 - **Teste com usuários**: **ainda não foi feito**. O plano é teste com 5 usuários e questionário SUS
   (meta ≥ 68) para a entrega final.
 
@@ -1313,7 +1330,7 @@ buraco. No painel, durante a queda, aparece 'Sem dados desde' depois de 2 minuto
 **IoT — Como o sistema sabe que uma mensagem foi perdida ou duplicada?**
 "Duplicada ele sabe: o id da leitura no banco é o ID do sensor mais o horário da medição. Se a
 mesma leitura chega de novo, bate no mesmo id; a API compara e responde 200 com `duplicada: true`,
-ou 409 se os valores forem diferentes. Perdida, hoje ele só sabe pelo tempo: o sensor deveria
+ou 409 se os valores forem diferentes. Perdida, ele sabe de dois jeitos. Pelo tempo: o sensor deveria
 mandar a cada 20 segundos, então o painel avisa quando passa de 2 minutos sem dado, e a análise da
 base conta as lacunas. E cada leitura leva um número de sequência guardado na flash: se falta um
 número, a API aponta a lacuna em `GET /leituras`."
@@ -1330,8 +1347,8 @@ mês, e o maior item é log, que cai para uns 128 se subir o nível de log para 
 "Na nuvem, a Function é gerenciada pela plataforma do Azure: ela cria e recicla as instâncias
 sozinha, e, como não temos instância sempre pronta, uma requisição depois de um tempo parado sobe
 uma instância nova. Não medimos esse tempo. Para rodar fora do Azure temos o contêiner com
-`restart: unless-stopped` e healthcheck no `/api/health` a cada 30 segundos, mas isso ainda não foi
-testado; é o teste F4 da entrega final. A placa não depende do serviço estar no ar: guarda na
+`restart: unless-stopped` e healthcheck no `/api/health` a cada 30 segundos; o reinício foi
+validado no CI, com volta em 4,4 segundos. O teste F4 completo fica para a entrega final. A placa não depende do serviço estar no ar: guarda na
 flash e reenvia quando volta, e se o programa da placa travar o watchdog reinicia em até 60
 segundos e o envio retoma da fila."
 
@@ -1349,11 +1366,9 @@ Se vazar, o gestor gera outra e a antiga para na hora. O risco que sobra é algu
 da flash de uma placa física."
 
 **Qualidade — Qual a cobertura atual e qual parte crítica ainda não está coberta?**
-"A API tem 256 testes e 99,6% de cobertura de linhas e ramos, e o CI barra abaixo de 98%. O painel
-tem cobertura de linhas por volta de 30%, porque as telas são testadas por e2e com Playwright, que
-não entra nessa conta. A parte crítica sem cobertura é a fila offline do firmware: a gravação e o
-reenvio na flash não têm teste automático, e os testes C++ rodam numa cópia das funções que o
-firmware ainda não inclui."
+"A API tem 424 testes e 99,8% de cobertura de linhas e ramos, e o CI barra abaixo de 98%. O painel
+tem 615 testes de unidade, com 99% de linhas, e mais o e2e com Playwright. A parte crítica sem cobertura é a fila offline do firmware: a gravação e o
+reenvio na flash não têm teste automático; os testes C++ cobrem só as funções puras."
 
 **Qualidade — Mostre um teste que falharia se a idempotência quebrasse.**
 "`test_rotas.py`, `test_telemetria_duplicada_reenvio_identico`. O teste já começa com uma leitura
@@ -1383,7 +1398,7 @@ de verdade."
 "O app abre, porque o service worker guarda a casca do site, mas a API nunca vai para o cache. Então
 o topo mostra 'Sem conexão com Azure' e o dashboard avisa 'Sem dados desde' tal hora, dizendo que
 os valores são os últimos recebidos. Ele nunca mostra dado velho como se fosse atual. Notificação
-push ainda não temos."
+push já existe, com o app instalado e a inscrição ativada."
 
 **UE Mobile — Qual problema o teste com usuários revelou e o que mudou por causa dele?**
 "Ainda não fizemos teste com usuários reais, então não posso apontar um problema que ele revelou.
@@ -1412,7 +1427,8 @@ The API validates it, classifies it again using the profile of the truck, stores
 with the status, and sends the range back to the board. The dashboard polls every 20 seconds, so
 within about 20 seconds the status card turns critical and an alert message appears, and the
 Alerts screen groups consecutive out-of-range readings into one occurrence with start, duration
-and peak. Push notifications are not implemented yet; they are planned for the final delivery."
+and peak. Subscribed users also get a push notification when a sensor gets worse, at most one per sensor
+and status every 10 minutes."
 
 **Tech English — "What was the hardest trade-off in your architecture, and why?"**
 "The hardest one was the transport protocol. MQTT is lighter and is the IoT standard, but the
