@@ -44,6 +44,8 @@ acrescenta; os anteriores podem ter sido escritos pelo cliente).
 |---|---|---|
 | `POST /login` | 20 tentativas erradas por IP a cada 15 min (em qualquer conta) | `429` |
 | `POST /login` | por conta: espera de 1 min a partir da 5ª senha errada seguida, dobrando até 15 min | `401` (mesma resposta de senha errada) |
+| `POST /empresas` | 5 cadastros por hora por IP (pedido inválido não conta) | `429` |
+| `POST /senha` | por conta, junto com o login: espera de 1 min a partir da 5ª senha atual errada seguida, dobrando até 15 min | `429` |
 | `POST /chat` | 10 perguntas por minuto por IP; 2000 por dia no site todo | `429` |
 | `POST /assistente` | 15 perguntas por minuto por usuário; 300 por dia por empresa | `429` |
 
@@ -125,7 +127,7 @@ Acesso: aberto. Cria a empresa e o primeiro usuário, com perfil `gestor`.
 | `senha` | 8 a 128 caracteres |
 
 Respostas: `201 {"token", "usuario": {"id", "nome", "perfil", "empresaId", "empresa"}}`;
-`400` validação; `409` `já existe uma conta com esse e-mail`. O id da empresa é gerado
+`400` validação; `409` `já existe uma conta com esse e-mail`; `429` `muitos cadastros deste IP. Tente de novo em 1 hora.` O id da empresa é gerado
 (`E-` + 8 caracteres hexadecimais).
 
 ### `POST /login`
@@ -161,7 +163,7 @@ Acesso: operador, gestor. Troca a própria senha.
 ```
 
 `nova` com 8 a 128 caracteres e diferente de `atual`. Respostas: `200 {"token", "usuario"}`
-(novo token; os anteriores param de valer); `400` validação ou `atual: senha atual incorreta`.
+(novo token; os anteriores param de valer); `400` validação ou `atual: senha atual incorreta`; `429` `muitas tentativas de senha atual erradas. Aguarde alguns minutos.` (conta em espera: a senha atual errada conta na mesma espera do login e, durante ela, nem a senha certa troca; ao trocar com sucesso a contagem zera).
 
 ### `POST /sair`
 

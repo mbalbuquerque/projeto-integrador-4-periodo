@@ -240,6 +240,58 @@ class TestSessao(BaseAcesso):
         self.assertEqual(self.com_token(EU, "GET", "/api/eu", corpo["token"])[0], 200)
         self.assertEqual({t for t, _, _ in self.containers["usuarios"].escritas}, {"patch"})
 
+    def trocar(self, atual, email="ana@a.com", nova="nova-senha-456"):
+        return self.chamar(SENHA_ROTA, "POST", "/api/senha", {"atual": atual, "nova": nova},
+                           email=email)
+
+    def passar_espera(self, email):
+        # O relógio não anda (o JWT confere o tempo real): a espera vence no banco.
+        for i in self.containers["usuarios"].itens:
+            if i["id"] == email:
+                i["bloqueadoAte"] = int(self.agora) - 1
+
+    def test_senha_atual_errada_conta_e_poe_em_espera(self):
+        for _ in range(4):
+            self.assertEqual(self.trocar("errada-123")[0], 400)
+        self.assertEqual(self.doc("ana@a.com")["falhas"], 4)
+        self.assertEqual(self.trocar("errada-123")[0], 400)  # 5ª: entra em espera
+        self.assertEqual(self.doc("ana@a.com")["bloqueadoAte"], int(self.agora + 60))
+        # Em espera nem a senha certa troca, e a espera não é estendida.
+        status, corpo = self.trocar(SENHA)
+        self.assertEqual((status, corpo), (429, {"erros": [function_app.MSG_SENHA_EM_ESPERA]}))
+        self.assertEqual(self.doc("ana@a.com")["senhaHash"], HASH)
+        self.assertEqual(self.doc("ana@a.com")["falhas"], 5)
+        # O login da mesma conta também espera (contador compartilhado).
+        self.assertEqual(self.chamar(LOGIN, "POST", "/api/login",
+                                     {"email": "ana@a.com", "senha": SENHA})[0], 401)
+        # A espera acaba e a senha certa troca e zera as falhas.
+        self.passar_espera("ana@a.com")
+        self.assertEqual(self.trocar(SENHA)[0], 200)
+        doc = self.doc("ana@a.com")
+        self.assertEqual((doc["falhas"], doc["bloqueadoAte"]), (0, 0))
+
+    def test_senha_espera_cresce_como_no_login(self):
+        for _ in range(5):
+            self.trocar("errada-123")
+        self.passar_espera("ana@a.com")
+        self.trocar("errada-123")  # 6ª falha: espera de 2 min
+        self.assertEqual(self.doc("ana@a.com")["bloqueadoAte"], int(self.agora + 120))
+
+    def test_senha_espera_e_por_conta(self):
+        for _ in range(5):
+            self.trocar("errada-123")
+        self.assertEqual(self.trocar(SENHA, email="bia@a.com")[0], 200)
+
+    def test_senha_validacao_nao_conta(self):
+        for _ in range(6):
+            self.assertEqual(self.trocar("errada-123", nova="curta")[0], 400)
+        self.assertNotIn("falhas", self.doc("ana@a.com"))
+
+    def test_senha_certa_sem_falhas_nao_mexe_nos_contadores(self):
+        self.assertEqual(self.trocar(SENHA)[0], 200)
+        (tipo, _, ops), = self.containers["usuarios"].escritas
+        self.assertEqual({o["path"] for o in ops}, {"/senhaHash", "/sessao"})
+
     def test_gestor_nao_redefine_a_propria_senha(self):
         status, corpo = self.chamar(USUARIOS, "PUT", "/api/usuarios/ana@a.com",
                                     {"senha": "tomada-123"}, email="ana@a.com",
