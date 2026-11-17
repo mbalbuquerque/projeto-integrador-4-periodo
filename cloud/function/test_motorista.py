@@ -22,8 +22,6 @@ ROTAS_NEGADAS = [
     (function_app.leituras, "GET", "/api/leituras", {}),
     (function_app.predict, "GET", "/api/predict", {}),
     (function_app.assistente_painel, "POST", "/api/assistente", {}),
-    (function_app.push_inscricao, "POST", "/api/push/inscricao", {}),
-    (function_app.push_inscricao, "DELETE", "/api/push/inscricao", {}),
     (function_app.dispositivos, "GET", "/api/dispositivos", {}),
     (function_app.dispositivos, "POST", "/api/dispositivos", {}),
     (function_app.dispositivos, "PUT", "/api/dispositivos/dev-01", {"id": "dev-01"}),

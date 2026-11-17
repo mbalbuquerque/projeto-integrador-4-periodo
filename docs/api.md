@@ -63,8 +63,9 @@ As janelas são fixas (o minuto, os 15 min ou o dia corrente, em UTC).
 | `404` | item inexistente ou de outra empresa (as duas respondem igual) | `não encontrado` / `dispositivo não encontrado` |
 
 Perfis: `operador` (consulta), `gestor` (consulta e cadastra) e `motorista` (só `GET /motorista`,
-com o veículo vinculado à conta, e a própria conta: `GET /eu`, `POST /senha`, `POST /sair`; as
-demais rotas do painel respondem `403`).
+com o veículo vinculado à conta, a própria conta: `GET /eu`, `POST /senha`, `POST /sair`, e a
+inscrição nos alertas push: `POST/DELETE /push/inscricao`; as demais rotas do painel respondem
+`403`).
 
 ## Sensor
 
@@ -102,8 +103,9 @@ veículo usa `demonstrativo`). Dentro de `[min, max]` é `NORMAL`; até `margem`
 `ATENCAO`; além disso, `CRITICO`. `min` nulo significa sem limite inferior. O sensor usa a
 `faixa` devolvida para acender os LEDs.
 
-**Alerta push**: quando a leitura piora de faixa, os usuários inscritos da empresa recebem uma
-notificação (ver [Alertas push](#alertas-push-push)).
+**Alerta push**: quando a leitura piora de faixa, os operadores e gestores inscritos da empresa e
+os motoristas inscritos vinculados ao veículo do sensor recebem uma notificação (ver
+[Alertas push](#alertas-push-push)).
 
 ## Acesso
 
@@ -190,8 +192,8 @@ assina cada envio com a chave privada VAPID e o serviço de push do navegador en
 | método e rota | acesso | corpo | resposta |
 |---|---|---|---|
 | `GET /push/chave` | público | — | `200 {"chave"}` (chave pública VAPID, base64url); `503` sem chaves configuradas |
-| `POST /push/inscricao` | operador, gestor | `PushSubscription.toJSON()`: `{"endpoint", "keys": {"p256dh", "auth"}}` | `201 {"inscricoes": n}` |
-| `DELETE /push/inscricao` | operador, gestor | `{"endpoint"}` | `204` (também quando o endpoint não era do usuário) |
+| `POST /push/inscricao` | operador, gestor, motorista | `PushSubscription.toJSON()`: `{"endpoint", "keys": {"p256dh", "auth"}}` | `201 {"inscricoes": n}` |
+| `DELETE /push/inscricao` | operador, gestor, motorista | `{"endpoint"}` | `204` (também quando o endpoint não era do usuário) |
 
 - `endpoint` precisa ser `https` em um serviço de push conhecido (`fcm.googleapis.com`,
   `*.push.services.mozilla.com`, `*.push.apple.com`, `*.notify.windows.com`); outro endereço dá
@@ -208,11 +210,15 @@ assina cada envio com a chave privada VAPID e o serviço de push do navegador en
 - no máximo 1 push por sensor e faixa a cada 10 min (contador no container `limites`), para a
   leitura que oscila na borda da faixa não virar uma notificação a cada 20 s;
 - leitura medida há mais de 30 min (fila offline do sensor chegando depois) não avisa;
-- vai para todas as inscrições dos usuários da **empresa do sensor**.
+- vai para as inscrições dos usuários da **empresa do sensor**: operador e gestor recebem de
+  todos os sensores da empresa; o **motorista só do sensor do veículo vinculado a ele** (campo
+  `veiculo` do cadastro, relido a cada leitura: trocar o veículo troca os alertas). Motorista
+  sem veículo, ou sensor que não está em veículo, não gera push para motorista.
 
 Conteúdo da notificação (JSON cifrado de ponta a ponta, só o navegador lê):
 `{"titulo", "corpo", "url", "tag", "status", "deviceId"}`, com `url` `/alertas?veiculo=<código>`
-(ou `/alertas` se o sensor não está em veículo). Falha no envio nunca muda a resposta da
+(ou `/alertas` se o sensor não está em veículo) para operador e gestor, e `/motorista` para o
+motorista (o painel de alertas não é do perfil dele). Falha no envio nunca muda a resposta da
 telemetria (fica só no log, sem endereço nem chaves); o serviço de push respondendo `404` ou
 `410` (inscrição expirada) faz a API apagar a inscrição.
 

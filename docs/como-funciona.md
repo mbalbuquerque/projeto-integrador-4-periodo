@@ -438,7 +438,7 @@ o próprio código** (token ou chave do sensor). Erros sempre no formato `{"erro
 | POST | `/api/senha` | todos os perfis | Troca a própria senha (pede a atual) e devolve token novo |
 | POST | `/api/sair` | todos os perfis | Derruba todas as sessões do usuário (204) e apaga as inscrições de push |
 | GET | `/api/push/chave` | público | Chave pública VAPID dos alertas push (503 sem configuração) |
-| POST / DELETE | `/api/push/inscricao` | operador, gestor | Inscreve ou remove o aparelho nos alertas push |
+| POST / DELETE | `/api/push/inscricao` | todos os perfis | Inscreve ou remove o aparelho nos alertas push |
 | GET | `/api/motorista` | motorista | Última leitura, faixa, status e viagem em curso **só do veículo vinculado** (`motorista`) |
 | POST | `/api/assistente` | operador, gestor | Assistente do painel com os dados da empresa |
 | GET | `/api/leituras?deviceId=&limite=&horas=&status=` | operador, gestor | Últimas leituras de um sensor da empresa (até 500) |
@@ -491,7 +491,7 @@ sequenceDiagram
   token; perfil ausente ou empresa ausente → 403 ("na dúvida, nunca libera").
 - **Perfis**: `TODOS = ("operador", "gestor")` para leitura; `GESTOR = ("gestor",)` para criar,
   alterar e remover; `MOTORISTA = ("motorista",)` só para `GET /motorista`. `CONTA` (os três)
-  vale para a própria conta: `/eu`, `/senha`, `/sair`. Qualquer outra rota nega o motorista com
+  vale para a própria conta: `/eu`, `/senha`, `/sair`, e para `/push/inscricao`. Qualquer outra rota nega o motorista com
   403 (`test_motorista.py` chama todas).
 - **Motorista vinculado a um veículo**: o cadastro do usuário motorista guarda `veiculo` (código
   da frota da mesma empresa), obrigatório nesse perfil e proibido nos outros
@@ -613,14 +613,21 @@ sequenceDiagram
     A->>A: piorou? (NORMAL→ATENCAO/CRITICO, ATENCAO→CRITICO)
     A->>DB: limites: 1 por sensor e faixa a cada 10 min
     A->>S: webpush (cifrado, assinado com a chave privada VAPID)
-    S-->>N: notificação → service worker mostra e abre /alertas
+    S-->>N: notificação → service worker mostra e abre /alertas (motorista: /motorista)
 ```
 
 - **Modelo**: sem container novo. A inscrição (`endpoint`, `keys.p256dh`, `keys.auth`,
   `criadaEm`) fica no campo `push` do documento do usuário, no container `usuarios`. Assim herda o
-  `empresaId` do usuário (o envio consulta `lista("usuarios", empresa_do_sensor, "c.id, c.push")`,
+  `empresaId` do usuário (o envio consulta
+  `lista("usuarios", empresa_do_sensor, "c.id, c.push, c.perfil, c.veiculo")`,
   e uma empresa nunca recebe alerta da outra), e some junto com o usuário. `publico()` e as listas
   de usuários escolhem os campos, então a inscrição nunca sai em resposta da API.
+- **Quem recebe** (`recebe_push`): operador e gestor, de todos os sensores da empresa; o
+  motorista (que também se inscreve, `CONTA`), só do sensor do veículo vinculado a ele, comparando
+  o `veiculo` do cadastro com o veículo que usa o sensor naquela leitura. O vínculo é relido a
+  cada leitura: trocar o veículo do motorista troca os alertas, sem reinscrever. Motorista sem
+  veículo, sensor fora de veículo ou perfil desconhecido não recebem. A notificação do motorista
+  abre `/motorista` (`push.mensagem(..., motorista=True)`); a dos outros, `/alertas?veiculo=`.
 - **Só na transição** (`avisar_por_push`): compara com a leitura anterior do mesmo sensor pelo
   horário da medição; só a piora avisa. O reenvio duplicado responde antes e nunca avisa.
   Leitura com mais de 30 min (fila offline) não avisa. O contador `push:<sensor>:<faixa>` no
