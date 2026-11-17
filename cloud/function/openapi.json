@@ -1137,7 +1137,7 @@
         ],
         "operationId": "listarLeituras",
         "summary": "Latest readings of a company sensor",
-        "description": "**Who can call:** operator or manager (token from the login). From the most recent measurement to the oldest. A sensor of another company answers exactly like a missing sensor (`404`). Without the `status` filter, `lacunas` lists the gaps in the sequence numbers of the returned readings (lost readings); a sequence that goes back is a counter reset, not a gap.",
+        "description": "**Who can call:** operator or manager (token from the login). From the most recent measurement to the oldest. A sensor of another company answers exactly like a missing sensor (`404`). Without the `status` filter, `lacunas` lists the gaps in the sequence numbers of the returned readings (lost readings); gaps are computed by number, not by measurement order: a reading that arrives out of order is not a gap, and a number present in the response is never reported missing; a number lower than the lowest of the current count (in measurement order) is a counter reset and starts a new count.",
         "security": [
           {
             "bearerAuth": []
