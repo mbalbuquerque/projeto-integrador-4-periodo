@@ -341,10 +341,10 @@ um job da equipe, com a chave somente leitura.
 | Export real de produção (16/11/2026, chave somente leitura) | 4.041 documentos em 7 containers, cerca de 1 MB, **8,1 s** (de uma máquina local) |
 | Contagens por container | `leituras` 4.025; `usuarios` 5; `empresas` 3; `limites` 3; `veiculos` 1; `dispositivos` 1; `viagens` 0 |
 | Restauração do export de produção | **não executada**: exige um Cosmos de teste e a regra do projeto proíbe Docker local para o emulador. O conteúdo real não foi restaurado em lugar nenhum |
-| Restauração sintética no emulador (CI) | @@CI@@ |
+| Restauração sintética no emulador (CI) | PR #74: banco sintético de 63 documentos em 4 containers exportado e restaurado em outro banco, contagens iguais, leitura de um documento por container e chave de partição e TTL recriados; execução inteira dos testes em cerca de 1 s (o emulador leva cerca de 25 s para subir) |
 
-RTO do backup lógico: tempo de recriar o destino mais o da restauração (medida no CI, em
-runner pequeno); para o volume atual fica na ordem de minutos, e cresce de forma linear com o
+RTO do backup lógico: tempo de recriar o destino mais o da restauração (no CI, em
+runner pequeno, o volume sintético restaurou em menos de 1 s); para o volume atual fica na ordem de minutos, e cresce de forma linear com o
 número de documentos (o `upsert` documento a documento é o gargalo).
 
 **Teste no CI**: o workflow `.github/workflows/backup-logico.yml` sobe o emulador oficial do
