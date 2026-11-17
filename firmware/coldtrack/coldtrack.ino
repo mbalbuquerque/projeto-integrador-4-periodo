@@ -93,7 +93,7 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.16.3"
+#define FW_VERSAO "2026.11.17.1"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
@@ -149,10 +149,18 @@ ApVisto ultimoAp = { false, false, 0, 0, WIFI_AUTH_OPEN };
 #define FILA_MAX          500   // ~2h45 de leituras a cada 20 s
 #define REENVIO_POR_CICLO 10    // limita o tempo gasto reenviando por ciclo
 
-// Teste: finge conexao caida nos primeiros N segundos (0 = desligado).
+// Teste: finge conexao caida por N segundos (0 = desligado), a partir de
+// SIMULAR_QUEDA_INICIO_S segundos ligado (padrao 0: desde o boot).
 #ifndef SIMULAR_QUEDA_S
 #define SIMULAR_QUEDA_S 0
 #endif
+#ifndef SIMULAR_QUEDA_INICIO_S
+#define SIMULAR_QUEDA_INICIO_S 0
+#endif
+
+// Teste (simulador): com SIMULAR_API_STATUS definido, o envio nao sai da
+// placa e devolve esse status HTTP (201 = gravado, 401 = chave recusada...).
+// Serve para provar a tela e o LED sem escrever na API de producao.
 
 // Teste: finge relogio sem sincronizar nos primeiros N segundos (0 = desligado).
 #ifndef SIMULAR_SEM_RELOGIO_S
@@ -302,7 +310,7 @@ bool lerDhtUmaVez(float *temperatura, float *umidade) {
     gpio_set_pull_mode((gpio_num_t)DHT_PIN, GPIO_PULLUP_ONLY);
     gpio_set_level((gpio_num_t)DHT_PIN, 1);
     preparado = true;
-    delay(1000);  // o sensor precisa de ~1 s depois de ligado
+    esperarAtualizando(1000);  // o sensor precisa de ~1 s depois de ligado
   }
 
   // Pedido de leitura: linha em baixo (DHT11 pede 18 ms; DHT22, ~1 ms).
@@ -334,7 +342,7 @@ bool lerSensor(float *temperatura, float *umidade) {
   for (int tentativa = 0; tentativa < 2; tentativa++) {
 
     if (tentativa > 0) {
-      delay(DHT_TYPE == DHT11 ? 1100 : 2100);
+      esperarAtualizando(DHT_TYPE == DHT11 ? 1100 : 2100);
     }
 
     if (lerDhtUmaVez(temperatura, umidade)) {
@@ -496,32 +504,275 @@ unsigned long ultimoEnvio = 0;
 
 
 // ==========================================================
-// CONTROLE DOS LEDs
+// INDICADORES (tela OLED e LEDs)
 // ==========================================================
+//
+// Mostram o que a placa esta fazendo, sem computador por perto.
+//
+// Tela 72x40 (placa fisica, TELA_OLED):
+//   linha 1, fonte grande: temperatura (--.- sem leitura valida)
+//   linha 2: status da carga e umidade ("NORMAL   81%"), ou FALHA SENSOR,
+//            CONFIG CABO, SEM CONFIG, INICIANDO, REINICIO WDT
+//   linha 3: fase da conexao: CONECTANDO, WIFI -58dBm, SEM REDE, FILA 12,
+//            ENVIANDO..., ENVIADO, ERRO API 401, FALHA ENVIO, TESTANDO...
+// Linha com duas informacoes (SEM REDE e FILA n; CONECTANDO e o nome da
+// rede) alterna a cada 2 s.
+//
+// LEDs: os tres LEDs de faixa (simulacao) e, se o secrets.h definir, o LED da
+// placa (LED_PLACA). Padroes em docs/como-funciona.md (3.12).
+//
+// Nada aqui espera: o estado vem de variaveis e o piscar vem do millis().
+// Quem precisa esperar (Wi-Fi, scan, sensor) chama esperarAtualizando(), que
+// segue animando durante a espera.
+
+// LED da placa fisica (opcional, no secrets.h):
+//   #define LED_PLACA 8                 // GPIO do LED
+//   #define LED_PLACA_ATIVO_BAIXO       // LED acende com o pino em 0
+//   #define LED_PLACA_RGB               // LED RGB enderecavel (WS2812)
+
+#define FAIXA_NENHUMA -1
+#define FAIXA_NORMAL   0
+#define FAIXA_ATENCAO  1
+#define FAIXA_CRITICO  2
+
+#define CABO_NADA      0
+#define CABO_TESTANDO  1
+#define CABO_RESULTADO 2
+
+#define CABO_RESULTADO_MS 8000   // tempo do resultado do teste na tela
+#define ENVIADO_MS        4000   // tempo do "ENVIADO" na tela
+#define PAGINA_MS         2000   // troca da informacao alternada
+#define AVISO_WDT_MS      60000  // aviso de reinicio por watchdog depois do boot
+
+int indFaixa = FAIXA_NENHUMA;     // ultima leitura valida
+float indTemperatura = NAN;
+float indUmidade = NAN;
+bool indSensorFalhou = false;
+bool indIniciando = true;         // ate o fim do setup
+bool indConectando = false;       // esperando o Wi-Fi em conectarWiFi()
+bool indEnviando = false;
+int indUltimoHttp = 0;            // 0 = nada enviado ainda; <0 falha de rede
+unsigned long indEnviadoEm = 0;
+bool indReinicioWdt = false;
+int indCabo = CABO_NADA;
+String indCaboSsid;
+String indCaboResultado;
+unsigned long indCaboEm = 0;
+unsigned long indUltimaAtualizacao = 0;
+
+
+bool semConfiguracao() {
+
+  return cfgSsid.length() == 0 || !temIdentidade();
+}
+
+
+bool erroNoEnvio() {
+
+  return indUltimoHttp != 0 && indUltimoHttp != 200 && indUltimoHttp != 201;
+}
+
+
+// Resultado do teste de rede pelo cabo, em ate 12 letras.
+const char *resumoCabo(const String &erro) {
+
+  if (erro.length() == 0)               return "REDE OK";
+  if (erro == "senha")                  return "SENHA ERRADA";
+  if (erro == "rede_nao_encontrada")    return "REDE AUSENTE";
+  if (erro == "rede_corporativa")       return "REDE CORPOR.";
+  if (erro == "seguranca_incompativel") return "SEG. INCOMP.";
+  if (erro == "sinal_fraco")            return "SINAL FRACO";
+  if (erro == "sem_ip")                 return "SEM IP";
+  if (erro == "tempo")                  return "TEMPO ESGOT.";
+  if (erro == "sem_identidade")         return "SEM ID";
+  if (erro == "identidade_invalida")    return "ID INVALIDO";
+  if (erro == "rede_invalida")          return "REDE INVALID";
+  return "ERRO";
+}
+
+
+// Liga cada cor. Simulacao: um LED por cor. LED da placa: RGB mostra a cor;
+// LED de uma cor so acende (perde a cor, mantem o padrao de piscar).
+void escreverLeds(bool verde, bool amarelo, bool vermelho) {
+
+  static int anterior = -1;
+  int estado = (verde ? 1 : 0) | (amarelo ? 2 : 0) | (vermelho ? 4 : 0);
+
+  if (estado == anterior) {
+    return;
+  }
+
+  anterior = estado;
+
+#ifndef TELA_OLED
+  digitalWrite(LED_VERDE, verde ? HIGH : LOW);
+  digitalWrite(LED_AMARELO, amarelo ? HIGH : LOW);
+  digitalWrite(LED_VERMELHO, vermelho ? HIGH : LOW);
+#endif
+
+#ifdef LED_PLACA
+#ifdef LED_PLACA_RGB
+  if (estado == 7) {
+    rgbLedWrite(LED_PLACA, 40, 40, 40);    // todas: branco
+  } else if (amarelo) {
+    rgbLedWrite(LED_PLACA, 60, 35, 0);
+  } else if (vermelho) {
+    rgbLedWrite(LED_PLACA, 60, 0, 0);
+  } else if (verde) {
+    rgbLedWrite(LED_PLACA, 0, 50, 0);
+  } else {
+    rgbLedWrite(LED_PLACA, 0, 0, 0);
+  }
+#else
+  bool aceso = estado != 0;
+#ifdef LED_PLACA_ATIVO_BAIXO
+  aceso = !aceso;
+#endif
+  digitalWrite(LED_PLACA, aceso ? HIGH : LOW);
+#endif
+#endif
+}
+
+
+// Padrao de piscar pela fase. Devolve o nome (vai para a serial quando muda).
+const char *atualizarLeds(unsigned long t) {
+
+  bool aceso = true;
+  const char *nome;
+
+  if (indCabo == CABO_TESTANDO ||
+      (indFaixa == FAIXA_NENHUMA && !indSensorFalhou && (indIniciando || !semConfiguracao()))) {
+
+    // Iniciando, conectando sem leitura ainda, ou testando rede pelo cabo:
+    // verde, amarelo, vermelho em sequencia (200 ms cada).
+    int passo = (t / 200) % 3;
+    escreverLeds(passo == 0, passo == 1, passo == 2);
+    return "sequencia";
+  }
+
+  if (semConfiguracao()) {
+
+    // Sem rede ou sem identidade salvas: amarelo, dois toques a cada 1,5 s.
+    unsigned long f = t % 1500;
+    escreverLeds(false, f < 150 || (f >= 300 && f < 450), false);
+    return "sem_config";
+  }
+
+  if (indSensorFalhou) {
+
+    // Sem leitura valida: os tres juntos, 2 vezes por segundo.
+    aceso = (t / 250) % 2 == 0;
+    escreverLeds(aceso, aceso, aceso);
+    return "falha_sensor";
+  }
+
+  if (!conexaoDisponivel()) {
+    aceso = (t / 500) % 2 == 0;       // 1 piscada por segundo
+    nome = "sem_rede";
+  } else if (erroNoEnvio()) {
+    aceso = (t / 125) % 2 == 0;       // 4 piscadas por segundo
+    nome = "erro_envio";
+  } else {
+    nome = "fixo";
+  }
+
+  escreverLeds(aceso && indFaixa == FAIXA_NORMAL,
+               aceso && indFaixa == FAIXA_ATENCAO,
+               aceso && indFaixa == FAIXA_CRITICO);
+  return nome;
+}
+
+
+// Textos das linhas 2 e 3 (no maximo 12 letras cada, fonte 6x10).
+void montarStatus(unsigned long t, char *l2, char *l3, size_t n) {
+
+  bool pagina = (t / PAGINA_MS) % 2 == 1;
+
+  // ---- linha 2: carga ou situacao da placa ----
+  if (indCabo != CABO_NADA) {
+    snprintf(l2, n, "CONFIG CABO");
+  } else if (indSensorFalhou) {
+    snprintf(l2, n, "FALHA SENSOR");
+  } else if (indFaixa != FAIXA_NENHUMA) {
+    const char *faixa = indFaixa == FAIXA_NORMAL ? "NORMAL" :
+                        indFaixa == FAIXA_ATENCAO ? "ATENCAO" : "CRITICO";
+    snprintf(l2, n, "%-7s %3.0f%%", faixa, indUmidade);
+  } else if (indReinicioWdt) {
+    snprintf(l2, n, "REINICIO WDT");
+  } else if (!indIniciando && semConfiguracao()) {
+    snprintf(l2, n, "SEM CONFIG");
+  } else {
+    snprintf(l2, n, "INICIANDO");
+  }
+
+  // ---- linha 3: conexao ----
+  if (indCabo == CABO_TESTANDO) {
+    snprintf(l3, n, "%.12s", pagina ? indCaboSsid.c_str() : "TESTANDO...");
+  } else if (indCabo == CABO_RESULTADO) {
+    snprintf(l3, n, "%s", indCaboResultado.c_str());
+  } else if (indConectando) {
+    snprintf(l3, n, "%.12s", pagina ? cfgSsid.c_str() : "CONECTANDO");
+  } else if (indIniciando) {
+    l3[0] = '\0';
+  } else if (semConfiguracao()) {
+    snprintf(l3, n, "LIGUE O CABO");
+  } else if (indReinicioWdt && pagina && t < AVISO_WDT_MS && indFaixa != FAIXA_NENHUMA) {
+    snprintf(l3, n, "REINICIO WDT");
+  } else if (indEnviando) {
+    snprintf(l3, n, "ENVIANDO...");
+  } else if (!conexaoDisponivel()) {
+    if (pagina && filaTamanho > 0) {
+      snprintf(l3, n, "FILA %d", filaTamanho);
+    } else {
+      snprintf(l3, n, "SEM REDE");
+    }
+  } else if (indUltimoHttp < 0) {
+    snprintf(l3, n, "FALHA ENVIO");
+  } else if (erroNoEnvio()) {
+    snprintf(l3, n, "ERRO API %d", indUltimoHttp);
+  } else if (indEnviadoEm != 0 && t - indEnviadoEm < ENVIADO_MS) {
+    snprintf(l3, n, "ENVIADO");
+  } else {
+    long rssi = WiFi.RSSI();
+    if (rssi < 0) {
+      snprintf(l3, n, "WIFI %lddBm", rssi);
+    } else {
+      snprintf(l3, n, "WIFI OK");   // simulador: sem RSSI
+    }
+  }
+}
+
 
 #ifdef TELA_OLED
 
-// 72x40 pixels: temperatura grande em cima, umidade e status embaixo.
-void mostrarNaTela(float temperatura, float umidade, const char *status) {
+// Redesenha so quando o texto muda (o I2C leva alguns ms por quadro).
+void desenharTela(const char *l2, const char *l3) {
 
-  char linha[16];
+  static char anterior[3][16] = { "?", "?", "?" };
+  char l1[16];
+
+  if (isnan(indTemperatura)) {
+    snprintf(l1, sizeof(l1), "--.-\xb0" "C");
+  } else {
+    snprintf(l1, sizeof(l1), "%.1f\xb0" "C", indTemperatura);
+  }
+
+  if (!strcmp(l1, anterior[0]) && !strcmp(l2, anterior[1]) && !strcmp(l3, anterior[2])) {
+    return;
+  }
+
+  strncpy(anterior[0], l1, 15);
+  strncpy(anterior[1], l2, 15);
+  strncpy(anterior[2], l3, 15);
 
   tela.clearBuffer();
 
-  tela.setFont(u8g2_font_7x14B_tf);
-  if (isnan(temperatura)) {
-    tela.drawStr(0, 13, "--.- C");
-  } else {
-    snprintf(linha, sizeof(linha), "%.1f C", temperatura);
-    tela.drawStr(0, 13, linha);
-  }
+  tela.setFont(u8g2_font_helvB14_tf);
+  tela.drawStr(0, 15, l1);
 
   tela.setFont(u8g2_font_6x10_tf);
-  if (!isnan(umidade)) {
-    snprintf(linha, sizeof(linha), "U %.0f%%", umidade);
-    tela.drawStr(0, 26, linha);
-  }
-  tela.drawStr(0, 39, status);
+  tela.drawStr(0, 28, l2);
+  tela.drawStr(0, 39, l3);
 
   tela.sendBuffer();
 }
@@ -529,48 +780,73 @@ void mostrarNaTela(float temperatura, float umidade, const char *status) {
 #endif
 
 
-void desligarLeds() {
+void desenharIndicadores() {
 
-#ifndef TELA_OLED
-  digitalWrite(LED_VERDE, LOW);
-  digitalWrite(LED_AMARELO, LOW);
-  digitalWrite(LED_VERMELHO, LOW);
+  unsigned long t = millis();
+
+  if (indCabo == CABO_RESULTADO && t - indCaboEm >= CABO_RESULTADO_MS) {
+    indCabo = CABO_NADA;
+  }
+
+  static const char *ledAnterior = "";
+  const char *led = atualizarLeds(t);
+
+  if (strcmp(led, ledAnterior) != 0) {
+    ledAnterior = led;
+    Serial.print("LED: ");
+    Serial.println(led);
+  }
+
+#ifdef TELA_OLED
+  char l2[16];
+  char l3[16];
+  montarStatus(t, l2, l3, sizeof(l2));
+  desenharTela(l2, l3);
 #endif
+
+  indUltimaAtualizacao = t;
+}
+
+
+// Chamada a cada volta do loop: no maximo a cada 50 ms.
+void atualizarIndicadores() {
+
+  if (millis() - indUltimaAtualizacao >= 50) {
+    desenharIndicadores();
+  }
+}
+
+
+// delay() que continua animando a tela e o LED.
+void esperarAtualizando(unsigned long ms) {
+
+  unsigned long inicio = millis();
+
+  while (millis() - inicio < ms) {
+    atualizarIndicadores();
+    unsigned long falta = ms - (millis() - inicio);
+    delay(falta < 20 ? falta : 20);
+  }
 }
 
 
 void statusNormal() {
 
-  desligarLeds();
-
-#ifndef TELA_OLED
-  digitalWrite(LED_VERDE, HIGH);
-#endif
-
+  indFaixa = FAIXA_NORMAL;
   Serial.println("STATUS DA CARGA: NORMAL");
 }
 
 
 void statusAtencao() {
 
-  desligarLeds();
-
-#ifndef TELA_OLED
-  digitalWrite(LED_AMARELO, HIGH);
-#endif
-
+  indFaixa = FAIXA_ATENCAO;
   Serial.println("STATUS DA CARGA: ATENCAO");
 }
 
 
 void statusCritico() {
 
-  desligarLeds();
-
-#ifndef TELA_OLED
-  digitalWrite(LED_VERMELHO, HIGH);
-#endif
-
+  indFaixa = FAIXA_CRITICO;
   Serial.println("STATUS DA CARGA: CRITICO");
 }
 
@@ -701,10 +977,11 @@ void conectarWiFi() {
   iniciarWiFi(cfgSsid.c_str(), cfgSenha.c_str());
 
   int tentativas = 0;
+  indConectando = true;
 
   while (WiFi.status() != WL_CONNECTED && tentativas < 20) {
 
-    delay(500);
+    esperarAtualizando(500);
     alimentarWatchdog();
 
     Serial.print(".");
@@ -716,6 +993,8 @@ void conectarWiFi() {
       break;
     }
   }
+
+  indConectando = false;
 
   if (WiFi.status() == WL_CONNECTED) {
 
@@ -806,6 +1085,13 @@ void atualizarFaixa(const String &resposta) {
 
 // Retorna o status HTTP (201 = gravado) ou um codigo negativo de falha de rede.
 int postarAzure(const char *payload) {
+
+#ifdef SIMULAR_API_STATUS
+  esperarAtualizando(800);   // tempo de uma requisicao de verdade
+  Serial.print("Azure (SIMULADO, nada saiu da placa): status ");
+  Serial.println(SIMULAR_API_STATUS);
+  return SIMULAR_API_STATUS;
+#endif
 
   ClienteContado clienteSeguro;
   clienteSeguro.setCACert(AZURE_ROOT_CA);
@@ -1031,7 +1317,8 @@ bool relogioOk() {
 
 bool conexaoDisponivel() {
 
-  if (SIMULAR_QUEDA_S > 0 && millis() < SIMULAR_QUEDA_S * 1000UL) {
+  if (SIMULAR_QUEDA_S > 0 && millis() >= SIMULAR_QUEDA_INICIO_S * 1000UL &&
+      millis() < (SIMULAR_QUEDA_INICIO_S + SIMULAR_QUEDA_S) * 1000UL) {
     return false;
   }
 
@@ -1547,7 +1834,7 @@ int16_t escanear(const char *ssid) {
     // Espera crescente, alimentando o watchdog, para o driver sair do "connecting".
     unsigned long inicio = millis();
     while (millis() - inicio < SCAN_ESPERA_MS * (unsigned long)tentativa) {
-      delay(50);
+      esperarAtualizando(50);
       alimentarWatchdog();
     }
   }
@@ -1694,7 +1981,7 @@ String testarWiFi(const String &ssid, String &senha) {
       break;
     }
 
-    delay(250);
+    esperarAtualizando(250);
     alimentarWatchdog();
   }
 
@@ -1826,6 +2113,16 @@ void apagarFila() {
 }
 
 
+// Resultado do comando de rede na tela (fica CABO_RESULTADO_MS).
+void mostrarResultadoCabo(const String &erro) {
+
+  indCabo = CABO_RESULTADO;
+  indCaboResultado = resumoCabo(erro);
+  indCaboEm = millis();
+  desenharIndicadores();
+}
+
+
 void tratarComando() {
 
   String cmd = comandoPendente;
@@ -1864,25 +2161,34 @@ void tratarComando() {
   if (ssid.length() == 0 || ssid.length() > 32 || senha.length() > 63) {
 
     responder("{\"ok\":false,\"erro\":\"rede_invalida\"}");
+    mostrarResultadoCabo("rede_invalida");
     return;
   }
 
   if (tipo == "wifi" && !temIdentidade()) {
 
     responder("{\"ok\":false,\"erro\":\"sem_identidade\"}");
+    mostrarResultadoCabo("sem_identidade");
     return;
   }
 
   if (tipo == "config" && (id.length() < 3 || id.length() > 40 || chave.length() < 16)) {
 
     responder("{\"ok\":false,\"erro\":\"identidade_invalida\"}");
+    mostrarResultadoCabo("identidade_invalida");
     return;
   }
 
   Serial.print("CONFIG: testando a rede ");
   Serial.println(ssid);
 
+  indCabo = CABO_TESTANDO;
+  indCaboSsid = ssid;
+  desenharIndicadores();
+
   String erro = testarWiFi(ssid, senha);
+
+  mostrarResultadoCabo(erro);
 
   if (erro.length() > 0) {
 
@@ -1960,20 +2266,24 @@ void setup() {
 
   iniciarWatchdog();
 
-  delay(1000);
+  indReinicioWdt = reiniciouPorWatchdog();
 
 #ifdef TELA_OLED
   Wire.begin(TELA_SDA, TELA_SCL);
   tela.begin();
   tela.setContrast(255);
-  mostrarNaTela(NAN, NAN, "INICIANDO");
 #else
   pinMode(LED_VERDE, OUTPUT);
   pinMode(LED_AMARELO, OUTPUT);
   pinMode(LED_VERMELHO, OUTPUT);
-
-  desligarLeds();
 #endif
+
+#if defined(LED_PLACA) && !defined(LED_PLACA_RGB)
+  pinMode(LED_PLACA, OUTPUT);
+#endif
+
+  // INICIANDO na tela e LEDs em sequencia desde o primeiro segundo.
+  esperarAtualizando(1000);
 
 #ifdef TESTE_DHT
   autotesteDht();
@@ -2031,6 +2341,9 @@ void setup() {
   Serial.println();
   Serial.println("Sistema iniciado.");
 
+  indIniciando = false;
+  desenharIndicadores();
+
   // Linha de prontidao: o painel espera por ela (ou por um "info" respondido)
   // antes de mandar comandos, porque abrir a porta pode reiniciar a placa.
   responder(String("{\"pronto\":true,\"fw\":") + emJson(FW_VERSAO) + "}");
@@ -2044,6 +2357,8 @@ void setup() {
 void loop() {
 
   alimentarWatchdog();
+
+  atualizarIndicadores();
 
   // Teste do watchdog: para de alimentar e espera o reinicio.
   if (SIMULAR_TRAVAMENTO_S > 0 && millis() > SIMULAR_TRAVAMENTO_S * 1000UL &&
@@ -2081,13 +2396,10 @@ void loop() {
     static unsigned long ultimaLeitura = 0;
     if (millis() - ultimaLeitura >= 3000 || ultimaLeitura == 0) {
       ultimaLeitura = millis();
-      float t, u;
-      lerSensor(&t, &u);
-      mostrarNaTela(t, u, "CONFIGURAR");
+      lerSensor(&indTemperatura, &indUmidade);
     }
-#else
-    digitalWrite(LED_AMARELO, (millis() / 500) % 2);
 #endif
+    // LED: amarelo em dois toques (atualizarIndicadores).
 
     if (millis() - ultimoAviso >= 10000 || ultimoAviso == 0) {
 
@@ -2147,15 +2459,12 @@ void loop() {
 
       Serial.println("ERRO: Falha na leitura do sensor!");
 
-      desligarLeds();
-
-#ifdef TELA_OLED
-      mostrarNaTela(NAN, NAN, "ERRO SENSOR");
-#else
-      digitalWrite(LED_VERMELHO, HIGH);
-      delay(300);
-      digitalWrite(LED_VERMELHO, LOW);
-#endif
+      // Nada e enviado nem guardado: leitura invalida nunca sai como valida.
+      // Tela: FALHA SENSOR; LEDs: os tres piscando juntos.
+      indSensorFalhou = true;
+      indTemperatura = NAN;
+      indUmidade = NAN;
+      desenharIndicadores();
 
       return;
     }
@@ -2179,31 +2488,25 @@ void loop() {
     // ======================================================
 
     // Mesma regra da nuvem (contrato.py): sem limite inferior quando faixaMin e NAN.
-    const char *statusTela;
-
     switch (classificarFaixa(temperatura, faixaMin, faixaMax, faixaMargem)) {
 
       case StatusTermico::NORMAL:
         statusNormal();
-        statusTela = "NORMAL";
         break;
 
       case StatusTermico::ATENCAO:
         statusAtencao();
-        statusTela = "ATENCAO";
         break;
 
       default:
         statusCritico();
-        statusTela = "CRITICO";
         break;
     }
 
-#ifdef TELA_OLED
-    mostrarNaTela(temperatura, umidade, statusTela);
-#else
-    (void)statusTela;
-#endif
+    indSensorFalhou = false;
+    indTemperatura = temperatura;
+    indUmidade = umidade;
+    desenharIndicadores();
 
 
     // ======================================================
@@ -2244,6 +2547,10 @@ void loop() {
 
       Serial.println();
 
+      // ENVIANDO... na tela antes da requisicao (ela segura o loop ate 5 s).
+      indEnviando = true;
+      desenharIndicadores();
+
       // Primeiro o que ficou guardado, para manter a ordem no banco.
       reenviarFila();
 
@@ -2252,6 +2559,13 @@ void loop() {
       alimentarWatchdog();
 
       int status = postarAzure(payload);
+
+      indEnviando = false;
+      indUltimoHttp = status;
+      if (status == 201 || status == 200) {
+        indEnviadoEm = millis();
+      }
+      desenharIndicadores();
 
 #ifdef COM_MQTT
       alimentarWatchdog();

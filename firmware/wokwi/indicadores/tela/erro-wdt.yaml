@@ -1,0 +1,26 @@
+# Uso: compilar o coldtrack.ino com o secrets.h do Wokwi (Wokwi-GUEST, DEVICE_ID e
+# DEVICE_KEY de teste) mais estas linhas:
+#   #define TELA_OLED / LED_PLACA 8 / LED_PLACA_RGB / SIMULAR_API_STATUS 401 /
+#   SIMULAR_TRAVAMENTO_S 25 / WATCHDOG_S 8
+# e rodar, na pasta com wokwi.toml e este diagram.json:
+#   wokwi-cli --timeout 400000 --scenario erro-wdt.yaml .
+# SIMULAR_API_STATUS: o envio nao sai da placa (nada e escrito na API).
+# Os prints saem em shots/ (take-screenshot da tela).
+# Erro da API e reinicio por watchdog (issue 87). Firmware: TELA_OLED,
+# SIMULAR_API_STATUS 401, SIMULAR_TRAVAMENTO_S 25, WATCHDOG_S 8.
+name: Erro da API e watchdog na tela
+version: 1
+author: ColdTrack
+steps:
+  - set-control: { part-id: fio, control: pressed, value: 1 }
+  - wait-serial: "Azure (SIMULADO"
+  - delay: 300ms
+  - take-screenshot: { part-id: oled1, save-to: shots/20-erro-api.png }
+  - wait-serial: "TESTE: loop travado"
+  - wait-serial: "WATCHDOG: placa reiniciada"
+  - take-screenshot: { part-id: oled1, save-to: shots/21-reinicio-wdt-boot.png }
+  - wait-serial: "STATUS DA CARGA"
+  - delay: 200ms
+  - take-screenshot: { part-id: oled1, save-to: shots/22a-reinicio-wdt-depois.png }
+  - delay: 2000ms
+  - take-screenshot: { part-id: oled1, save-to: shots/22b-reinicio-wdt-depois.png }

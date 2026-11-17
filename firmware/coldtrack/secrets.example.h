@@ -15,6 +15,14 @@
 // Sensor: descomente na placa física com DHT11 (o padrão é DHT22, usado no Wokwi)
 // #define DHT_TYPE DHT11
 
+// LED da placa física (opcional; confira qual a placa tem antes de ligar).
+// LED simples aceso em nível baixo no GPIO 8:
+// #define LED_PLACA 8
+// #define LED_PLACA_ATIVO_BAIXO
+// LED RGB WS2812 no GPIO 2 (mostra a cor da faixa):
+// #define LED_PLACA 2
+// #define LED_PLACA_RGB
+
 // Identidade do sensor (Wokwi): registre em painel > Sensores > "Registrar sem cabo".
 // A chave aparece uma vez só, na hora do registro.
 #define DEVICE_ID  "coldtrack-01"
