@@ -270,13 +270,13 @@ computador e celular.
 
 | Parte | Publicação automática | Publicação manual |
 |---|---|---|
-| API | GitHub Actions `publicar-api.yml`: a cada envio à branch `everson` que altere a API, roda os testes e publica | `bash publicar.sh` em `cloud/function/` |
-| Painel | GitHub Actions `publicar-site.yml`: a cada envio à branch `everson`, roda lint, testes e build e publica | `bash publicar.sh` no repositório do painel |
+| API | GitHub Actions `publicar-api.yml`: a cada envio à branch `main` que altere a API, roda os testes e publica | `bash publicar.sh` em `cloud/function/` |
+| Painel | GitHub Actions `publicar-site.yml`: a cada envio à branch `main`, roda lint, testes e build e publica | `bash publicar.sh` no repositório do painel |
 | Firmware | — | Compilado e gravado no ESP32 pelo cabo USB |
 
 **Credencial da publicação automática.** O GitHub entra no Azure por OIDC: não existe senha
 guardada no repositório. A identidade `coldtrack-github-deploy` tem permissão apenas no grupo
-de recursos `rg-coldtrack` e só é aceita para a branch `everson` destes dois repositórios (por isso a `everson` não pode ser apagada).
+de recursos `rg-coldtrack` e só é aceita para as branches `main` (a que publica) e `everson` (reserva) destes dois repositórios.
 A publicação manual usa o **Azure CLI** (comando `az`) autenticado na assinatura do projeto.
 
 Testes:

@@ -2,23 +2,43 @@
 
 ## Branches
 
-- `everson`: branch de trabalho do back-end, firmware e infraestrutura. Todo push nela que
-  altere `cloud/function/` **publica a API em produção** (workflow `publicar-api.yml`).
-- `main`: versão consolidada. Recebe a `everson` por pull request quando uma etapa fica pronta, com os
-  testes verdes. Depois do merge, a `everson` continua existindo e segue como branch de trabalho.
-- **Nunca apagar a `everson`** (nem marcar "apagar branch após o merge" no pull request): a publicação
-  da API e do painel e o login do GitHub Actions no Azure dependem dela.
-- Mudança maior ou arriscada: criar uma branch a partir de `everson`
-  (`everson/<assunto>`), abrir pull request para `everson` e esperar os testes passarem.
+- `main`: branch oficial. Todo push nela que altere `cloud/function/` (ou o próprio workflow)
+  **publica a API em produção** (workflow `publicar-api.yml`). Mudanças entram por pull request,
+  com os testes verdes.
+- Branches de trabalho: criar a partir da `main` (`<tipo>/<assunto>`, por exemplo
+  `fix/limite-login`), abrir pull request para a `main` e esperar os testes passarem.
+- `everson`: antiga branch de publicação, mantida como reserva. Push nela não publica mais
+  depois que a `main` for trazida para ela (até lá, a cópia antiga do workflow que está na
+  `everson` ainda publica). Não apagar: o Azure ainda aceita login por OIDC a partir dela, e ela
+  é o caminho de volta se a publicação pela `main` falhar.
 
-Antes de editar, atualizar a branch (`git pull`). Depois de cada pull request para a `main`, trazer
-a `main` de volta para a `everson` com merge.
+Antes de editar, atualizar a branch (`git pull`).
 
 O painel web está em outro repositório, [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi),
 com fluxo igual (ver o `CONTRIBUTING.md` de lá).
 
-O login do GitHub Actions no Azure é aceito só para a branch `everson` deste repositório
-(ver [`infra/README.md`](infra/README.md)); push em outra branch roda os testes, mas não publica.
+O login do GitHub Actions no Azure é aceito só para as branches `main` e `everson` deste
+repositório (ver [`infra/README.md`](infra/README.md)); push em outra branch roda os testes, mas não
+publica.
+
+### Proteção da `main`
+
+A `main` deve exigir pull request e os testes verdes antes do merge. Só um administrador do
+repositório consegue ligar isso (para quem tem só permissão de escrita a API responde 404).
+Comando, rodado por um administrador:
+
+```bash
+gh api -X PUT repos/mbalbuquerque/projeto-integrador-4-periodo/branches/main/protection --input - <<'EOF'
+{"required_status_checks":{"strict":true,"contexts":["API (lint, testes de contrato e segurança)","Firmware (testes unitários C++ e compilação ESP32-C3)","Imagem Docker da API (build)"]},
+ "enforce_admins":false,
+ "required_pull_request_reviews":{"required_approving_review_count":0},
+ "restrictions":null}
+EOF
+```
+
+Os nomes em `contexts` são os jobs do `testes.yml`; se um job for renomeado, a lista precisa
+acompanhar. O mesmo vale para o [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)
+(comando no `CONTRIBUTING.md` de lá).
 
 ## Commits
 

@@ -46,8 +46,8 @@ Detalhe das rotas no [Swagger](https://func-coldtrack-7319.azurewebsites.net/api
 
 - Function App só aceita HTTPS (`httpsOnly`); TLS mínimo 1.2 na Function, nos Storages e no
   Cosmos. CORS liberado só para o painel publicado.
-- Publicação pelo GitHub Actions com OIDC: sem senha guardada no repositório, e só a branch
-  `everson` consegue publicar.
+- Publicação pelo GitHub Actions com OIDC: sem senha guardada no repositório, e só as branches
+  `main` (a que publica) e `everson` (reserva) conseguem login no Azure.
 - Azure OpenAI acessado pela identidade gerenciada da Function, com as chaves de API
   desligadas no recurso.
 - Nenhum segredo no histórico do Git (conferido na revisão).

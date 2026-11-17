@@ -709,19 +709,21 @@ nas app settings da Function, não no repositório.
 
 ### 7.2 Publicação pelo GitHub Actions com OIDC
 
-- **API**: `.github/workflows/publicar-api.yml` roda a cada push na branch **`everson`** que mexa em
-  `cloud/function/`: instala, roda os testes (publica só se passarem), empacota pela lista
+- **API**: `.github/workflows/publicar-api.yml` roda a cada push na branch **`main`** que mexa em
+  `cloud/function/` (ou no próprio workflow), e também manualmente (`workflow_dispatch`): instala, roda os testes (publica só se passarem), empacota pela lista
   `pacote.txt`, faz login no Azure com `azure/login` e publica com
   `az functionapp deployment source config-zip ... --build-remote true`.
-- **Painel**: `front: .github/workflows/publicar-site.yml`, push na `everson`: lint, testes, build e
+- **Painel**: `front: .github/workflows/publicar-site.yml`, push na `main`: lint, testes, build e
   `scripts/enviar-site.sh dist` (arquivos com hash com cache de 1 ano, o resto `no-cache`, apaga do
   `$web` o que não está mais no build).
 - **OIDC, sem senha guardada**: existe um aplicativo no Entra ID (`coldtrack-github-deploy`) com
-  papel Contributor só no `rg-coldtrack`, com credencial federada cujo *subject* é a branch
-  `everson` de cada repositório. O GitHub emite um token assinado para o job e o `azure/login`
-  troca por acesso ao Azure. Os secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` e
-  `AZURE_SUBSCRIPTION_ID` só dizem qual identidade usar. Push em outra branch roda os testes, mas
-  não consegue publicar. Por isso a `everson` nunca pode ser apagada.
+  papel Contributor só no `rg-coldtrack`, com credenciais federadas cujo *subject* é a branch
+  `main` de cada repositório (a que publica) e a `everson` (reserva, não dispara mais a
+  publicação). O GitHub emite um token assinado para o job e o `azure/login` troca por acesso ao
+  Azure. Os secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` e `AZURE_SUBSCRIPTION_ID` só dizem qual
+  identidade usar. Push em outra branch roda os testes, mas não consegue publicar.
+- **Proteção da `main`**: pull request obrigatório e testes verdes antes do merge. Só um
+  administrador do repositório consegue ligar; o comando está no `CONTRIBUTING.md`.
 - **Infraestrutura como código**: `infra/main.bicep` descreve o ambiente; aplicar só depois de
   `what-if`.
 
