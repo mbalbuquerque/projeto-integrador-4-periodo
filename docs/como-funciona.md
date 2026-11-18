@@ -796,6 +796,15 @@ sequenceDiagram
 - **Nunca quebra a gravação**: a leitura já está gravada quando o push começa; `push.enviar`
   nunca levanta exceção, e qualquer outro erro do push é pego em `telemetria` e só vai para o log.
   Os envios saem em paralelo (até 8) com tempo limite de 5 s cada.
+- **Assunto VAPID** (`VAPID_SUBJECT`): precisa ser `mailto:usuario@host` ou uma origem https **sem
+  caminho** (`https://host`); é a regra da `py-vapid`, que levanta `VapidException` para qualquer
+  outro formato (por exemplo uma URL de repositório com caminho). `push.configurado()` aplica a
+  mesma regra: assunto inválido deixa o push desligado e registra um aviso (uma vez). Padrão: a
+  origem do painel. Um teste assina de verdade (sem rede) com o assunto padrão.
+- **Urgência e validade**: alertas de `ATENCAO` e `CRITICO` saem com o cabeçalho `Urgency: high`;
+  sem ele o Android segura o push no modo Doze e o aviso só aparece quando o painel é aberto. O
+  `TTL` é de 10 min (o mesmo intervalo mínimo entre avisos): um alerta de temperatura mais velho
+  que isso já está desatualizado e o painel mostra a situação atual.
 - **Limpeza**: resposta `404`/`410` do serviço de push = inscrição expirada, apagada do usuário.
 - **Segurança**: o `endpoint` só é aceito em hosts de serviço de push conhecidos (`HOSTS_PUSH`),
   então a API não vira um jeito de fazer POST para qualquer URL. O conteúdo vai cifrado
