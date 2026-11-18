@@ -7,7 +7,7 @@ em branco = ainda não definido pela equipe.
 | Lacuna | UC / critério | Ação concreta | Responsável | Prazo | Evidência de conclusão |
 |---|---|---|---|---|---|
 | F3 sem execução registrada | IoT / Resiliência | F1 e F3 aprovados na placa física em 17/11 (tempos em `RESILIENCIA.md`); falta medir perda em 24 h e disponibilidade junto com a base de 48 h (#39) | | 23/11 | Tabela preenchida em `RESILIENCIA.md` (#34) |
-| Watchdog validado só no simulador | IoT / R4 | Repetir F2 (queda de energia) e um travamento na placa física | | 25/11 | F2 aprovado (#35) |
+| Watchdog validado só no simulador | IoT / R4 | F2 (queda de energia) aprovado na placa física em 17/11 (`RESILIENCIA.md`); falta um travamento com watchdog na placa física | | 25/11 | F2 aprovado (#35) |
 | Modelo do sensor não supera o baseline | IA | `GET /api/predict/sensor` publicada com as leituras reais; MAE 0,342 °C contra 0,313 °C da persistência. Re-treinar depois da coleta de 48 h e mostrar a previsão no painel (Front-End-pi #60) | | 28/11 | Modelo com leituras do sensor (#37) |
 | Pesquisa só secundária e simulada | Consumidor | Por decisão da equipe (17/11), a rodada do questionário foi simulada a partir da pesquisa secundária e declarada como tal; coleta real não feita | | 25/11 | `docs/ux/respostas-pesquisa-simulada.md` (#38, fechada) |
 | Sem teste de usabilidade | UE Mobile / Consumidor (final) | Tarefas e SUS simulados com 5 respondentes (média 73,5), declarados como não evidência de usabilidade real | | 28/11 | `docs/ux/respostas-pesquisa-simulada.md` (#38, fechada) |
