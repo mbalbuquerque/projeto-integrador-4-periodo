@@ -1017,7 +1017,7 @@ Fonte: `RESILIENCIA.md`, `docs/qa/plano-de-testes.md` (seção 6) e o código.
 | teste | critério | situação |
 |---|---|---|
 | F1 Queda de rede (60 s) | Reconecta em até 30 s, sem lacuna | **Aprovado na placa física** em 17/11/2026: queda de cerca de 2,5 min, 6 leituras na fila, reconexão em menos de 30 s após a rede voltar, reenvio em ordem, sequência sem lacuna (`RESILIENCIA.md`, Registro) |
-| F2 Queda de energia | Volta a enviar em até 60 s | Final; a fila e a sequência em flash sobrevivem ao reinício; watchdog de 60 s |
+| F2 Queda de energia | Volta a enviar em até 60 s | Na placa física (17/11): `seq` contínua (3338 -> 3339) e primeira leitura 24 s após a última antes do corte (registro em `RESILIENCIA.md`); watchdog de 60 s ainda só no simulador |
 | F3 Falha de sensor | Nada inválido gravado, alerta visível | Simulado no Wokwi (`tela/fases.yaml`, `tela/heartbeat.yaml`): `FALHA SENSOR` na tela, três LEDs piscando, nenhuma leitura enviada, heartbeat `sensor_falha` deixa a placa online com `sensor: "falha"`; testes da API em `test_heartbeat.py`. Na placa física (17/11, firmware 2026.11.17.3): falha detectada no primeiro ciclo, heartbeat `sensor_falha` aceito pela API, nenhuma leitura gravada durante a falha e recuperação no ciclo seguinte à reconexão (registro em `RESILIENCIA.md`) |
 | F4 Nuvem fora | Serviço volta sozinho, zero perda | Final; reinício do contêiner validado no CI (`compose-zap.yml`); teste F4 completo pendente |
 | F5 Mensagem duplicada | Um só registro | **Automatizado**, passa no CI; observado também na placa física (reenvio após timeout respondido como `duplicada: true`) |

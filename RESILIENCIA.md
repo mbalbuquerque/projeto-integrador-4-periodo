@@ -23,7 +23,8 @@ resultado foi observado e registrado aqui.
 |---|---|---|
 | F1 Queda de rede (60 s) | Reconecta em até 30 s; sem lacuna na sequência | Aprovado na placa física (17/11) |
 | F3 Falha de sensor | Leitura marcada inválida, alerta visível, nada gravado como válido | Aprovado na placa física (17/11) |
-| F2, F4, F5, F6 | Ver prévia técnica | F5 observado na placa física (reenvio após timeout respondido como `duplicada: true`); F2, F4 e F6 na entrega final |
+| F2 Queda de energia | Volta a enviar em até 60 s, sem perder a sequência | Aprovado na placa física (17/11) |
+| F4, F5, F6 | Ver prévia técnica | F5 observado na placa física (reenvio após timeout respondido como `duplicada: true`); F4 e F6 na entrega final |
 
 Resultados de F1 e F3 (data, procedimento, tempo medido) devem ser anotados abaixo depois da
 execução. Enquanto estiverem em branco, valem como não evidenciados.
@@ -34,3 +35,4 @@ execução. Enquanto estiverem em branco, valem como não evidenciados.
 |---|---|---|---|
 | F1 | 17/11/2026 | Placa física (ESP32-C3, firmware 2026.11.16.2) no hotspot de celular "AAA" (2.4 GHz, WPA2/WPA3); hotspot desligado às 00:31:07 e religado após cerca de 2,5 min; log serial com horário | Queda detectada em 00:31:07; leituras `seq` 120 a 125 guardadas na fila em flash; reconectada às 00:34:07, menos de 30 s após a rede voltar; as 6 leituras foram reenviadas em ordem em 35 s; `GET /api/leituras` com `seq` 89 a 128 contínua e `lacunas: []` |
 | F3 | 17/11/2026 | Placa física (ESP32-C3 + DHT11, firmware 2026.11.17.3) na rede da casa; um fio do DHT desconectado com a placa ligada por cerca de 2 min e reconectado no mesmo pino; log serial com horário | Falha detectada no primeiro ciclo após o desconecte (17:42:55): `ERRO: Falha na leitura do sensor!`, LED em `falha_sensor` e `POST /api/heartbeat` com `motivo: sensor_falha`, respondido `200` com `sensor: "falha"` e `sensorFalhaDesde` (campo que o painel usa para o aviso). Durante a falha, 6 heartbeats a cada 20 s e nenhuma leitura gravada (`seq` parado em 2732). Sensor reconectado: primeira leitura válida às 17:44:54 (`seq` 2733, sem salto), gravada no Azure às 17:44:58, recuperação no ciclo seguinte (até 20 s) |
+| F2 | 17/11/2026 | Placa física (firmware 2026.11.17.3) na rede da casa; alimentação cortada ao trocar o cabo USB do computador por uma fonte (duração do corte não cronometrada, troca rápida); conferido em `GET /api/leituras` | Última leitura antes do corte: `seq` 3338, medida às 21:10:17; primeira depois do reinício: `seq` 3339, medida às 21:10:41 e gravada às 21:10:45 (24 s entre as medições, dentro dos 60 s); `lacunas: []` na última hora. O travamento com watchdog na placa física continua não executado |
