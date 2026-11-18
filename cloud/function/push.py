@@ -20,7 +20,10 @@ Configuração (app settings da Function App):
 
     VAPID_PUBLIC_KEY   chave pública (base64url, ponto P-256 não comprimido)
     VAPID_PRIVATE_KEY  chave privada (base64url, 32 bytes) - só no app setting
-    VAPID_SUBJECT      contato do remetente (https://... ou mailto:...)
+    VAPID_SUBJECT      contato do remetente: `mailto:usuario@host` ou uma ORIGEM https
+                       sem caminho (https://host). Com caminho, a biblioteca de
+                       assinatura recusa e nenhum push sai; `configurado()` já
+                       devolve False nesse caso.
 
 Sem as duas chaves, o push fica desligado e o resto da API segue igual.
 """
@@ -31,6 +34,7 @@ import os
 import re
 from urllib.parse import urlparse
 
+from py_vapid import VapidException
 from pywebpush import WebPushException, webpush
 
 from contrato import PERFIS_CARGA
@@ -61,16 +65,44 @@ IDADE_MAX_S = 30 * 60
 INTERVALO_S = 10 * 60
 
 # Tempo que o serviço de push guarda a mensagem se o celular estiver desligado.
-TTL_S = 60 * 60
+# 10 min (= INTERVALO_S): um alerta de temperatura mais velho que isso já está
+# desatualizado e o painel mostra a situação atual; entregá-lo horas depois, de uma
+# vez, só confunde.
+TTL_S = 10 * 60
 TIMEOUT_S = 5
+
+
+# Assunto padrão: origem do painel (https sem caminho).
+SUBJECT_PADRAO = "https://stcoldtrackweb7319.z15.web.core.windows.net"
+
+# Mesma regra do `_check_sub` da py-vapid: `mailto:` ou origem https, sem caminho.
+# Reproduzida aqui (a função é privada); test_push.py a compara com a da biblioteca.
+_SUBJECT_OK = re.compile(
+    r"^(mailto:.+@((localhost|[%\w-]+(\.[%\w-]+)+|([0-9a-f]{1,4}):+([0-9a-f]{1,4})?)))"
+    r"|https:\/\/(localhost|[\w-]+\.[\w\.-]+|([0-9a-f]{1,4}:+)+([0-9a-f]{1,4})?)$",
+    re.IGNORECASE)
+_subject_avisado = set()
 
 
 def chave_publica():
     return os.getenv("VAPID_PUBLIC_KEY") or None
 
 
+def subject():
+    return os.getenv("VAPID_SUBJECT") or SUBJECT_PADRAO
+
+
 def configurado():
-    return bool(chave_publica() and os.getenv("VAPID_PRIVATE_KEY"))
+    if not (chave_publica() and os.getenv("VAPID_PRIVATE_KEY")):
+        return False
+    sub = subject()
+    if _SUBJECT_OK.match(sub):
+        return True
+    if sub not in _subject_avisado:  # uma vez só: configurado() roda a cada leitura
+        _subject_avisado.add(sub)
+        logging.warning("push: desligado, VAPID_SUBJECT inválido (use mailto:usuario@host "
+                        "ou uma origem https sem caminho)")
+    return False
 
 
 def _host_permitido(host):
@@ -190,8 +222,9 @@ def enviar(inscricao, conteudo):
             subscription_info={"endpoint": inscricao["endpoint"], "keys": inscricao["keys"]},
             data=json.dumps(conteudo, ensure_ascii=False),
             vapid_private_key=os.environ["VAPID_PRIVATE_KEY"],
-            vapid_claims={"sub": os.getenv("VAPID_SUBJECT",
-                                           "https://github.com/mbalbuquerque/Front-End-pi")},
+            vapid_claims={"sub": subject()},
+            # Sem Urgency alto o Android segura o push no modo Doze até o app abrir.
+            headers={"Urgency": "high"} if conteudo.get("status") in NOMES else None,
             ttl=TTL_S,
             timeout=TIMEOUT_S,
         )
@@ -201,6 +234,9 @@ def enviar(inscricao, conteudo):
         if codigo in (404, 410):
             return "expirada"
         logging.warning("push: serviço de push recusou (HTTP %s)", codigo)
+        return "falha"
+    except VapidException as e:  # assunto/chave VAPID recusados pela assinatura
+        logging.warning("push: assinatura VAPID recusada (%s: %s)", type(e).__name__, e)
         return "falha"
     except Exception as e:  # rede, chave mal configurada, inscrição corrompida
         logging.warning("push: falha no envio (%s)", type(e).__name__)

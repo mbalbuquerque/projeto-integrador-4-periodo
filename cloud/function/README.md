@@ -24,6 +24,14 @@ App settings lidas pelo código: `COSMOS_CONNECTION`, `COSMOS_DATABASE`, `COSMOS
 `AOAI_API_VERSION` (lista completa em [`infra/README.md`](../../infra/README.md)). O chat entra
 no Azure OpenAI pela identidade gerenciada da Function, sem chave guardada.
 
+Alertas push (opcionais): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` e `VAPID_SUBJECT`.
+
+| App setting | Formato | Observação |
+|---|---|---|
+| `VAPID_PUBLIC_KEY` | base64url, ponto P-256 não comprimido | entregue ao painel em `GET /api/push/chave` |
+| `VAPID_PRIVATE_KEY` | base64url, 32 bytes | só no app setting; nunca no repositório |
+| `VAPID_SUBJECT` | `mailto:usuario@host` **ou** origem https sem caminho (`https://host`) | com caminho (`https://host/pagina`) a biblioteca de assinatura recusa todo envio; a API então deixa o push desligado e registra um aviso. Padrão: origem do painel |
+
 ## Endpoints
 
 Base: `https://func-coldtrack-7319.azurewebsites.net/api`. Documentação interativa (Swagger):
