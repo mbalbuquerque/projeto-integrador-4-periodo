@@ -394,6 +394,8 @@ do usuário, relido do banco a cada chamada, nunca da URL.
   "minutosSemLeitura": 1,
   "viagem": {"origem": "Petrolina - PE", "destino": "Suape - PE",
              "carga": "Manga Tommy, 12 paletes", "inicio": "2026-11-10T06:00:00-03:00", "fim": null},
+  "historico": [{"temperatura": 11.6, "status": "NORMAL", "medidoEm": "2026-11-10T20:31:00+00:00"},
+                {"temperatura": 11.8, "status": "NORMAL", "medidoEm": "2026-11-10T21:30:00+00:00"}],
   "sensor": "ok",
   "sensorFalhaDesde": null
 }
@@ -407,6 +409,9 @@ do usuário, relido do banco a cada chamada, nunca da URL.
 - `minutosSemLeitura`: minutos inteiros desde a medição da última leitura; `null` sem leitura.
 - `viagem`: a viagem do veículo em curso (começou e não tem fim, ou o fim ainda não chegou); com
   mais de uma, a que começou por último. `null` quando não há.
+- `historico`: leituras da última hora, da mais antiga para a mais nova (no máximo 180), só com
+  `temperatura`, `status` e `medidoEm`. Alimenta o mini gráfico e a lista de alertas da tela.
+  Lista vazia quando o veículo não tem sensor ou não houve leitura na última hora.
 - `sensor` e `sensorFalhaDesde`: estado do sensor de temperatura, com a mesma regra de
   `GET /dispositivos` (`falha` quando o contato mais recente foi um heartbeat `sensor_falha`).
   `null` quando o veículo não tem sensor ou o sensor nunca falou.

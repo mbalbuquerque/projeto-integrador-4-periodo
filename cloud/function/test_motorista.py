@@ -103,6 +103,24 @@ class TestRotaMotorista(BaseMotorista):
         self.assertEqual(corpo["viagem"]["destino"], "Suape")
         self.assertIsNone(corpo["viagem"]["fim"])
 
+    def test_historico_da_ultima_hora_do_mais_antigo_ao_mais_novo(self):
+        self.containers["leituras"].itens.append(
+            {"id": "dev-livre~0", "deviceId": "dev-livre", "empresaId": "E-A",
+             "temperatura": 9.0, "umidade": 90.0, "rssi": -60, "perfil": "manga",
+             "status": "ATENCAO", "medidoEm": iso(-7200), "recebidoEm": iso(-7200)})
+        status, corpo = self.painel()
+        self.assertEqual(status, 200)
+        # Só a última hora (a de 2 h atrás fica fora), mais antiga primeiro, sem campos internos.
+        self.assertEqual([h["temperatura"] for h in corpo["historico"]], [11.8, 17.5])
+        self.assertEqual(set(corpo["historico"][0]), {"temperatura", "status", "medidoEm"})
+        self.assertEqual(corpo["historico"][1]["status"], "CRITICO")
+
+    def test_historico_vazio_sem_sensor(self):
+        self.containers["usuarios"]._achar("moto@a.com")["veiculo"] = "CT-SEM"
+        status, corpo = self.painel()
+        self.assertEqual(status, 200)
+        self.assertEqual(corpo["historico"], [])
+
     def test_operador_e_gestor_recebem_403(self):
         for email in ("operador@a.com", "gestor@a.com"):
             self.assertEqual(self.painel(email)[0], 403, email)
