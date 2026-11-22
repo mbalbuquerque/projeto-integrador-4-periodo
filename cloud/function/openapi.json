@@ -4369,6 +4369,36 @@
         ],
         "description": "What the driver screen shows: only the vehicle linked to the driver.",
         "properties": {
+          "historico": {
+            "type": "array",
+            "description": "Readings of the last hour, oldest first (at most 180), for the mini chart and the trip alerts on the driver screen. Empty when the vehicle has no sensor.",
+            "items": {
+              "type": "object",
+              "required": [
+                "temperatura",
+                "status",
+                "medidoEm"
+              ],
+              "properties": {
+                "temperatura": {
+                  "type": "number",
+                  "example": 17.5
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "NORMAL",
+                    "ATENCAO",
+                    "CRITICO"
+                  ]
+                },
+                "medidoEm": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
           "veiculo": {
             "type": "object",
             "required": [

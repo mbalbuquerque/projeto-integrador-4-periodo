@@ -50,7 +50,7 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import azure.functions as func
 from azure.cosmos import CosmosClient, exceptions
@@ -129,6 +129,9 @@ HEARTBEAT_POR_MINUTO = 6
 LIMITE_SINAL_MOTORISTA_S = 5 * 60
 # A tela consulta a cada 20 s (3 por minuto); 30 por minuto por usuário segura um laço.
 MOTORISTA_POR_MINUTO = 30
+# Janela e teto do histórico devolvido em GET /motorista (mini gráfico da tela).
+HISTORICO_MOTORISTA_S = 3600
+HISTORICO_MOTORISTA_MAX = 180
 # Previsão do sensor: o painel e a tela do motorista consultam a cada 20 s; mesma folga.
 PREVISAO_SENSOR_POR_MINUTO = 30
 # Leituras pedidas ao banco para a previsão (20 s de cadência x 30 min = 90; folga).
@@ -1080,6 +1083,14 @@ def motorista(req: func.HttpRequest) -> func.HttpResponse:
     agora = datetime.now(timezone.utc)
     device = veiculo.get("deviceId")
     ultima = consultar_leituras(device, empresa, 1) if device else []
+    # Última hora de leituras (mais antiga primeiro) para o mini gráfico e os alertas
+    # da tela; com o sensor a cada 20 s são até 180 pontos.
+    desde = (agora - timedelta(seconds=HISTORICO_MOTORISTA_S)).timestamp()
+    historico = ([{"temperatura": h["temperatura"], "status": h["status"],
+                   "medidoEm": h["medidoEm"]}
+                  for h in reversed(consultar_leituras(device, empresa, HISTORICO_MOTORISTA_MAX,
+                                                       desde=desde))]
+                 if device else [])
     disp = ler("dispositivos", device) if device else None
     estado = (estado_do_dispositivo(disp, ultima[0].get("recebidoEm") if ultima else None)
               if disp is not None and disp.get("empresaId") == empresa else {})
@@ -1102,6 +1113,7 @@ def motorista(req: func.HttpRequest) -> func.HttpResponse:
         "status": status,
         "minutosSemLeitura": minutos,
         "viagem": viagem_ativa(empresa, codigo, agora),
+        "historico": historico,
         "sensor": estado.get("sensor"),
         "sensorFalhaDesde": estado.get("sensorFalhaDesde"),
     })
