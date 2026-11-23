@@ -106,12 +106,19 @@ deployment (workflows, `pacote.txt`, links in the documentation and in Wokwi). M
 |---|---|---|
 | `/firmware` | [`firmware/`](firmware/) | ESP32-C3 firmware, firmware tests and the Wokwi circuit |
 | `/backend` | [`cloud/function/`](cloud/function/) | API on Azure Functions (Python), tests and deployment |
-| `/database` | [`infra/main.bicep`](infra/main.bicep) (Cosmos DB), [`infra/ci/preparar_banco.py`](infra/ci/preparar_banco.py), [`infra/backup/`](infra/backup/), [`cloud/function/scripts/`](cloud/function/scripts/) | database and container definition, test environment seeding, logical backup and restore, migration |
+| `/database` | [`docs/banco/`](docs/banco/) (ER diagram, partitions, indexes, integrity, creation and sample data), [`infra/main.bicep`](infra/main.bicep) (Cosmos DB), [`infra/ci/preparar_banco.py`](infra/ci/preparar_banco.py), [`infra/ci/dados_exemplo.py`](infra/ci/dados_exemplo.py), [`infra/backup/`](infra/backup/), [`cloud/function/scripts/`](cloud/function/scripts/) | data model (Cosmos DB NoSQL), database and container definition, synthetic sample data loading, logical backup and restore, migration |
 | `/frontend` | [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) repository | web dashboard (React + Vite) |
 | `/mobile` | [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) repository | the same dashboard as a PWA installable on the phone (`public/manifest.json`, `public/sw.js`); there is no native app |
 | `/ia` | [`analise/`](analise/), [`cloud/function/chat.py`](cloud/function/chat.py), [`cloud/function/assistente.py`](cloud/function/assistente.py) | climate analysis of the route (INMET data) and chat/assistant with Azure OpenAI |
 | `/infra` | [`infra/`](infra/), [`.github/workflows/`](.github/workflows/) | Bicep, Dockerfile, compose, backup and test/deployment workflows |
 | `/docs` | [`docs/`](docs/) | technical documentation, API, security, deployment |
+
+## Test user
+
+There is no ready-made account in production (a shared password in the repository would be an exposed secret). To sign in:
+
+- **Production:** open the [dashboard](https://stcoldtrackweb7319.z15.web.core.windows.net), use *Cadastrar empresa* (register company) and create the manager with an e-mail and password of your choice. The manager then creates operators and drivers under *Configurações* (settings). The manager can delete the company and its data (*Configurações > Excluir empresa*).
+- **Local or CI (Cosmos emulator):** `python infra/ci/preparar_banco.py` creates the manager `gestor.teste@exemplo.com`, password `SenhaDeTeste-123`. It is fictitious and only valid in the emulator. `python infra/ci/dados_exemplo.py` adds one sensor, one vehicle, one trip and 12 synthetic readings (see [`docs/banco/`](docs/banco/)).
 
 ## How to run
 
