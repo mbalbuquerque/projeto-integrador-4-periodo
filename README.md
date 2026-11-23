@@ -103,12 +103,20 @@ publicação (workflows, `pacote.txt`, links da documentação e do Wokwi). Corr
 |---|---|---|
 | `/firmware` | [`firmware/`](firmware/) | firmware do ESP32-C3, testes do firmware e circuito do Wokwi |
 | `/backend` | [`cloud/function/`](cloud/function/) | API em Azure Functions (Python), testes e publicação |
-| `/database` | [`infra/main.bicep`](infra/main.bicep) (Cosmos DB), [`infra/ci/preparar_banco.py`](infra/ci/preparar_banco.py), [`infra/backup/`](infra/backup/), [`cloud/function/scripts/`](cloud/function/scripts/) | definição do banco e dos containers, carga do ambiente de teste, backup lógico e restauração, migração |
+| `/database` | [`docs/banco/`](docs/banco/) (diagrama ER, partições, índices, integridade, criação e dados de exemplo), [`infra/main.bicep`](infra/main.bicep) (Cosmos DB), [`infra/ci/preparar_banco.py`](infra/ci/preparar_banco.py), [`infra/ci/dados_exemplo.py`](infra/ci/dados_exemplo.py), [`infra/backup/`](infra/backup/), [`cloud/function/scripts/`](cloud/function/scripts/) | modelo de dados (Cosmos DB NoSQL), definição do banco e dos containers, carga de dados de exemplo sintéticos, backup lógico e restauração, migração |
 | `/frontend` | repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) | painel web (React + Vite) |
 | `/mobile` | repositório [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi) | o mesmo painel como PWA instalável no celular (`public/manifest.json`, `public/sw.js`); não há app nativo |
 | `/ia` | [`analise/`](analise/), [`cloud/function/chat.py`](cloud/function/chat.py), [`cloud/function/assistente.py`](cloud/function/assistente.py) | análise climática da rota (dados do INMET) e chat/assistente com Azure OpenAI |
 | `/infra` | [`infra/`](infra/), [`.github/workflows/`](.github/workflows/) | Bicep, Dockerfile, compose, backup e workflows de teste e publicação |
 | `/docs` | [`docs/`](docs/) | documentação técnica, API, segurança, implantação |
+
+## Usuário de teste
+
+Não há conta pronta em produção (senha compartilhada no repositório seria um segredo exposto).
+Para entrar no sistema:
+
+- **Produção:** abra o [painel](https://stcoldtrackweb7319.z15.web.core.windows.net), use *Cadastrar empresa* e crie o gestor com um e-mail e uma senha de sua escolha. O gestor cria depois os operadores e motoristas em *Configurações*. A empresa e os dados criados podem ser excluídos pelo próprio gestor (*Configurações > Excluir empresa*).
+- **Local ou CI (emulador do Cosmos):** `python infra/ci/preparar_banco.py` cria o gestor `gestor.teste@exemplo.com`, senha `SenhaDeTeste-123`. Ela é fictícia e só vale no emulador. `python infra/ci/dados_exemplo.py` acrescenta um sensor, um veículo, uma viagem e 12 leituras sintéticas (veja [`docs/banco/`](docs/banco/)).
 
 ## Como rodar
 

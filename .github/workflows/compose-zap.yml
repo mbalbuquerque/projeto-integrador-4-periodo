@@ -51,6 +51,9 @@ jobs:
           pip install azure-cosmos==4.17.1 PyJWT==2.15.1
           python infra/ci/preparar_banco.py http://localhost:8081
 
+      - name: Dados de exemplo (carga idempotente)
+        run: python infra/ci/dados_exemplo.py http://localhost:8081
+
       - name: Saúde da API e do contêiner
         run: |
           t0=$(cat resultados/t_subida)
