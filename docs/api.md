@@ -505,9 +505,9 @@ Resposta `200`:
  "previsao": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
  "baseline": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
  "recomendada": "baseline", "antecipaExcursao": false, "motivo": null,
- "modelo": {"versao": "sensor-ridge-10min-v1", "fonte": "ThingSpeak 3515173 (...)",
+ "modelo": {"versao": "sensor-ridge-10min-v2", "fonte": "Cosmos DB de produção, leituras da placa (...)",
             "treino": {"de", "ate", "amostras"}, "teste": {"de", "ate", "amostras"},
-            "maeModelo": 0.342, "maeBaseline": 0.3128, "rmseModelo": 0.4711, "rmseBaseline": 0.4941,
+            "maeModelo": 0.3338, "maeBaseline": 0.319, "rmseModelo": 0.6618, "rmseBaseline": 0.652,
             "superaBaseline": false, "usaLeiturasDoSensor": true}}
 ```
 
@@ -526,8 +526,9 @@ Erros: `400` `informe ?deviceId=` (operador ou gestor sem o parâmetro); `401` s
 vinculado a este motorista; fale com o gestor`; `429` mais de 30 chamadas por minuto do mesmo
 usuário; `503` `modelo indisponível`.
 
-Atualizar o modelo: `cd analise/sensor && python modelo_previsao.py --baixar` e publicar a API
-com o novo `modelo_sensor.json`.
+Atualizar o modelo: exportar o banco (`infra/backup/exportar.py`), rodar `python
+descrever_cosmos.py --converter <export>/leituras.jsonl` e `python modelo_previsao.py` em `analise/sensor`, e
+publicar a API com o novo `modelo_sensor.json`.
 
 ## Sensores (`/dispositivos`)
 

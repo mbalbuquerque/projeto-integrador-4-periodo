@@ -3,7 +3,9 @@
 Problema: a partir das últimas leituras da placa, estimar a temperatura daqui a 10 minutos,
 para o painel avisar antes de a carga sair da faixa (excursão térmica).
 
-Fluxo (tudo a partir de dados/thingspeak_3515173.csv, dado real do canal público):
+Fluxo (a partir de dados/cosmos_leituras.csv, as leituras da placa gravadas no banco,
+que é o que a rota recebe em produção; dados/thingspeak_3515173.csv, dado real do canal público,
+serve de verificação cruzada):
 1. Limpeza: descarta temperatura vazia, fora da faixa física do DHT11 (0 a 50 °C) e instante
    repetido; conta o que saiu em cada passo.
 2. Trechos contínuos: intervalo entre leituras maior que LACUNA_S abre trecho novo. Nenhuma
@@ -38,19 +40,24 @@ sys.path.insert(0, str(FUNCAO))
 
 import previsao_sensor  # noqa: E402  (módulo da API, mesmo código do treino e da rota)
 
-CSV = AQUI / "dados" / "thingspeak_3515173.csv"
+CSV_THINGSPEAK = AQUI / "dados" / "thingspeak_3515173.csv"
+CSV_COSMOS = AQUI / "dados" / "cosmos_leituras.csv"   # gerado por descrever_cosmos.py --converter
 RELATORIO = AQUI / "relatorio_previsao.md"
 FIGURA = AQUI / "figuras" / "previsao_teste.png"
 SAIDA_MODELO = FUNCAO / "modelo_sensor.json"
 
-VERSAO = "sensor-ridge-10min-v1"
-FONTE = "ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe, em bancada)"
+VERSAO = "sensor-ridge-10min-v2"
+FONTES = {
+    "cosmos": "Cosmos DB de produção, leituras da placa ESP32-C3 + DHT11 da equipe, em bancada",
+    "thingspeak": "ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe, em bancada)",
+}
 HORIZONTE_MIN = 10
 JANELA_MIN = 10
 LACUNA_S = 300          # sem leitura por mais de 5 min = trecho novo (e previsão recusada)
 FRACAO_TESTE = 0.30
 LAMBDA = 1.0
 ATRIBUTOS = ["d5", "d10", "m10"]
+ARQUIVOS = {"cosmos": CSV_COSMOS, "thingspeak": CSV_THINGSPEAK}
 FAIXA_DHT11 = (0.0, 50.0)
 CORTES_SENSIBILIDADE = (0.20, 0.30, 0.40)
 
@@ -124,10 +131,10 @@ def periodo(parte):
             "amostras": int(len(parte))}
 
 
-def montar_modelo(treino, teste, coef, metricas):
+def montar_modelo(treino, teste, coef, metricas, fonte):
     return {
         "versao": VERSAO,
-        "fonte": FONTE,
+        "fonte": FONTES[fonte],
         "horizonteMin": HORIZONTE_MIN,
         "janelaMin": JANELA_MIN,
         "lacunaMaxS": LACUNA_S,
@@ -172,7 +179,29 @@ def figura(teste, coef, caminho=FIGURA):
     plt.close(fig)
 
 
-def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens):
+def carregar(caminho):
+    """DataFrame com momento_utc (UTC) e temperatura de um dos CSV de dados/."""
+    df = pd.read_csv(caminho).rename(columns={"medido_em": "momento_utc"})   # cosmos_leituras.csv
+    df["momento_utc"] = pd.to_datetime(df["momento_utc"], utc=True, format="ISO8601")
+    return df
+
+
+def treinar(df):
+    """Pipeline inteiro sobre um CSV: (serie, passos, dados, treino, teste, corte, coef, métricas)."""
+    serie, passos = limpar(df)
+    dados = amostras(serie)
+    treino, teste, corte = dividir(dados)
+    coef = ajustar(treino)
+    return serie, passos, dados, treino, teste, corte, coef, avaliar(teste, coef)
+
+
+def verificacao_cruzada(caminho):
+    """Mesmo pipeline noutra fonte: (amostras de treino, de teste, métricas), só informativo."""
+    *_, treino, teste, _, _, metricas = treinar(carregar(caminho))
+    return len(treino), len(teste), metricas
+
+
+def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens, fonte, cruzada=None):
     m = modelo["metricas"]
     cadencia = pd.Series([p[0] for p in serie]).diff().dt.total_seconds()
     recente = previsao_sensor.trechos(serie, LACUNA_S)[-1]
@@ -190,9 +219,8 @@ def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens):
         "# Previsão da temperatura do sensor (10 min à frente)",
         "",
         f"Gerado por `modelo_previsao.py` em {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC, "
-        "a partir de `dados/thingspeak_3515173.csv` (dado real do canal público ThingSpeak "
-        "3515173). Exporta `cloud/function/modelo_sensor.json`, lido pela rota "
-        "`GET /api/predict/sensor`.",
+        f"a partir de `dados/{ARQUIVOS[fonte].name}` ({modelo['fonte']}). Exporta "
+        "`cloud/function/modelo_sensor.json`, lido pela rota `GET /api/predict/sensor`.",
         "",
         "## Problema",
         "",
@@ -255,10 +283,14 @@ def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens):
           f"{r['maeBaseline']:.3f} | {r['rmseModelo']:.3f} | {r['rmseBaseline']:.3f} |"
           for f, c, a, b, r in sens],
         "",
+        *secao_cruzada(cruzada),
         "## Limitações",
         "",
-        "- Poucos dados: as amostras somam poucas horas, em trechos curtos separados por "
-        "lacunas longas.",
+        f"- Dados limitados: {len(dados) / 60:.0f} h de amostras em {n_trechos} trechos "
+        "separados por lacunas (a placa ficou desligada ou sem rede entre eles).",
+        "- Outras tentativas fora do pipeline (regressão pela mediana, gradient boosting com erro "
+        "absoluto, janela de 30 min com mais atributos, hora do dia) também não passaram da "
+        "persistência no MAE; o resumo está em `docs/model-card.md`.",
         "- Sensor em bancada, em ambiente interno, não dentro de um baú refrigerado: não há "
         "nenhuma excursão térmica real (porta aberta, falha do frio) na base. A série é quase "
         "estável e varia em degraus de resolução do DHT11, cenário em que a persistência é "
@@ -269,7 +301,9 @@ def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens):
         "",
         "```bash",
         "cd analise/sensor",
-        "python modelo_previsao.py --baixar   # baixa o canal de novo, treina, avalia e exporta",
+        "python descrever_cosmos.py --converter <export>/leituras.jsonl   # export do backup",
+        "python modelo_previsao.py            # treina, avalia e exporta",
+        "python modelo_previsao.py --baixar   # antes, atualiza o CSV do ThingSpeak (verificação)",
         "```",
         "",
         f"![teste]({FIGURA.parent.name}/{FIGURA.name})",
@@ -278,22 +312,42 @@ def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens):
     RELATORIO.write_text("\n".join(linhas), encoding="utf-8")
 
 
+def secao_cruzada(cruzada):
+    """Linhas do relatório com o mesmo pipeline na outra fonte (vazio se não houver)."""
+    if cruzada is None:
+        return []
+    nome, n_treino, n_teste, m = cruzada
+    return [
+        "## Verificação cruzada",
+        "",
+        f"Mesmo pipeline (mesmos atributos, lambda e 30% de teste) sobre `dados/{nome}`, "
+        "só para conferir que o resultado não depende da fonte:",
+        "",
+        "| treino | teste | MAE modelo | MAE baseline | RMSE modelo | RMSE baseline |",
+        "|---|---|---|---|---|---|",
+        f"| {n_treino} | {n_teste} | {m['maeModelo']:.3f} | {m['maeBaseline']:.3f} | "
+        f"{m['rmseModelo']:.3f} | {m['rmseBaseline']:.3f} |",
+        "",
+    ]
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if "--baixar" in argv:
         import baixar_thingspeak
         baixar_thingspeak.main()
-    df = pd.read_csv(CSV)
-    df["momento_utc"] = pd.to_datetime(df["momento_utc"], utc=True)
-    serie, passos = limpar(df)
-    dados = amostras(serie)
-    treino, teste, corte = dividir(dados)
-    coef = ajustar(treino)
-    modelo = montar_modelo(treino, teste, coef, avaliar(teste, coef))
+    fonte = "cosmos" if CSV_COSMOS.exists() else "thingspeak"
+    outra = CSV_THINGSPEAK if fonte == "cosmos" else CSV_COSMOS
+    serie, passos, dados, treino, teste, corte, coef, metricas = treinar(carregar(ARQUIVOS[fonte]))
+    modelo = montar_modelo(treino, teste, coef, metricas, fonte)
     SAIDA_MODELO.write_text(json.dumps(modelo, ensure_ascii=False, indent=2) + "\n",
                             encoding="utf-8")
     figura(teste, coef)
-    relatorio(passos, serie, dados, treino, teste, corte, modelo, sensibilidade(dados))
+    cruzada = None
+    if outra.exists():
+        cruzada = (outra.name, *verificacao_cruzada(outra))
+    relatorio(passos, serie, dados, treino, teste, corte, modelo, sensibilidade(dados), fonte,
+              cruzada)
     print(json.dumps(modelo["metricas"]), "superaBaseline =", modelo["superaBaseline"])
     return 0
 

@@ -1,5 +1,6 @@
 """Testes do pipeline de previsão (modelo_previsao.py) com série sintética, sem rede."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -58,7 +59,7 @@ def test_modelo_bate_persistencia_em_tendencia_e_exporta():
     coef = mp.ajustar(treino)
     metricas = mp.avaliar(teste, coef)
     assert metricas["maeModelo"] < metricas["maeBaseline"]
-    modelo = mp.montar_modelo(treino, teste, coef, metricas)
+    modelo = mp.montar_modelo(treino, teste, coef, metricas, "cosmos")
     assert modelo["superaBaseline"] is True
     assert modelo["treino"]["ate"] < modelo["teste"]["de"]
     assert len(modelo["coeficientes"]) == len(mp.ATRIBUTOS)
@@ -70,10 +71,33 @@ def test_avaliar_persistencia_perfeita_em_serie_constante():
     metricas = mp.avaliar(teste, mp.ajustar(treino))
     assert metricas["maeBaseline"] == 0.0
     assert metricas["maeModelo"] == 0.0
-    assert mp.montar_modelo(treino, teste, mp.ajustar(treino), metricas)["superaBaseline"] is False
+    modelo = mp.montar_modelo(treino, teste, mp.ajustar(treino), metricas, "thingspeak")
+    assert modelo["superaBaseline"] is False
 
 
 def test_sensibilidade_tem_uma_linha_por_corte():
     dados = mp.amostras(serie_sintetica(minutos=180))
     linhas = mp.sensibilidade(dados)
     assert [f for f, *_ in linhas] == list(mp.CORTES_SENSIBILIDADE)
+
+
+def _csv(caminho, serie):
+    pd.DataFrame({"momento_utc": [m.isoformat() for m, _ in serie],
+                  "temperatura": [v for _, v in serie]}).to_csv(caminho, index=False)
+
+
+def test_main_treina_exporta_e_faz_verificacao_cruzada(tmp_path, monkeypatch):
+    cosmos, ts = tmp_path / "cosmos.csv", tmp_path / "ts.csv"
+    _csv(cosmos, serie_sintetica(minutos=300))
+    _csv(ts, serie_sintetica(minutos=300, base=12.0))
+    monkeypatch.setattr(mp, "CSV_COSMOS", cosmos)
+    monkeypatch.setattr(mp, "CSV_THINGSPEAK", ts)
+    monkeypatch.setattr(mp, "ARQUIVOS", {"cosmos": cosmos, "thingspeak": ts})
+    monkeypatch.setattr(mp, "SAIDA_MODELO", tmp_path / "modelo.json")
+    monkeypatch.setattr(mp, "RELATORIO", tmp_path / "relatorio.md")
+    monkeypatch.setattr(mp, "FIGURA", tmp_path / "fig" / "teste.png")
+    assert mp.main([]) == 0
+    modelo = json.loads((tmp_path / "modelo.json").read_text(encoding="utf-8"))
+    assert modelo["versao"] == mp.VERSAO and modelo["fonte"] == mp.FONTES["cosmos"]
+    texto = (tmp_path / "relatorio.md").read_text(encoding="utf-8")
+    assert "## Verificação cruzada" in texto and "cosmos.csv" in texto and "ts.csv" in texto

@@ -1255,34 +1255,38 @@ sensor.
 - **Por que previsão e não detecção de anomalia**: a base real não tem nenhuma falha rotulada
   (sensor travado, porta aberta, frio desligado). Um detector só poderia ser medido em falhas
   inseridas à mão; a previsão é medida nas próprias leituras reais.
-- **Dados**: canal público ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe), 1.899
-  leituras baixadas em 17/11/2026. Limpeza: descarta leitura sem temperatura ou sem data, fora
+- **Dados**: leituras da placa ESP32-C3 + DHT11 da equipe gravadas no banco de produção (o
+  que a rota recebe ao servir): 12.015 leituras com número de sequência, de 17/11 a 20/11/2026, exportadas com
+  `infra/backup/exportar.py` e convertidas por `descrever_cosmos.py --converter`; o canal público ThingSpeak
+  3515173 (12.730 leituras) serve de verificação cruzada. Limpeza: descarta leitura sem temperatura ou sem data, fora
   da faixa do DHT11 (0 a 50 °C) ou com instante repetido (nenhuma saiu nesta base). Intervalo
   de mais de 5 min entre leituras abre trecho novo; nenhuma amostra atravessa lacuna. Uma
-  amostra por minuto: 714 amostras (cerca de 11,9 h) em 8 trechos.
+  amostra por minuto: 4.211 amostras (cerca de 70 h) em 5 trechos.
 - **Modelo**: regressão ridge sem intercepto sobre a variação (alvo menos a última leitura),
   com três atributos dos últimos 10 min: variação em 5 min (`d5`), em 10 min (`d10`) e média
   dos 10 min menos a última leitura (`m10`); lambda fixo 1. Exportado como três coeficientes
-  em `modelo_sensor.json` (versão `sensor-ridge-10min-v1`), sem biblioteca de ML em produção. O
+  em `modelo_sensor.json` (versão `sensor-ridge-10min-v2`), sem biblioteca de ML em produção. O
   cálculo dos atributos é a mesma função (`previsao_sensor.atributos`) no treino e na rota.
 - **Baseline**: persistência (a temperatura daqui a 10 min é a última leitura).
-- **Divisão temporal**: teste = 30% mais recentes dos instantes (17/11 02:29 a 06:06 UTC, 218
-  amostras); treino = o que vem antes (496 amostras), descartando amostra cujo alvo cai depois
+- **Divisão temporal**: teste = 30% mais recentes dos instantes (19/11 05:07 a 20/11 08:00 UTC,
+  1.267 amostras); treino = o que vem antes (2.944 amostras), descartando amostra cujo alvo cai depois
   do corte, para não vazar futuro.
-- **Resultado (teste)**: MAE do modelo **0,342 °C** contra **0,313 °C** da persistência; RMSE
-  0,471 contra 0,494. Com a métrica principal (MAE, definida antes do treino) **o modelo não
-  supera o baseline**. Por isso o arquivo sai com `superaBaseline: false` e a rota responde
+- **Resultado (teste)**: MAE do modelo **0,334 °C** contra **0,319 °C** da persistência; RMSE
+  0,662 contra 0,652. Com a base de 48 h o resultado ficou consistente (outros cortes e a
+  verificação cruzada no ThingSpeak dão o mesmo: 0,346 contra 0,311 °C) e outras tentativas
+  (regressão pela mediana, gradient boosting, janela de 30 min) também não passaram da
+  persistência: **o modelo não supera o baseline**. Por isso o arquivo sai com `superaBaseline: false` e a rota responde
   `recomendada: "baseline"`: a tela deve mostrar a persistência. A previsão do modelo segue na
   resposta para a comparação ficar visível.
 - **Quando erra e por quê**: a placa está em bancada, em ambiente interno, e não num baú; a
   série é quase estável e muda em degraus de resolução do DHT11. Não há nenhuma excursão real
-  na base, que é justamente o que o modelo deveria antecipar. Com poucas horas, persistência é
-  muito difícil de bater.
-- **Re-treinar** (um comando, baixa o canal de novo): `cd analise/sensor && python
-  modelo_previsao.py --baixar`. Se o MAE do modelo ficar abaixo do da persistência, a rota passa
+  na base, que é justamente o que o modelo deveria antecipar. Com a série variando só em
+  degraus do sensor, a persistência é muito difícil de bater.
+- **Re-treinar**: exportar o banco, `python descrever_cosmos.py --converter <export>/leituras.jsonl` e `python
+  modelo_previsao.py` em `analise/sensor`. Se o MAE do modelo ficar abaixo do da persistência, a rota passa
   a recomendar o modelo sem mudar código; publica-se a API com o novo `modelo_sensor.json`.
-- **Servido em** `GET /api/predict/sensor`. Na `main` do painel nenhuma tela consome a rota ainda;
-  a exibição no dashboard e na tela do motorista está em andamento (Front-End-pi #60).
+- **Servido em** `GET /api/predict/sensor`. O painel mostra a previsão no dashboard e na tela
+  do motorista (Front-End-pi #60), com o valor recomendado (hoje, a persistência).
 
 ---
 

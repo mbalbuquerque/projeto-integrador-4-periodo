@@ -57,7 +57,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| IA-01 | Problema de IA definido que apoia uma decisão | `analise/` | Risco térmico por mês e hora na rota Petrolina–Suape (dados do INMET, 2019–2025); apoia o horário de saída. Com as leituras reais do sensor (canal 3515173) há a previsão da temperatura 10 min à frente (`GET /api/predict/sensor`), que ainda não supera o baseline de persistência (MAE 0,342 °C contra 0,313 °C); re-treino com a base nova na issue #37 | Parcial |
+| IA-01 | Problema de IA definido que apoia uma decisão | `analise/` | Risco térmico por mês e hora na rota Petrolina–Suape (dados do INMET, 2019–2025); apoia o horário de saída. Com as leituras reais do sensor (canal 3515173) há a previsão da temperatura 10 min à frente (`GET /api/predict/sensor`), retreinada em 23/11 com a coleta de 17 a 20/11 (4.211 amostras, teste de 1.267), que ainda não supera o baseline de persistência (MAE 0,334 °C contra 0,319 °C; outras tentativas também não, ver `docs/model-card.md`); sem ganho, o modelo não é recomendado (#37) | Parcial |
 | IA-02 | Baseline calculado | `analise/relatorio.md` | Modelo ingênuo (média geral), Brier 0,202 | Atendido |
 | IA-03 | Divisão temporal e métrica melhor que o baseline | `analise/explorar.py` | Treino 2019–2022, teste 2023–2025; Brier 0,091 (55% menos erro) | Atendido |
 | IA-04 | Model card | `docs/model-card.md` | Uso, dados, métricas e limitações | Atendido |
