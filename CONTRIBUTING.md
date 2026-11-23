@@ -36,7 +36,7 @@ gh api -X PUT repos/mbalbuquerque/projeto-integrador-4-periodo/branches/main/pro
 EOF
 ```
 
-Estado em 23/11/2026: ainda sem proteção nos dois repositórios, porque a conta de quem desenvolve tem só permissão de escrita; o dono precisa rodar o comando.
+Estado em 23/11/2026: sem proteção nos dois repositórios, por decisão da equipe (temporária): a conta de quem desenvolve tem só permissão de escrita e a regra atrapalharia os merges e as publicações até a entrega de 30/11. O dono pode rodar o comando acima depois da entrega.
 
 Os nomes em `contexts` são os jobs do `testes.yml`; se um job for renomeado, a lista precisa
 acompanhar. O mesmo vale para o [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)

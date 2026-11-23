@@ -12,7 +12,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| IOT-01 | Dispositivo com ≥ 2 sensores | `firmware/coldtrack/coldtrack.ino` | Um sensor DHT11/DHT22 (temperatura e umidade) mais o RSSI do Wi-Fi; segundo sensor físico pendente (issue #127) | Parcial |
+| IOT-01 | Dispositivo com ≥ 2 sensores | `firmware/coldtrack/coldtrack.ino` | Um sensor DHT11/DHT22 (temperatura e umidade) mais o RSSI do Wi-Fi. O professor liberou o uso de um único sensor para a equipe (decisão de 23/11, issue #127 encerrada) | Atendido |
 | IOT-02 | Esquema elétrico | `firmware/wokwi/diagram.json` | Simulação no Wokwi | Atendido |
 | IOT-03 | Intervalo de leitura justificado e leitura inválida tratada | `coldtrack.ino` (`INTERVALO_ENVIO`, `lerSensor`) | Leitura a cada 20 s; leitor com checagem de checksum e duas tentativas | Atendido |
 | IOT-04 | Canal ThingSpeak recebendo dados reais, intervalo ≥ 15 s | `coldtrack.ino` (MQTT) | Canal 3515173 | Atendido |
