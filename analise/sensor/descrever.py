@@ -247,6 +247,8 @@ def relatorio(m):
                  f"{_f(e['desvio'])} |")
     L.append("")
     L.append("![série](figuras/serie.png)\n\n![janelas](figuras/janelas.png)\n")
+    L.append("Limpeza passo a passo da base do Cosmos (outro dispositivo, sem `seq`, duplicados, "
+             "fora de faixa, instante repetido), com contagens antes e depois: `limpeza.md`.\n")
     return "\n".join(L)
 
 
