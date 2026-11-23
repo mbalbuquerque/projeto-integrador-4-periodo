@@ -144,5 +144,59 @@ inline StatusTermico classificarFaixa(float temp, float faixaMin, float faixaMax
     return StatusTermico::CRITICO;
 }
 
+// ---------------------------------------------------------------------------
+// Filtro de mediana (janela deslizante) sobre as leituras validas do DHT.
+// A mediana descarta um pico isolado (leitura esticada por interrupcao, ruido do fio)
+// sem atrasar a tendencia como a media faria. Leitura invalida (NAN) NUNCA entra na
+// janela: o chamador valida antes e a funcao ignora NAN por seguranca.
+// FILTRO_JANELA pode ser trocada no secrets.h (3 a 9; fora disso vale o padrao 5).
+// FILTRO_JANELA 1 desliga o filtro (devolve a propria leitura).
+// ---------------------------------------------------------------------------
+#ifndef FILTRO_JANELA
+#define FILTRO_JANELA 5
 #endif
+#define FILTRO_JANELA_MAX 9
 
+struct FiltroMediana {
+    float valores[FILTRO_JANELA_MAX];
+    int quantidade;  // quantas leituras validas ha na janela (ate janela())
+    int proximo;     // posicao circular da proxima gravacao
+};
+
+inline int filtroJanela() {
+    if (FILTRO_JANELA == 1) return 1;
+    if (FILTRO_JANELA < 3 || FILTRO_JANELA > FILTRO_JANELA_MAX) return 5;
+    return FILTRO_JANELA;
+}
+
+inline void filtroReiniciar(FiltroMediana *f) {
+    f->quantidade = 0;
+    f->proximo = 0;
+}
+
+// Acrescenta `valor` e devolve a mediana da janela. Com menos leituras que a janela,
+// usa as que existem (par: media dos dois centrais). NAN: nao entra e devolve NAN.
+inline float filtroMediana(FiltroMediana *f, float valor) {
+    if (isnan(valor)) return NAN;
+    int janela = filtroJanela();
+    if (janela == 1) return valor;
+    if (f->quantidade > janela || f->quantidade < 0 || f->proximo < 0 || f->proximo >= janela) {
+        filtroReiniciar(f);
+    }
+    f->valores[f->proximo] = valor;
+    f->proximo = (f->proximo + 1) % janela;
+    if (f->quantidade < janela) f->quantidade++;
+
+    float ord[FILTRO_JANELA_MAX];
+    int n = f->quantidade;
+    for (int i = 0; i < n; i++) ord[i] = f->valores[i];
+    for (int i = 1; i < n; i++) {  // insercao: n <= 9
+        float v = ord[i];
+        int j = i - 1;
+        while (j >= 0 && ord[j] > v) { ord[j + 1] = ord[j]; j--; }
+        ord[j + 1] = v;
+    }
+    if (n % 2 == 1) return ord[n / 2];
+    return (ord[n / 2 - 1] + ord[n / 2]) / 2.0f;
+}
+#endif

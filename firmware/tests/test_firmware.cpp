@@ -206,6 +206,55 @@ void test_linha_da_fila_sem_relogio() {
     PASS();
 }
 
+void test_filtro_mediana_descarta_pico_isolado() {
+    TEST("filtroMediana descarta um pico isolado");
+    FiltroMediana f; filtroReiniciar(&f);
+    float saida = 0;
+    const float entrada[] = {30.0f, 30.2f, 30.1f, 45.0f, 30.2f};  // 45.0 = pico
+    for (float v : entrada) saida = filtroMediana(&f, v);
+    ASSERT(fabsf(saida - 30.2f) < 0.001f);
+    PASS();
+}
+
+void test_filtro_mediana_janela_parcial_e_par() {
+    TEST("filtroMediana com janela ainda incompleta");
+    FiltroMediana f; filtroReiniciar(&f);
+    ASSERT(fabsf(filtroMediana(&f, 31.0f) - 31.0f) < 0.001f);   // 1 leitura
+    ASSERT(fabsf(filtroMediana(&f, 33.0f) - 32.0f) < 0.001f);   // 2: media dos centrais
+    ASSERT(fabsf(filtroMediana(&f, 29.0f) - 31.0f) < 0.001f);   // 3: mediana
+    PASS();
+}
+
+void test_filtro_mediana_janela_desliza() {
+    TEST("filtroMediana descarta a leitura mais antiga");
+    FiltroMediana f; filtroReiniciar(&f);
+    float saida = 0;
+    for (int i = 0; i < 5; i++) saida = filtroMediana(&f, 20.0f);
+    ASSERT(fabsf(saida - 20.0f) < 0.001f);
+    for (int i = 0; i < 3; i++) saida = filtroMediana(&f, 25.0f);  // 3 de 5 ja sao 25
+    ASSERT(fabsf(saida - 25.0f) < 0.001f);
+    ASSERT(f.quantidade == 5);
+    PASS();
+}
+
+void test_filtro_mediana_nan_nao_entra() {
+    TEST("filtroMediana ignora NAN e nao o grava como valido");
+    FiltroMediana f; filtroReiniciar(&f);
+    filtroMediana(&f, 30.0f);
+    filtroMediana(&f, 31.0f);
+    ASSERT(isnan(filtroMediana(&f, NAN)));
+    ASSERT(f.quantidade == 2);
+    ASSERT(fabsf(filtroMediana(&f, 32.0f) - 31.0f) < 0.001f);
+    PASS();
+}
+
+void test_filtro_mediana_estado_corrompido_reinicia() {
+    TEST("filtroMediana recupera estado fora da faixa");
+    FiltroMediana f; f.quantidade = 99; f.proximo = -4;
+    ASSERT(fabsf(filtroMediana(&f, 28.5f) - 28.5f) < 0.001f);
+    ASSERT(f.quantidade == 1);
+    PASS();
+}
 int main() {
     std::cout << "=== Executando Testes Unitarios do Firmware (C++) ===\n";
     test_agenda_fixa_de_20_s();
@@ -219,9 +268,7 @@ int main() {
     test_extrair_numero_do_json();
     test_classificacao_de_faixa_termica();
     test_classificacao_sem_limite_inferior();
-    test_extrair_numero_com_espaco_e_texto_invalido();
-
-    std::cout << "\nResultado: " << testes_passaram << "/" << total_testes << " testes passaram.\n";
+XX: " << testes_passaram << "/" << total_testes << " testes passaram.\n";
     return (testes_passaram == total_testes) ? 0 : 1;
 }
 

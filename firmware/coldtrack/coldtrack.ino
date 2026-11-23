@@ -570,6 +570,8 @@ bool reiniciouPorWatchdog() {
 // Agenda fixa: 20 s do inicio de um ciclo ao inicio do seguinte. O envio
 // (HTTPS, MQTT, fila) roda na tarefa de envio e nao empurra a medicao.
 const unsigned long INTERVALO_ENVIO = 20000;
+FiltroMediana filtroTemperatura = {{0}, 0, 0};
+FiltroMediana filtroUmidade = {{0}, 0, 0};
 
 unsigned long proximoCiclo = 0;     // millis() marcado para o proximo ciclo
 bool cicloImediato = true;          // mede ja (boot, configuracao pelo cabo)
@@ -2988,6 +2990,11 @@ void loop() {
       Serial.println("----------------------------------------");
       return;
     }
+
+
+    // Filtro de mediana (FILTRO_JANELA no secrets.h): so leitura valida chega aqui e entra na janela.
+    temperatura = filtroMediana(&filtroTemperatura, temperatura);
+    umidade = filtroMediana(&filtroUmidade, umidade);
 
 
     // ======================================================
