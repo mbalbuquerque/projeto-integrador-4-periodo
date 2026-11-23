@@ -15,9 +15,8 @@ Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`
 | Sem calibração e sem caixa | IoT / Placa | Calibrar contra referência e acomodar o artefato em caixa adequada | Everson (placa) | 28/11 | `docs/` com a calibração (#128) e foto da caixa (#129) |
 | Modelo do sensor não supera o baseline | IA | Re-treinado em 23/11 com a base de 70 h (Cosmos, 17 a 20/11): ridge MAE 0,334 °C contra 0,319 °C da persistência, sem vazamento; LAD e gradient boosting também não passaram. A rota recomenda o baseline e o painel exibe a previsão. Só uma coleta com excursões térmicas reais (caixa refrigerada) permite superar o baseline | Everson | 30/11 | Model card e `relatorio_previsao.md` (#37) |
 | Banco sem diagrama ER e script | IoT / Banco | Diagrama, script de criação e dados de exemplo para o Cosmos | Everson | 27/11 | `docs/` e `infra/` (#130) |
-| Restauração de produção não testada | Cloud / R8 | Restaurar o export de produção em conta de teste ou emulador | Everson | 27/11 | `infra/README.md` (#131) |
 | Estrutura e README finais | Cloud / Tech English | Mapa de pastas, usuário de teste e passos de execução | Everson | 28/11 | README em português e inglês (#132) |
-| Revisão de PRs e `main` sem proteção | Qualidade / Cloud | Decisão da equipe em 23/11: proteção da `main` fica temporariamente desligada nos dois repositórios, porque a conta de desenvolvimento não é administradora e a regra atrapalha os merges da reta final; comando pronto em `CONTRIBUTING.md` para o dono ativar depois de 30/11. Revisão de PRs: Everson é o revisor designado da equipe e revisa os PRs antes do merge a partir de 23/11 (regra em `CONTRIBUTING.md`); os PRs anteriores foram mergeados sem revisão formal | Everson | 30/11 | Decisão registrada (#133, Front #85) |
+| Revisão de PRs | Qualidade | Everson é o revisor designado da equipe e revisa os PRs antes do merge a partir de 23/11 (regra em `CONTRIBUTING.md`); os PRs anteriores foram mergeados sem revisão formal | Everson | 30/11 | Regra em `CONTRIBUTING.md` |
 | Fichas e relatórios de qualidade | Segurança / Qualidade | Ficha OWASP IoT e API, relatório ISO/IEC 25010 e análise estática limpa | Everson | 28/11 | #134, #135, #136 |
 | Firmware final e API completa | IoT / Cloud | Filtro de leitura e parâmetros fora do código; CRUD com paginação e TLS no envio | Everson | 28/11 | #137, #139 |
 | Limpeza dos dados | IoT / Dados | Limpeza documentada e base que alimenta o modelo | Everson | 27/11 | `analise/sensor/` (#138) |
@@ -41,7 +40,7 @@ Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`
 | Base de ≥ 48 h de coleta | `analise/sensor/relatorio.md` e `relatorio_cosmos.md` (#39) |
 | Sequência validada só no simulador (R3) | F1 na placa física em 17/11: `seq` 89 a 128 contínua e `lacunas: []` |
 | Heartbeat do firmware (R7) | `POST /api/heartbeat` e aviso no painel |
-| Backup do banco (R8) | Backup lógico com restauração testada no CI (`infra/backup/`, #36); restauração de produção em #131 |
+| Backup do banco (R8) | Backup lógico com restauração testada no CI (`infra/backup/`, #36); export real de produção (16.105 documentos) restaurado numa conta Cosmos de teste em 23/11, contagens iguais (#131) |
 | Limites de requisição | `POST /empresas` e `POST /senha` com testes de 429 |
 | Alertas push | Web Push na API (`/api/push/*`) e no painel |
 | Deploy pela `main` | Os dois workflows publicam a cada push na `main` (#40) |
