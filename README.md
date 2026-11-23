@@ -182,9 +182,9 @@ Ver [`analise/README.md`](analise/README.md).
   (ver [`infra/README.md`](infra/README.md)).
 
 Fluxo de trabalho: branch a partir da `main`, pull request para a `main` com os testes verdes.
-A `everson` fica como reserva da publicação e não deve ser apagada. A proteção da `main` (pull
-request e testes obrigatórios) depende de um administrador do repositório; o comando está em
-[`CONTRIBUTING.md`](CONTRIBUTING.md), junto com a convenção de commits.
+A `everson` fica como reserva da publicação e não deve ser apagada. A `main` está protegida
+desde 23/11/2026 (regra de repositório: pull request e testes obrigatórios, sem force push); a
+convenção de commits está em [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Nuvem
 
