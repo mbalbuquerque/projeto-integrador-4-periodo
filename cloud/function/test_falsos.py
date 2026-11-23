@@ -39,6 +39,8 @@ class ContainerFalso:
                 itens = [i for i in itens if i.get("deviceId") == p[nome]]
         if "@desde" in p:
             itens = [i for i in itens if i["medidoEm"] >= p["@desde"]]
+        if "@antes" in p:
+            itens = [i for i in itens if i["medidoEm"] < p["@antes"]]
         if "ORDER BY c.medidoEm DESC" in query:
             itens.sort(key=lambda i: i["medidoEm"], reverse=True)
         if "@limite" in p:

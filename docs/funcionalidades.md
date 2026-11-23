@@ -177,7 +177,7 @@ esconde o que o perfil não pode usar; quem bloqueia de fato é a API.
 | Login | Entrada com e-mail e senha. | `src/pages/Login/` |
 | Cadastro de empresa | Transportadora nova cria a conta e entra como gestor. | `src/pages/Cadastro/` |
 | Monitoramento | Demonstração que lê o canal público do ThingSpeak configurado em `thingspeak.js`, separada dos dados da API. | `src/pages/Monitoramento/` |
-| Usuários, Auditoria, Cadastro de usuário, Gestão logística | Telas demonstrativas com dados de exemplo, sem persistência. | `src/pages/Usuarios/`, `Auditoria/`, `CadastroUsuario/`, `Logistica/` |
+| Usuários, Auditoria, Cadastro de usuário, Gestão logística | Removidas em 17/11 (Front #68), porque mostravam dados de exemplo. Usuários fica em Configurações (API `/usuarios`, só gestor), cargas são acompanhadas em Viagens e não há trilha de auditoria. Os endereços antigos redirecionam. | `src/App.jsx`, `src/rotas.js` |
 
 URLs antigas (`dashboard.html?veiculo=X` e as demais) continuam funcionando e redirecionam
 para as rotas novas, para que etiquetas QR já impressas sigam válidas (`src/rotas.js`).

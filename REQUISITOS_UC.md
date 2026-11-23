@@ -1,6 +1,6 @@
 # Matriz de requisitos das UCs (5º período)
 
-Situação em 17/11/2026 (criada para a prévia técnica do PI e revisada depois dela). Cada linha traz o requisito, onde ele está
+Situação em 23/11/2026 (criada para a prévia técnica do PI e revisada depois dela). Cada linha traz o requisito, onde ele está
 implementado e a evidência observável. Status: **Atendido** (há evidência), **Parcial** (existe,
 mas falta parte da exigência) ou **Pendente** (sem evidência). Exigência sem evidência é tratada
 como pendente e entra no `PLANO_ACAO.md`.
@@ -12,12 +12,12 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| IOT-01 | Dispositivo com ≥ 2 sensores | `firmware/coldtrack/coldtrack.ino` | Um sensor DHT11/DHT22 (temperatura e umidade) | Parcial |
+| IOT-01 | Dispositivo com ≥ 2 sensores | `firmware/coldtrack/coldtrack.ino` | Um sensor DHT11/DHT22 (temperatura e umidade) mais o RSSI do Wi-Fi. O professor liberou o uso de um único sensor para a equipe (decisão de 23/11, issue #127 encerrada) | Atendido |
 | IOT-02 | Esquema elétrico | `firmware/wokwi/diagram.json` | Simulação no Wokwi | Atendido |
 | IOT-03 | Intervalo de leitura justificado e leitura inválida tratada | `coldtrack.ino` (`INTERVALO_ENVIO`, `lerSensor`) | Leitura a cada 20 s; leitor com checagem de checksum e duas tentativas | Atendido |
 | IOT-04 | Canal ThingSpeak recebendo dados reais, intervalo ≥ 15 s | `coldtrack.ino` (MQTT) | Canal 3515173 | Atendido |
 | IOT-05 | Envio à API em nuvem | `POST /api/telemetria` | Leituras gravadas no Cosmos DB | Atendido |
-| IOT-06 | Base com ≥ 48 h de coleta e estatística descritiva | `analise/sensor/` (CSV do canal 3515173 com campo `origem`, `relatorio.md`) | Estatística descritiva, faltantes e inválidos medidos; a base real cobre 8,5 h (maior trecho contínuo 1,2 h), abaixo das 48 h | Parcial |
+| IOT-06 | Base com ≥ 48 h de coleta e estatística descritiva | `analise/sensor/` (CSV do canal 3515173 com campo `origem`, `relatorio.md`; `relatorio_cosmos.md` com a coleta gravada no Cosmos) | Soma de 69,0 h cobertas no ThingSpeak (12.730 leituras) e 73,4 h de período no Cosmos (11.710 leituras, 17/11 a 20/11), com estatística descritiva, faltantes e inválidos medidos. Não há trecho contínuo de 48 h (o maior tem 10,3 h); a meta foi lida como 48 h de coleta somadas. Confirmar essa leitura com o professor | Atendido (soma de horas) |
 
 ## Cloud Computing
 
@@ -57,7 +57,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| IA-01 | Problema de IA definido que apoia uma decisão | `analise/` | Risco térmico por mês e hora na rota Petrolina–Suape (dados do INMET, 2019–2025); apoia o horário de saída. Com as leituras reais do sensor (canal 3515173) há a previsão da temperatura 10 min à frente (`GET /api/predict/sensor`), que ainda não supera o baseline de persistência (MAE 0,342 °C contra 0,313 °C) | Parcial |
+| IA-01 | Problema de IA definido que apoia uma decisão | `analise/` | Risco térmico por mês e hora na rota Petrolina–Suape (dados do INMET, 2019–2025); apoia o horário de saída. Com as leituras reais do sensor (canal 3515173) há a previsão da temperatura 10 min à frente (`GET /api/predict/sensor`), retreinada em 23/11 com a coleta de 17 a 20/11 (4.211 amostras, teste de 1.267), que ainda não supera o baseline de persistência (MAE 0,334 °C contra 0,319 °C; outras tentativas também não, ver `docs/model-card.md`); sem ganho, o modelo não é recomendado (#37) | Parcial |
 | IA-02 | Baseline calculado | `analise/relatorio.md` | Modelo ingênuo (média geral), Brier 0,202 | Atendido |
 | IA-03 | Divisão temporal e métrica melhor que o baseline | `analise/explorar.py` | Treino 2019–2022, teste 2023–2025; Brier 0,091 (55% menos erro) | Atendido |
 | IA-04 | Model card | `docs/model-card.md` | Uso, dados, métricas e limitações | Atendido |
@@ -68,13 +68,13 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
 | MOB-01 | App autenticando e listando leituras reais | `Front-End-pi` (PWA: `manifest.json`, `sw.js`) | PWA com login, consumindo a API publicada; tela do motorista (`/motorista`) e alertas push (Web Push) | Atendido |
-| MOB-02 | Protótipo navegável | PWA em produção | O PWA funcional serve como protótipo navegável; não há arquivo no Figma (entendimento da equipe) | Atendido |
+| MOB-02 | Protótipo navegável | PWA em produção | O PWA funcional serve como protótipo navegável; não há arquivo no Figma, e o professor confirmou que o PWA cobre a exigência (23/11) | Atendido |
 
 ## Comportamento do Consumidor
 
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
-| CC-01 | Persona, jornada e proposta de valor com pesquisa | `docs/ux/` | Pesquisa secundária com 13 fontes públicas e 5 entrevistas simuladas, identificadas como simuladas; persona, jornada e proposta de valor derivadas. Falta validação com usuários reais | Parcial |
+| CC-01 | Persona, jornada e proposta de valor com pesquisa | `docs/ux/` | Pesquisa secundária com 13 fontes públicas e 5 entrevistas simuladas, identificadas como simuladas; persona, jornada e proposta de valor derivadas. Questionário (`roteiro-pesquisa-real.md`) aplicado a 5 respondentes simulados, com tarefas e SUS simulados (média 73,5), em `respostas-pesquisa-simulada.md`, por decisão da equipe em 17/11 (#38). Não houve coleta com usuários reais; em 23/11 a equipe decidiu manter a pesquisa simulada e declarada como tal | Parcial |
 
 ## Tech English
 

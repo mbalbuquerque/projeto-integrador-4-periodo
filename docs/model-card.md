@@ -6,10 +6,10 @@ action, and both answer with a baseline next to the model so the user can compar
 | | Thermal risk (outdoor) | Sensor forecast (cargo) |
 |---|---|---|
 | Question | Chance that the outdoor air passes 30 °C at a given month and hour | Temperature of the cargo sensor 10 minutes ahead |
-| Data | INMET station A307 Petrolina, hourly, 2019–2025 | Readings of the team's own board (ThingSpeak channel 3515173) |
+| Data | INMET station A307 Petrolina, hourly, 2019–2025 | Readings of the team's own board, stored in the production database (cross-checked with ThingSpeak channel 3515173) |
 | Route | `GET /api/predict?mes=&hora=` | `GET /api/predict/sensor?deviceId=` |
-| Version | `clima-a307-30c-v1` | `sensor-ridge-10min-v1` |
-| Beats its baseline on the test split | Yes (Brier 0.091 vs 0.202) | **No, with the current data** (MAE 0.342 °C vs 0.313 °C) |
+| Version | `clima-a307-30c-v1` | `sensor-ridge-10min-v2` |
+| Beats its baseline on the test split | Yes (Brier 0.091 vs 0.202) | **No, with the current data** (MAE 0.334 °C vs 0.319 °C) |
 
 ---
 
@@ -106,21 +106,26 @@ with a temporal split and an honest baseline.
   export). The feature function is `cloud/function/previsao_sensor.atributos`, the same one the
   route uses, so training and serving compute the features identically. Report:
   `analise/sensor/relatorio_previsao.md`.
-- Version: `sensor-ridge-10min-v1`. Artifact: `cloud/function/modelo_sensor.json` (three
+- Version: `sensor-ridge-10min-v2` (retrained on 2026-11-23 with the 2026-11-17 to 11-20 collection). Artifact: `cloud/function/modelo_sensor.json` (three
   coefficients, the window, the gap limit, the training and test periods and the metrics). No
   numpy or scikit-learn at runtime.
 
 ### Data
 
-- Source: public ThingSpeak channel 3515173, the team's ESP32-C3 board with a DHT11, published
-  over MQTT. 1,899 readings downloaded on 2026-11-17 (2026-09-29 to 2026-11-17), real data.
+- Source: the readings the team's ESP32-C3 board with a DHT11 sent to the API, read from the
+  production database (the same data the route receives when serving): 12,015 readings
+  carrying the firmware sequence number, from 2026-11-17 02:33 to 2026-11-20 08:10 UTC, exported with
+  `infra/backup/exportar.py` and converted by `analise/sensor/descrever_cosmos.py --converter`.
+  Readings without a sequence number are left out: the database does not store the reading origin
+  and it received demonstration data before the board went live. The
+  public ThingSpeak channel 3515173 (12,730 readings, same board) is used as a cross-check.
 - Cleaning: readings without temperature or timestamp, outside the DHT11 physical range (0 to
   50 °C) or with a repeated timestamp are dropped (none were dropped in the current base).
 - Samples: one per minute inside continuous stretches, with 10 minutes of history and the target
-  10 minutes later in the same stretch: 714 samples (about 11.9 h) from 8 stretches.
+  10 minutes later in the same stretch: 4,211 samples (about 70 h) from 5 stretches.
 - Temporal split: the most recent 30% of the sample instants are the test set
-  (2026-11-17 02:29 to 06:06 UTC, 218 samples); the training set (2026-09-29 to 2026-11-17 02:18
-  UTC, 496 samples) only keeps samples whose target is before the first test instant, so no
+  (2026-11-19 05:07 to 2026-11-20 08:00 UTC, 1,267 samples); the training set (2026-11-17 to
+  2026-11-19 04:56 UTC, 2,944 samples) only keeps samples whose target is before the first test instant, so no
   future value leaks into training. The served coefficients are the ones trained on this
   training set, the same ones that were evaluated.
 
@@ -128,13 +133,18 @@ with a temporal split and an honest baseline.
 
 | Metric (°C) | Model (ridge) | Baseline (persistence) |
 |---|---|---|
-| MAE (primary metric, chosen before training) | 0.342 | 0.313 |
-| RMSE | 0.471 | 0.494 |
+| MAE (primary metric, chosen before training) | 0.334 | 0.319 |
+| RMSE | 0.662 | 0.652 |
 
-**The model does not beat the baseline on the primary metric.** It has a lower RMSE (it avoids
-some large misses) but a higher MAE, and with other test fractions (20% and 40%, reported in
-`relatorio_previsao.md` for information only) the picture does not change consistently. Because of
-that, the exported file has `superaBaseline: false` and the route answers `recomendada:
+**The model does not beat the baseline on either metric.** With the 48-hour collection the test
+set grew from 218 to 1,267 samples and the result is now consistent: persistence also wins with
+other test fractions (20% and 40%, reported in `relatorio_previsao.md` for information only) and
+on the ThingSpeak cross-check (MAE 0.346 vs 0.311 °C). Other attempts on 2026-11-23 outside the
+pipeline (median/LAD regression, gradient boosting with absolute-error loss, a 30-minute window
+with more features, hour of day) did not beat persistence either: the median regression collapses
+into it (MAE 0.3191 vs 0.3190 °C) and boosting stayed above it (0.334 to 0.341 °C vs 0.318 °C).
+The series only moves in DHT11 resolution steps, and with no real excursion in the base there is
+no signal to learn. Because of that, the exported file has `superaBaseline: false` and the route answers `recomendada:
 "baseline"`: the screen should show the persistence value, and `antecipaExcursao` stays `false`
 (a repeated reading cannot anticipate anything). The model value is still returned so the
 comparison stays visible.
@@ -152,20 +162,20 @@ version with both test errors. Details: `docs/api.md` and the OpenAPI specificat
 
 ### Limitations
 
-- **Few data**: about 12 hours of samples, in short stretches separated by long gaps; most of the
-  test set is a single night (3.6 h).
+- **Limited data**: about 70 hours of samples, in 5 stretches separated by gaps (the longest
+  continuous stretch is about 14 h); the test set spans about 27 h.
 - **Bench, not a refrigerated box**: the board sits indoors (readings between 21 and 37 °C). There is no real thermal
   excursion in the base (door opening, refrigeration failure), which is exactly the event the
   model should anticipate. The series is almost flat and moves in DHT11 resolution steps, a
   setting where persistence is very hard to beat.
-- The readings come every 20 s in the older sessions and every ~78 s in the current one; the
-  one-minute resampling hides part of that difference but not all.
 - The model only extrapolates the sensor's own series: it knows nothing about the outdoor
   weather, the route or the door.
 
 ### Retraining
 
-When the 48-hour collection (or a real trip) is in the channel, one command downloads the
+When a new collection (or a real trip) is available, export the database, convert it with
+`descrever_cosmos.py --converter` and retrain with `python modelo_previsao.py`; the ThingSpeak command below only
+refreshes the cross-check. It downloads the
 channel again, retrains, re-evaluates against persistence and exports the new file:
 
 ```bash
@@ -181,7 +191,6 @@ starts recommending the model with no code change; the API is published with the
 
 ## Next steps
 
-- Retrain the sensor forecast with the 48-hour collection and, above all, with readings from a
-  real refrigerated box, where excursions exist.
+- Retrain the sensor forecast above all with readings from a real refrigerated box, where excursions exist.
 - Cross the sensor readings with the outdoor temperature (model 1) to explain the excursions.
 - Use the weather forecast of the day instead of the historical average in model 1.

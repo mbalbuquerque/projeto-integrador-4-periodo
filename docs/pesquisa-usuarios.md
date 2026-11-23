@@ -14,9 +14,17 @@ públicas**, que não conta para a meta acima:
   (não são participantes reais), seguindo o roteiro abaixo, cada resposta com sua fonte.
 - [`ux/persona-jornada-proposta.md`](ux/persona-jornada-proposta.md): persona, jornada, proposta
   de valor e indicadores do painel ligados a decisões; provisório até a validação.
+- [`ux/roteiro-pesquisa-real.md`](ux/roteiro-pesquisa-real.md): roteiro para a coleta com pessoas
+  reais (perguntas por perfil, versão WhatsApp, campos do Forms, SUS) e
+  [`ux/respostas-pesquisa-real.md`](ux/respostas-pesquisa-real.md), o registro, vazio até haver respostas.
 
-A validação com usuários reais (≥ 5 entrevistas ou ≥ 20 respostas) segue pendente para a
-entrega final.
+- [`ux/respostas-pesquisa-simulada.md`](ux/respostas-pesquisa-simulada.md): rodada **simulada** do
+  questionário (3 gestores e 2 motoristas, R1 a R5, cada resposta com fonte), síntese das
+  hipóteses H1 a H7 e validação simulada (tarefas, SUS, intenção de uso). Decisão da equipe em
+  17/11/2026; nenhuma pessoa real foi entrevistada e o SUS não é evidência de usabilidade.
+
+A validação com usuários reais (≥ 5 entrevistas ou ≥ 20 respostas) não foi feita; a rodada
+simulada acima a substitui por decisão da equipe e não conta como pesquisa real.
 
 ## Público
 

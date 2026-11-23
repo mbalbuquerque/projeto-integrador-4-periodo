@@ -68,7 +68,7 @@ flowchart LR
 
 Dois caminhos saem da placa: o **principal** é HTTPS para a API própria, que confirma cada
 gravação e devolve a faixa da carga; o **secundário** é MQTT para o ThingSpeak, usado na
-plataforma de monitoramento da turma e na tela demonstrativa Monitoramento. O painel **só lê a
+plataforma de monitoramento da turma e na tela Monitoramento (com login). O painel **só lê a
 API**, nunca o ThingSpeak (`README.md`, seção Arquitetura).
 
 **Quem usa.**
@@ -268,7 +268,9 @@ internet.
 3. Corpo, montado por `montarPayload`:
    `{"deviceId":"coldtrack-01","temperatura":12.4,"umidade":81.0,"rssi":-58,"medidoEm":1790000000}`.
    RSSI maior ou igual a zero (valor impossível, aparece no simulador) vai como `null`. Sem relógio
-   sincronizado, o `medidoEm` é omitido.
+   sincronizado, o `medidoEm` é omitido. O campo `origem` (`"placa"` ou `"simulador"`, fixado na
+   compilação: o build do Wokwi define `ORIGEM_SIMULADOR`) é gravado com a leitura; firmware antigo
+   não envia e a leitura fica como `nao_informada`. Outro valor é recusado com `400`.
 4. Resposta `201`: gravado; atualiza a faixa. `200`: a leitura já estava gravada (reenvio).
    Outro código: registra o erro.
 5. Cada envio imprime uma linha `MEDIDA;https;<ms>;<bytes enviados>;<bytes recebidos>;<ok>`
@@ -794,6 +796,15 @@ sequenceDiagram
 - **Nunca quebra a gravação**: a leitura já está gravada quando o push começa; `push.enviar`
   nunca levanta exceção, e qualquer outro erro do push é pego em `telemetria` e só vai para o log.
   Os envios saem em paralelo (até 8) com tempo limite de 5 s cada.
+- **Assunto VAPID** (`VAPID_SUBJECT`): precisa ser `mailto:usuario@host` ou uma origem https **sem
+  caminho** (`https://host`); é a regra da `py-vapid`, que levanta `VapidException` para qualquer
+  outro formato (por exemplo uma URL de repositório com caminho). `push.configurado()` aplica a
+  mesma regra: assunto inválido deixa o push desligado e registra um aviso (uma vez). Padrão: a
+  origem do painel. Um teste assina de verdade (sem rede) com o assunto padrão.
+- **Urgência e validade**: alertas de `ATENCAO` e `CRITICO` saem com o cabeçalho `Urgency: high`;
+  sem ele o Android segura o push no modo Doze e o aviso só aparece quando o painel é aberto. O
+  `TTL` é de 10 min (o mesmo intervalo mínimo entre avisos): um alerta de temperatura mais velho
+  que isso já está desatualizado e o painel mostra a situação atual.
 - **Limpeza**: resposta `404`/`410` do serviço de push = inscrição expirada, apagada do usuário.
 - **Segurança**: o `endpoint` só é aceito em hosts de serviço de push conhecidos (`HOSTS_PUSH`),
   então a API não vira um jeito de fazer POST para qualquer URL. O conteúdo vai cifrado
@@ -856,8 +867,8 @@ React 18 + Vite 5 + React Router 6, em JavaScript, publicado como site estático
 | `/relatorios` | Média, mínima, máxima, percentual fora da faixa, gráfico e CSV | `/leituras` |
 | `/configuracoes` | Trocar senha; usuários (gestor), com o perfil Motorista e o veículo dele | `/senha`, `/usuarios`, `/veiculos` |
 | `/motorista` | **Só o perfil motorista**, no celular: temperatura grande, status em cor e texto (NORMAL, ATENÇÃO, CRÍTICO, SEM SINAL), faixa, última leitura e viagem; alerta local (vibração, bipe, notificação) quando piora, aviso até voltar ao normal, tela acesa (Wake Lock), faixa sem conexão com o último valor marcado como antigo | `/motorista` |
-| `/monitoramento` | Tela demonstrativa que lê o canal público do ThingSpeak (`thingspeak.js`) | ThingSpeak |
-| `/usuarios`, `/auditoria`, `/cadastro-usuario`, `/logistica` | Telas demonstrativas com dados de exemplo, sem API | — |
+| `/monitoramento` | Tela com login que lê o canal público do ThingSpeak (`thingspeak.js`) | ThingSpeak |
+| `/usuarios`, `/cadastro-usuario`, `/logistica`, `/auditoria` | Endereços antigos, só redirecionam: usuários para Configurações (`/configuracoes#painelUsuarios`, API `/usuarios`), logística para Viagens e auditoria para a Visão geral. As telas com dados de exemplo foram removidas em 17/11 (Front #68) | — |
 | todas as logadas | Botão do **assistente do painel** (`AssistentePainel`, montado no `PainelLayout`) | `POST /assistente` |
 
 A etiqueta QR do veículo aponta para `/dashboard.html?veiculo=<código>`; quem escaneia precisa
@@ -1015,8 +1026,8 @@ Fonte: `RESILIENCIA.md`, `docs/qa/plano-de-testes.md` (seção 6) e o código.
 | teste | critério | situação |
 |---|---|---|
 | F1 Queda de rede (60 s) | Reconecta em até 30 s, sem lacuna | **Aprovado na placa física** em 17/11/2026: queda de cerca de 2,5 min, 6 leituras na fila, reconexão em menos de 30 s após a rede voltar, reenvio em ordem, sequência sem lacuna (`RESILIENCIA.md`, Registro) |
-| F2 Queda de energia | Volta a enviar em até 60 s | Final; a fila e a sequência em flash sobrevivem ao reinício; watchdog de 60 s |
-| F3 Falha de sensor | Nada inválido gravado, alerta visível | Simulado no Wokwi (`tela/fases.yaml`, `tela/heartbeat.yaml`): `FALHA SENSOR` na tela, três LEDs piscando, nenhuma leitura enviada, heartbeat `sensor_falha` deixa a placa online com `sensor: "falha"`; testes da API em `test_heartbeat.py`. **Execução na placa física não registrada** |
+| F2 Queda de energia | Volta a enviar em até 60 s | Na placa física (17/11): `seq` contínua (3338 -> 3339) e primeira leitura 24 s após a última antes do corte (registro em `RESILIENCIA.md`); watchdog de 60 s ainda só no simulador |
+| F3 Falha de sensor | Nada inválido gravado, alerta visível | Simulado no Wokwi (`tela/fases.yaml`, `tela/heartbeat.yaml`): `FALHA SENSOR` na tela, três LEDs piscando, nenhuma leitura enviada, heartbeat `sensor_falha` deixa a placa online com `sensor: "falha"`; testes da API em `test_heartbeat.py`. Na placa física (17/11, firmware 2026.11.17.3): falha detectada no primeiro ciclo, heartbeat `sensor_falha` aceito pela API, nenhuma leitura gravada durante a falha e recuperação no ciclo seguinte à reconexão (registro em `RESILIENCIA.md`) |
 | F4 Nuvem fora | Serviço volta sozinho, zero perda | Final; reinício do contêiner validado no CI (`compose-zap.yml`); teste F4 completo pendente |
 | F5 Mensagem duplicada | Um só registro | **Automatizado**, passa no CI; observado também na placa física (reenvio após timeout respondido como `duplicada: true`) |
 | F6 ThingSpeak fora | API e painel seguem | Final; por desenho o painel não depende do ThingSpeak |
@@ -1244,34 +1255,38 @@ sensor.
 - **Por que previsão e não detecção de anomalia**: a base real não tem nenhuma falha rotulada
   (sensor travado, porta aberta, frio desligado). Um detector só poderia ser medido em falhas
   inseridas à mão; a previsão é medida nas próprias leituras reais.
-- **Dados**: canal público ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe), 1.899
-  leituras baixadas em 17/11/2026. Limpeza: descarta leitura sem temperatura ou sem data, fora
+- **Dados**: leituras da placa ESP32-C3 + DHT11 da equipe gravadas no banco de produção (o
+  que a rota recebe ao servir): 12.015 leituras com número de sequência, de 17/11 a 20/11/2026, exportadas com
+  `infra/backup/exportar.py` e convertidas por `descrever_cosmos.py --converter`; o canal público ThingSpeak
+  3515173 (12.730 leituras) serve de verificação cruzada. Limpeza: descarta leitura sem temperatura ou sem data, fora
   da faixa do DHT11 (0 a 50 °C) ou com instante repetido (nenhuma saiu nesta base). Intervalo
   de mais de 5 min entre leituras abre trecho novo; nenhuma amostra atravessa lacuna. Uma
-  amostra por minuto: 714 amostras (cerca de 11,9 h) em 8 trechos.
+  amostra por minuto: 4.211 amostras (cerca de 70 h) em 5 trechos.
 - **Modelo**: regressão ridge sem intercepto sobre a variação (alvo menos a última leitura),
   com três atributos dos últimos 10 min: variação em 5 min (`d5`), em 10 min (`d10`) e média
   dos 10 min menos a última leitura (`m10`); lambda fixo 1. Exportado como três coeficientes
-  em `modelo_sensor.json` (versão `sensor-ridge-10min-v1`), sem biblioteca de ML em produção. O
+  em `modelo_sensor.json` (versão `sensor-ridge-10min-v2`), sem biblioteca de ML em produção. O
   cálculo dos atributos é a mesma função (`previsao_sensor.atributos`) no treino e na rota.
 - **Baseline**: persistência (a temperatura daqui a 10 min é a última leitura).
-- **Divisão temporal**: teste = 30% mais recentes dos instantes (17/11 02:29 a 06:06 UTC, 218
-  amostras); treino = o que vem antes (496 amostras), descartando amostra cujo alvo cai depois
+- **Divisão temporal**: teste = 30% mais recentes dos instantes (19/11 05:07 a 20/11 08:00 UTC,
+  1.267 amostras); treino = o que vem antes (2.944 amostras), descartando amostra cujo alvo cai depois
   do corte, para não vazar futuro.
-- **Resultado (teste)**: MAE do modelo **0,342 °C** contra **0,313 °C** da persistência; RMSE
-  0,471 contra 0,494. Com a métrica principal (MAE, definida antes do treino) **o modelo não
-  supera o baseline**. Por isso o arquivo sai com `superaBaseline: false` e a rota responde
+- **Resultado (teste)**: MAE do modelo **0,334 °C** contra **0,319 °C** da persistência; RMSE
+  0,662 contra 0,652. Com a base de 48 h o resultado ficou consistente (outros cortes e a
+  verificação cruzada no ThingSpeak dão o mesmo: 0,346 contra 0,311 °C) e outras tentativas
+  (regressão pela mediana, gradient boosting, janela de 30 min) também não passaram da
+  persistência: **o modelo não supera o baseline**. Por isso o arquivo sai com `superaBaseline: false` e a rota responde
   `recomendada: "baseline"`: a tela deve mostrar a persistência. A previsão do modelo segue na
   resposta para a comparação ficar visível.
 - **Quando erra e por quê**: a placa está em bancada, em ambiente interno, e não num baú; a
   série é quase estável e muda em degraus de resolução do DHT11. Não há nenhuma excursão real
-  na base, que é justamente o que o modelo deveria antecipar. Com poucas horas, persistência é
-  muito difícil de bater.
-- **Re-treinar** (um comando, baixa o canal de novo): `cd analise/sensor && python
-  modelo_previsao.py --baixar`. Se o MAE do modelo ficar abaixo do da persistência, a rota passa
+  na base, que é justamente o que o modelo deveria antecipar. Com a série variando só em
+  degraus do sensor, a persistência é muito difícil de bater.
+- **Re-treinar**: exportar o banco, `python descrever_cosmos.py --converter <export>/leituras.jsonl` e `python
+  modelo_previsao.py` em `analise/sensor`. Se o MAE do modelo ficar abaixo do da persistência, a rota passa
   a recomendar o modelo sem mudar código; publica-se a API com o novo `modelo_sensor.json`.
-- **Servido em** `GET /api/predict/sensor`. Na `main` do painel nenhuma tela consome a rota ainda;
-  a exibição no dashboard e na tela do motorista está em andamento (Front-End-pi #60).
+- **Servido em** `GET /api/predict/sensor`. O painel mostra a previsão no dashboard e na tela
+  do motorista (Front-End-pi #60), com o valor recomendado (hoje, a persistência).
 
 ---
 

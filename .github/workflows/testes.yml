@@ -36,6 +36,14 @@ jobs:
           pip install ruff==0.17.4
           ruff check .
 
+      # Análise estática de segurança. Bloqueia achado de severidade e confiança médias ou mais;
+      # os 3 avisos B608 de baixa confiança (consulta montada com campos fixos e parâmetros @)
+      # estão triados em docs/relatorio-seguranca.md.
+      - name: Análise estática de segurança (bandit)
+        run: |
+          pip install bandit==1.9.4
+          bandit -q -r . -x ./test_*.py,./scripts --severity-level medium --confidence-level medium
+
       - name: Rodar testes da API (com cobertura)
         run: pytest --cov=. --cov-branch --cov-report=term-missing --cov-fail-under=98
 

@@ -1,28 +1,48 @@
 # Plano de ação
 
-Criado em 16/11/2026, a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`. Prazo do
-documento: 22/11, 23h59. Será revisado depois da devolutiva escrita (até 18/11). Responsável
-em branco = ainda não definido pela equipe.
+Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`; revisado em
+23/11/2026 (aula de ajustes). Cada linha tem uma issue; as que dependem da placa física levam
+"(placa)" no responsável. Entrega final: tag `v1.0` antes da aula de 30/11.
+
+## Pendências até 30/11
 
 | Lacuna | UC / critério | Ação concreta | Responsável | Prazo | Evidência de conclusão |
 |---|---|---|---|---|---|
-| F3 sem execução registrada | IoT / Resiliência | F1 aprovado na placa física em 17/11; falta rodar o F3 na placa e anotar tempos | | 23/11 | Tabela preenchida em `RESILIENCIA.md` (#34) |
-| Watchdog validado só no simulador | IoT / R4 | Repetir F2 (queda de energia) e um travamento na placa física | | 25/11 | F2 aprovado (#35) |
-| Modelo do sensor não supera o baseline | IA | `GET /api/predict/sensor` publicada com as leituras reais; MAE 0,342 °C contra 0,313 °C da persistência. Re-treinar depois da coleta de 48 h e mostrar a previsão no painel (Front-End-pi #60) | | 28/11 | Modelo com leituras do sensor (#37) |
-| Pesquisa só secundária e simulada | Consumidor | Validar persona e jornada (`docs/ux/`) com ≥ 5 entrevistas ou ≥ 20 respostas reais | | 25/11 | Registro da pesquisa (#38) |
-| Sem teste de usabilidade | UE Mobile / Consumidor (final) | Teste com 5 usuários e SUS | | 28/11 | Relatório SUS ≥ 68 (#38) |
-| Vídeo em inglês | Tech English | OpenAPI, slides do pitch e `README.en.md` já em inglês; falta o vídeo de até 5 min (roteiro em `docs/pitch-en.md`) | | 25/11 | Itens publicados (#33) |
-| Base de ≥ 48 h e segundo sensor | IoT / Dados | Base e estatística já em `analise/sensor/` (8,5 h reais); deixar a placa coletando ≥ 48 h seguidas e regerar; confirmar sensores | | 25/11 | CSV e relatório (#39) |
-| Cobertura do painel e PRs revisados | Qualidade (final) | Cobertura do painel em 99,2% de linhas (mínimo de 98% no CI, medido em 17/11); falta revisão de PRs por outro membro | | 28/11 | CI com mínimo; PRs com aprovação (Front #12) |
-| `main` sem proteção | Cloud / Qualidade | Exigir pull request e testes verdes na `main` dos dois repositórios (depende de um administrador; comando em `CONTRIBUTING.md`) | | 28/11 | Regra de proteção ativa |
+| F4 só testado na nuvem | IoT / Resiliência | Nuvem aprovada em 23/11 (API volta em 20,6 s). Falta a placa reter e reenviar durante a parada de 30 s | Everson (placa) | 27/11 | Registro em `RESILIENCIA.md` (#121) |
+| F6 não executado | IoT / Resiliência | Chave inválida do ThingSpeak com a placa ligada; painel e API seguem atualizados | Everson (placa) | 27/11 | Registro em `RESILIENCIA.md` (#123) |
+| Watchdog validado só no simulador | IoT / R4 | Provocar um travamento na placa física e registrar o reinício | Everson (placa) | 27/11 | `RESILIENCIA.md` (#124) |
+| Latência P1 a P6 sem medição | IoT / Integração | Medir estímulo até o painel e explicar se passar de 2 intervalos | Everson (placa) | 27/11 | Tabela em `RESILIENCIA.md` (#126) |
+| Sem calibração e sem caixa | IoT / Placa | Calibrar contra referência e acomodar o artefato em caixa adequada | Everson (placa) | 28/11 | `docs/` com a calibração (#128) e foto da caixa (#129) |
+| Modelo do sensor não supera o baseline | IA | Re-treinado em 23/11 com a base de 70 h (Cosmos, 17 a 20/11): ridge MAE 0,334 °C contra 0,319 °C da persistência, sem vazamento; LAD e gradient boosting também não passaram. A rota recomenda o baseline e o painel exibe a previsão. Só uma coleta com excursões térmicas reais (caixa refrigerada) permite superar o baseline | Everson | 30/11 | Model card e `relatorio_previsao.md` (#37) |
+| Banco sem diagrama ER e script | IoT / Banco | Diagrama, script de criação e dados de exemplo para o Cosmos | Everson | 27/11 | `docs/` e `infra/` (#130) |
+| Restauração de produção não testada | Cloud / R8 | Restaurar o export de produção em conta de teste ou emulador | Everson | 27/11 | `infra/README.md` (#131) |
+| Estrutura e README finais | Cloud / Tech English | Mapa de pastas, usuário de teste e passos de execução | Everson | 28/11 | README em português e inglês (#132) |
+| Revisão de PRs e `main` sem proteção | Qualidade / Cloud | Decisão da equipe em 23/11: proteção da `main` fica temporariamente desligada nos dois repositórios, porque a conta de desenvolvimento não é administradora e a regra atrapalha os merges da reta final; comando pronto em `CONTRIBUTING.md` para o dono ativar depois de 30/11. Revisão de PRs: Everson é o revisor designado da equipe e revisa os PRs antes do merge a partir de 23/11 (regra em `CONTRIBUTING.md`); os PRs anteriores foram mergeados sem revisão formal | Everson | 30/11 | Decisão registrada (#133, Front #85) |
+| Fichas e relatórios de qualidade | Segurança / Qualidade | Ficha OWASP IoT e API, relatório ISO/IEC 25010 e análise estática limpa | Everson | 28/11 | #134, #135, #136 |
+| Firmware final e API completa | IoT / Cloud | Filtro de leitura e parâmetros fora do código; CRUD com paginação e TLS no envio | Everson | 28/11 | #137, #139 |
+| Limpeza dos dados | IoT / Dados | Limpeza documentada e base que alimenta o modelo | Everson | 27/11 | `analise/sensor/` (#138) |
+| Projeto de Segurança (2FA, IDOR, evidências) | Segurança | Issues do Emmanuel e do Enzo; tag `entrega-final` | Emmanuel e Enzo | 23/11 23h59 | #112 a #115 |
+| PDF de entrega, apresentação e tag | Todas | Gerar o PDF de entrega e os slides; criar a tag `v1.0` antes da aula | Everson | 30/11 | #140, #141 |
 
-## Concluídas desde 16/11
+## Decisões da equipe
+
+- Pesquisa com usuários: mantida simulada e declarada como tal (`docs/ux/respostas-pesquisa-simulada.md`), sem coleta real. O SUS simulado (média 73,5) não vale como teste de usabilidade.
+- Vídeo de até 5 min em inglês: descartado. Seguem o `README.en.md`, a OpenAPI em inglês, os slides e o roteiro `docs/pitch-en.md`.
+- Base de 48 h: lida como 48 h de coleta somadas (69,0 h no ThingSpeak; 73,4 h de período no Cosmos). Não há trecho contínuo de 48 h; o maior tem 10,3 h.
+
+## Concluídas
 
 | Lacuna | Evidência |
 |---|---|
-| Sequência validada só no simulador (R3) | F1 na placa física em 17/11: `seq` 89 a 128 contínua e `lacunas: []` (`RESILIENCIA.md`) |
-| Heartbeat do firmware (R7) | `POST /api/heartbeat` e envio pela placa com o sensor em falha (firmware 2026.11.17.2, #35); aviso no painel |
-| Backup do banco sem restauração testada (R8) | Backup lógico com restauração testada no CI (`infra/backup/`, `backup-logico.yml`, #36); restauração de produção e do backup periódico seguem não testadas |
-| Limites restantes | `POST /empresas` (5 por hora por IP) e `POST /senha` (espera do login) com testes de 429 |
-| Sem alertas push | Web Push publicado na API (`/api/push/*`) e no painel (Front-End-pi #13) |
-| Deploy ainda parte da `everson` | Os dois workflows publicam a cada push na `main` (#40); a `everson` fica como credencial de reserva |
+| F1, F2 e F3 na placa física (17/11) | `RESILIENCIA.md` (#34) |
+| F4 na nuvem (23/11) | `RESILIENCIA.md`: API volta a responder em 20,6 s |
+| F5 mensagem duplicada | `duplicada: true` na placa em 17/11; testes automatizados (#122) |
+| Perda, disponibilidade e recuperação medidas | Perda 0,86% e disponibilidade 88,6% em 73,4 h; `RESILIENCIA.md` e `analise/sensor/relatorio_cosmos.md` (#125) |
+| Base de ≥ 48 h de coleta | `analise/sensor/relatorio.md` e `relatorio_cosmos.md` (#39) |
+| Sequência validada só no simulador (R3) | F1 na placa física em 17/11: `seq` 89 a 128 contínua e `lacunas: []` |
+| Heartbeat do firmware (R7) | `POST /api/heartbeat` e aviso no painel |
+| Backup do banco (R8) | Backup lógico com restauração testada no CI (`infra/backup/`, #36); restauração de produção em #131 |
+| Limites de requisição | `POST /empresas` e `POST /senha` com testes de 429 |
+| Alertas push | Web Push na API (`/api/push/*`) e no painel |
+| Deploy pela `main` | Os dois workflows publicam a cada push na `main` (#40) |
+| Cobertura | 99,8% no back-end e 99,2% no painel; mínimo de 98% no CI |

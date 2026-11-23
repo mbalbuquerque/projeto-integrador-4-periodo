@@ -13,9 +13,11 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import http_ece
+import py_vapid
 import pywebpush
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from py_vapid import VapidException
 
 import function_app
 import push
@@ -169,6 +171,31 @@ class TestValidacao(unittest.TestCase):
             self.assertTrue(push.configurado())
             self.assertEqual(push.chave_publica(), VAPID_PUBLICA)
 
+    def test_assunto_vapid(self):
+        base = {k: v for k, v in ENV_VAPID.items() if k != "VAPID_SUBJECT"}
+        casos = {"https://github.com/mbalbuquerque/Front-End-pi": False,
+                 "https://exemplo.com/": False, "http://exemplo.com": False, "": True,
+                 "mailto:alguem@exemplo.com": True,
+                 "https://stcoldtrackweb7319.z15.web.core.windows.net": True}
+        for sub, esperado in casos.items():
+            with mock.patch.dict(os.environ, {**base, "VAPID_SUBJECT": sub}, clear=True):
+                self.assertEqual(push.configurado(), esperado, sub)
+
+    def test_regra_do_assunto_igual_a_da_biblioteca(self):
+        for sub in ("https://github.com/x/y", "https://exemplo.com", "mailto:a@b.co",
+                    "mailto:semarroba", "http://exemplo.com", "https://localhost",
+                    push.SUBJECT_PADRAO, "https://exemplo.com/"):
+            self.assertEqual(bool(push._SUBJECT_OK.match(sub)), py_vapid._check_sub(sub), sub)
+
+    def test_assunto_invalido_avisa_uma_vez(self):
+        push._subject_avisado.clear()
+        env = {**ENV_VAPID, "VAPID_SUBJECT": "https://exemplo.com/caminho"}
+        with mock.patch.dict(os.environ, env):
+            with self.assertLogs(level="WARNING") as log:
+                push.configurado()
+                push.configurado()
+        self.assertEqual(len(log.output), 1)
+
 
 @mock.patch.dict(os.environ, ENV_VAPID)
 class TestEnvio(unittest.TestCase):
@@ -182,6 +209,21 @@ class TestEnvio(unittest.TestCase):
         self.assertEqual(kw["vapid_private_key"], VAPID_PRIVADA)
         self.assertEqual(kw["vapid_claims"], {"sub": "https://exemplo.invalido"})
         self.assertEqual((kw["ttl"], kw["timeout"]), (push.TTL_S, push.TIMEOUT_S))
+
+    def test_urgencia_alta_em_atencao_e_critico(self):
+        for status in ("ATENCAO", "CRITICO"):
+            with mock.patch.object(push, "webpush") as webpush:
+                push.enviar(inscricao(), {"status": status})
+            self.assertEqual(webpush.call_args.kwargs["headers"], {"Urgency": "high"})
+        with mock.patch.object(push, "webpush") as webpush:
+            push.enviar(inscricao(), {"status": "NORMAL"})
+        self.assertIsNone(webpush.call_args.kwargs["headers"])
+
+    def test_vapid_recusada_loga_a_mensagem(self):
+        with mock.patch.object(push, "webpush", side_effect=VapidException("Missing sub")):
+            with self.assertLogs(level="WARNING") as log:
+                self.assertEqual(push.enviar(inscricao(), {}), "falha")
+        self.assertIn("VapidException: Missing sub", "\n".join(log.output))
 
     def test_expirada_404_e_410(self):
         for codigo in (404, 410):
@@ -230,6 +272,16 @@ class TestCriptografiaReal(unittest.TestCase):
         claro = http_ece.decrypt(kw["data"], private_key=self.navegador,
                                  auth_secret=self.auth, version="aes128gcm")
         self.assertEqual(json.loads(claro), conteudo)
+
+    def test_assunto_padrao_assina_sem_vapid_exception(self):
+        env = {k: v for k, v in ENV_VAPID.items() if k != "VAPID_SUBJECT"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertTrue(push.configurado())
+            with mock.patch.object(pywebpush.requests, "post",
+                                   return_value=RespostaFalsa(201)) as post:
+                self.assertEqual(push.enviar(self.inscricao, {"status": "CRITICO"}), "ok")
+        self.assertEqual(post.call_args.kwargs["headers"]["urgency"], "high")
+        self.assertIn("vapid t=", post.call_args.kwargs["headers"]["authorization"])
 
     def test_servico_responde_410(self):
         with mock.patch.object(pywebpush.requests, "post", return_value=RespostaFalsa(410)):

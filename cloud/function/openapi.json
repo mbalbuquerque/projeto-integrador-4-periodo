@@ -1188,6 +1188,16 @@
               "pattern": "^[A-Za-z, ]+$"
             },
             "example": "ATENCAO,CRITICO"
+          },
+          {
+            "name": "antes",
+            "in": "query",
+            "required": false,
+            "description": "Pagination cursor (ISO 8601): only readings measured before it. Pass the `proximo` value of the previous page.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2026-11-09T12:00:00+00:00"
           }
         ],
         "responses": {
@@ -1210,6 +1220,11 @@
                       "items": {
                         "$ref": "#/components/schemas/Leitura"
                       }
+                    },
+                    "proximo": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Cursor for the next (older) page: pass it as `antes`. Null when there are no more readings."
                     },
                     "lacunas": {
                       "type": "array",
@@ -1235,6 +1250,7 @@
                       "seq": 42
                     }
                   ],
+                  "proximo": null,
                   "lacunas": [
                     {
                       "de": 38,
@@ -1502,22 +1518,22 @@
                   "antecipaExcursao": false,
                   "motivo": null,
                   "modelo": {
-                    "versao": "sensor-ridge-10min-v1",
-                    "fonte": "ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe, em bancada)",
+                    "versao": "sensor-ridge-10min-v2",
+                    "fonte": "Cosmos DB de produção, leituras da placa ESP32-C3 + DHT11 da equipe, em bancada",
                     "treino": {
-                      "de": "2026-09-29T19:23:00+00:00",
-                      "ate": "2026-11-17T02:18:00+00:00",
-                      "amostras": 496
+                      "de": "2026-11-17T02:44:00+00:00",
+                      "ate": "2026-11-19T04:56:00+00:00",
+                      "amostras": 2944
                     },
                     "teste": {
-                      "de": "2026-11-17T02:29:00+00:00",
-                      "ate": "2026-11-17T06:06:00+00:00",
-                      "amostras": 218
+                      "de": "2026-11-19T05:07:00+00:00",
+                      "ate": "2026-11-20T08:00:00+00:00",
+                      "amostras": 1267
                     },
-                    "maeModelo": 0.342,
-                    "maeBaseline": 0.3128,
-                    "rmseModelo": 0.4711,
-                    "rmseBaseline": 0.4941,
+                    "maeModelo": 0.3338,
+                    "maeBaseline": 0.319,
+                    "rmseModelo": 0.6618,
+                    "rmseBaseline": 0.652,
                     "superaBaseline": false,
                     "usaLeiturasDoSensor": true
                   }
@@ -3525,6 +3541,11 @@
             "type": "number",
             "description": "Optional. UTC epoch in seconds of the measurement: up to 5 min in the future and up to 7 days in the past. Without it, the time of receipt is used."
           },
+          "origem": {
+            "type": "string",
+            "enum": ["placa", "simulador"],
+            "description": "Optional. Where the reading came from: the physical board (`placa`) or the Wokwi simulator (`simulador`). Without it (older firmware) the reading is stored as `nao_informada`. Any other value is rejected with 400."
+          },
           "seq": {
             "type": "integer",
             "minimum": 1,
@@ -3538,7 +3559,8 @@
           "umidade": 81.0,
           "rssi": -58,
           "medidoEm": 1794240000,
-          "seq": 42
+          "seq": 42,
+          "origem": "placa"
         }
       },
       "TelemetriaGravada": {
@@ -3731,6 +3753,11 @@
           "seq": {
             "type": "integer",
             "description": "Sequence number sent by the sensor. Absent for readings of firmware without it."
+          },
+          "origem": {
+            "type": "string",
+            "enum": ["placa", "simulador", "nao_informada"],
+            "description": "Where the reading came from: physical board, Wokwi simulator, or `nao_informada` (older firmware or reading stored before the field existed)."
           }
         },
         "example": {
@@ -4358,6 +4385,36 @@
         ],
         "description": "What the driver screen shows: only the vehicle linked to the driver.",
         "properties": {
+          "historico": {
+            "type": "array",
+            "description": "Readings of the last hour, oldest first (at most 180), for the mini chart and the trip alerts on the driver screen. Empty when the vehicle has no sensor.",
+            "items": {
+              "type": "object",
+              "required": [
+                "temperatura",
+                "status",
+                "medidoEm"
+              ],
+              "properties": {
+                "temperatura": {
+                  "type": "number",
+                  "example": 17.5
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "NORMAL",
+                    "ATENCAO",
+                    "CRITICO"
+                  ]
+                },
+                "medidoEm": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
           "veiculo": {
             "type": "object",
             "required": [

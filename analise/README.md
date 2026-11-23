@@ -53,7 +53,8 @@ per√≠odo esperado (40 s). Os testes (`sensor/test_sensor_*.py`) usam dados sint√
 
 ```bash
 cd analise/sensor
-python modelo_previsao.py            # treina e avalia com o CSV versionado
+python descrever_cosmos.py --converter <export>/leituras.jsonl   # base do banco (export de infra/backup/exportar.py)
+python modelo_previsao.py            # treina e avalia com os CSV versionados
 python modelo_previsao.py --baixar   # baixa o canal de novo antes (re-treino com dados novos)
 ```
 

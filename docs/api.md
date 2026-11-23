@@ -394,6 +394,8 @@ do usuário, relido do banco a cada chamada, nunca da URL.
   "minutosSemLeitura": 1,
   "viagem": {"origem": "Petrolina - PE", "destino": "Suape - PE",
              "carga": "Manga Tommy, 12 paletes", "inicio": "2026-11-10T06:00:00-03:00", "fim": null},
+  "historico": [{"temperatura": 11.6, "status": "NORMAL", "medidoEm": "2026-11-10T20:31:00+00:00"},
+                {"temperatura": 11.8, "status": "NORMAL", "medidoEm": "2026-11-10T21:30:00+00:00"}],
   "sensor": "ok",
   "sensorFalhaDesde": null
 }
@@ -407,6 +409,9 @@ do usuário, relido do banco a cada chamada, nunca da URL.
 - `minutosSemLeitura`: minutos inteiros desde a medição da última leitura; `null` sem leitura.
 - `viagem`: a viagem do veículo em curso (começou e não tem fim, ou o fim ainda não chegou); com
   mais de uma, a que começou por último. `null` quando não há.
+- `historico`: leituras da última hora, da mais antiga para a mais nova (no máximo 180), só com
+  `temperatura`, `status` e `medidoEm`. Alimenta o mini gráfico e a lista de alertas da tela.
+  Lista vazia quando o veículo não tem sensor ou não houve leitura na última hora.
 - `sensor` e `sensorFalhaDesde`: estado do sensor de temperatura, com a mesma regra de
   `GET /dispositivos` (`falha` quando o contato mais recente foi um heartbeat `sensor_falha`).
   `null` quando o veículo não tem sensor ou o sensor nunca falou.
@@ -500,9 +505,9 @@ Resposta `200`:
  "previsao": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
  "baseline": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
  "recomendada": "baseline", "antecipaExcursao": false, "motivo": null,
- "modelo": {"versao": "sensor-ridge-10min-v1", "fonte": "ThingSpeak 3515173 (...)",
+ "modelo": {"versao": "sensor-ridge-10min-v2", "fonte": "Cosmos DB de produção, leituras da placa (...)",
             "treino": {"de", "ate", "amostras"}, "teste": {"de", "ate", "amostras"},
-            "maeModelo": 0.342, "maeBaseline": 0.3128, "rmseModelo": 0.4711, "rmseBaseline": 0.4941,
+            "maeModelo": 0.3338, "maeBaseline": 0.319, "rmseModelo": 0.6618, "rmseBaseline": 0.652,
             "superaBaseline": false, "usaLeiturasDoSensor": true}}
 ```
 
@@ -521,8 +526,9 @@ Erros: `400` `informe ?deviceId=` (operador ou gestor sem o parâmetro); `401` s
 vinculado a este motorista; fale com o gestor`; `429` mais de 30 chamadas por minuto do mesmo
 usuário; `503` `modelo indisponível`.
 
-Atualizar o modelo: `cd analise/sensor && python modelo_previsao.py --baixar` e publicar a API
-com o novo `modelo_sensor.json`.
+Atualizar o modelo: exportar o banco (`infra/backup/exportar.py`), rodar `python
+descrever_cosmos.py --converter <export>/leituras.jsonl` e `python modelo_previsao.py` em `analise/sensor`, e
+publicar a API com o novo `modelo_sensor.json`.
 
 ## Sensores (`/dispositivos`)
 

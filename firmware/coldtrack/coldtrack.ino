@@ -96,7 +96,7 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.17.3"
+#define FW_VERSAO "2026.11.17.4"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
@@ -247,6 +247,14 @@ int filaTamanho = 0;
 #define DHT22 22
 #ifndef DHT_TYPE
 #define DHT_TYPE DHT22
+#endif
+
+// Origem da leitura gravada no banco: "placa" (padrao) ou "simulador".
+// O build do Wokwi define ORIGEM_SIMULADOR no secrets.h (veja secrets.example.h).
+#ifdef ORIGEM_SIMULADOR
+#define ORIGEM_LEITURA "simulador"
+#else
+#define ORIGEM_LEITURA "placa"
 #endif
 
 // Placa fisica (ESP32-C3 com OLED 0.42" embutido): TELA_OLED no secrets.h.
@@ -562,6 +570,8 @@ bool reiniciouPorWatchdog() {
 // Agenda fixa: 20 s do inicio de um ciclo ao inicio do seguinte. O envio
 // (HTTPS, MQTT, fila) roda na tarefa de envio e nao empurra a medicao.
 const unsigned long INTERVALO_ENVIO = 20000;
+FiltroMediana filtroTemperatura = {{0}, 0, 0};
+FiltroMediana filtroUmidade = {{0}, 0, 0};
 
 unsigned long proximoCiclo = 0;     // millis() marcado para o proximo ciclo
 bool cicloImediato = true;          // mede ja (boot, configuracao pelo cabo)
@@ -2982,6 +2992,11 @@ void loop() {
     }
 
 
+    // Filtro de mediana (FILTRO_JANELA no secrets.h): so leitura valida chega aqui e entra na janela.
+    temperatura = filtroMediana(&filtroTemperatura, temperatura);
+    umidade = filtroMediana(&filtroUmidade, umidade);
+
+
     // ======================================================
     // DADOS DO MICROCLIMA
     // ======================================================
@@ -3039,13 +3054,13 @@ void loop() {
     time_t medidoEm = relogioOk() ? time(nullptr) : 0;
     unsigned long msMedicao = millis();
 
-    char payload[160];
+    char payload[192];
 
     // RSSI >= 0 (simulador) vai como null; sem relogio, medidoEm e omitido.
     uint32_t seq = proximaSeq();
 
     montarPayloadCore(payload, sizeof(payload), cfgId.c_str(),
-                      temperatura, umidade, rssi, medidoEm, seq);
+                      temperatura, umidade, rssi, medidoEm, seq, ORIGEM_LEITURA);
 
     Serial.print("Payload JSON: ");
     Serial.println(payload);

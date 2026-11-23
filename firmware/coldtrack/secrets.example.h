@@ -12,6 +12,10 @@
 #define WIFI_SSID     "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
 
+// Origem da leitura no banco: este exemplo e o build do simulador Wokwi, entao marca
+// "simulador". Na placa fisica APAGUE esta linha (sem ela o padrao e "placa").
+#define ORIGEM_SIMULADOR
+
 // Sensor: descomente na placa física com DHT11 (o padrão é DHT22, usado no Wokwi)
 // #define DHT_TYPE DHT11
 
@@ -30,3 +34,7 @@
 
 // Azure Function (endpoint de telemetria). Opcional: o firmware já usa este por padrão.
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
+
+// Filtro de mediana sobre as leituras validas do DHT (3 a 9 leituras; padrao 5; 1 desliga).
+// Mediana de 5 leituras a cada 20 s descarta um pico isolado e atrasa a tendencia em ~40 s.
+// #define FILTRO_JANELA 5

@@ -60,3 +60,14 @@ jobs:
           az functionapp deployment source config-zip \
             -g rg-coldtrack -n func-coldtrack-7319 \
             --src publicar.zip --build-remote true
+
+      # Verificação de saúde depois da publicação: a rota consulta o banco.
+      # Tenta por até 3 minutos (a função reinicia com o pacote novo).
+      - name: Conferir /api/health
+        run: |
+          for i in $(seq 1 18); do
+            codigo=$(curl -s -o saude.json -w "%{http_code}" https://func-coldtrack-7319.azurewebsites.net/api/health || true)
+            if [ "$codigo" = "200" ]; then cat saude.json; exit 0; fi
+            echo "tentativa $i: HTTP $codigo"; sleep 10
+          done
+          echo "::error::/api/health não respondeu 200 depois da publicação"; exit 1

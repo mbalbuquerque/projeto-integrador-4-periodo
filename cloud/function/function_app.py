@@ -50,7 +50,7 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import azure.functions as func
 from azure.cosmos import CosmosClient, exceptions
@@ -74,6 +74,7 @@ from cadastros import (
     validar_vinculo,
 )
 from contrato import (
+    ORIGEM_NAO_INFORMADA,
     PERFIL_PADRAO,
     PERFIS_CARGA,
     classificar,
@@ -128,6 +129,9 @@ HEARTBEAT_POR_MINUTO = 6
 LIMITE_SINAL_MOTORISTA_S = 5 * 60
 # A tela consulta a cada 20 s (3 por minuto); 30 por minuto por usuário segura um laço.
 MOTORISTA_POR_MINUTO = 30
+# Janela e teto do histórico devolvido em GET /motorista (mini gráfico da tela).
+HISTORICO_MOTORISTA_S = 3600
+HISTORICO_MOTORISTA_MAX = 180
 # Previsão do sensor: o painel e a tela do motorista consultam a cada 20 s; mesma folga.
 PREVISAO_SENSOR_POR_MINUTO = 30
 # Leituras pedidas ao banco para a previsão (20 s de cadência x 30 min = 90; folga).
@@ -339,6 +343,7 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
         "status": classificar(dados["temperatura"], perfil),
         "medidoEm": medido.isoformat(),
         "recebidoEm": recebido.isoformat(),
+        "origem": dados.get("origem", ORIGEM_NAO_INFORMADA),
     }
     if "seq" in dados:
         leitura["seq"] = dados["seq"]
@@ -956,10 +961,11 @@ def _dispositivo_da_empresa(device, empresa):
     return disp if disp and disp.get("empresaId") == empresa else None
 
 
-def consultar_leituras(device, empresa, limite, desde=None, status=None):
+def consultar_leituras(device, empresa, limite, desde=None, status=None, antes=None):
     """Leituras de um sensor da empresa, da mais nova para a mais antiga.
 
-    `desde` é epoch UTC em segundos; `status`, lista de status aceitos.
+    `desde` é epoch UTC em segundos; `status`, lista de status aceitos; `antes`, ISO 8601
+    (cursor de paginação: só leituras medidas antes dele).
     Usada por GET /leituras e pelo assistente do painel.
     """
     condicoes = ["c.deviceId = @device", "c.empresaId = @empresa"]
@@ -974,14 +980,17 @@ def consultar_leituras(device, empresa, limite, desde=None, status=None):
             "name": "@desde",
             "value": datetime.fromtimestamp(desde, timezone.utc).isoformat(),
         })
+    if antes is not None:
+        condicoes.append("c.medidoEm < @antes")
+        parametros.append({"name": "@antes", "value": antes})
     if status is not None:
         condicoes.append("ARRAY_CONTAINS(@status, c.status)")
         parametros.append({"name": "@status", "value": status})
-    return list(
+    itens = list(
         container().query_items(
             query=(
                 "SELECT TOP @limite c.deviceId, c.temperatura, c.umidade, c.rssi, "
-                "c.perfil, c.status, c.medidoEm, c.recebidoEm, c.seq FROM c WHERE "
+                "c.perfil, c.status, c.medidoEm, c.recebidoEm, c.seq, c.origem FROM c WHERE "
                 + " AND ".join(condicoes)
                 + " ORDER BY c.medidoEm DESC"
             ),
@@ -989,6 +998,11 @@ def consultar_leituras(device, empresa, limite, desde=None, status=None):
             partition_key=device,
         )
     )
+    for item in itens:
+        # Leitura gravada antes do campo existir (ou por firmware antigo).
+        if item.get("origem") is None:
+            item["origem"] = ORIGEM_NAO_INFORMADA
+    return itens
 
 
 @app.route(route="leituras", methods=["GET"])
@@ -1014,8 +1028,10 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"erros": erros}, 400)
 
     itens = consultar_leituras(device, usuario["empresaId"], limite,
-                               filtros["desde"], filtros["status"])
+                               filtros["desde"], filtros["status"], filtros["antes"])
     corpo = {"deviceId": device, "leituras": itens}
+    # Página cheia: `proximo` é o cursor (?antes=) da página seguinte; sem mais, null.
+    corpo["proximo"] = itens[-1]["medidoEm"] if len(itens) == limite else None
     # Lacuna só faz sentido sem filtro de status (o filtro tira leituras de propósito).
     if filtros["status"] is None:
         corpo["lacunas"] = lacunas_de_sequencia(itens)
@@ -1073,6 +1089,14 @@ def motorista(req: func.HttpRequest) -> func.HttpResponse:
     agora = datetime.now(timezone.utc)
     device = veiculo.get("deviceId")
     ultima = consultar_leituras(device, empresa, 1) if device else []
+    # Última hora de leituras (mais antiga primeiro) para o mini gráfico e os alertas
+    # da tela; com o sensor a cada 20 s são até 180 pontos.
+    desde = (agora - timedelta(seconds=HISTORICO_MOTORISTA_S)).timestamp()
+    historico = ([{"temperatura": h["temperatura"], "status": h["status"],
+                   "medidoEm": h["medidoEm"]}
+                  for h in reversed(consultar_leituras(device, empresa, HISTORICO_MOTORISTA_MAX,
+                                                       desde=desde))]
+                 if device else [])
     disp = ler("dispositivos", device) if device else None
     estado = (estado_do_dispositivo(disp, ultima[0].get("recebidoEm") if ultima else None)
               if disp is not None and disp.get("empresaId") == empresa else {})
@@ -1095,6 +1119,7 @@ def motorista(req: func.HttpRequest) -> func.HttpResponse:
         "status": status,
         "minutosSemLeitura": minutos,
         "viagem": viagem_ativa(empresa, codigo, agora),
+        "historico": historico,
         "sensor": estado.get("sensor"),
         "sensorFalhaDesde": estado.get("sensorFalhaDesde"),
     })

@@ -21,6 +21,10 @@ O login do GitHub Actions no Azure é aceito só para as branches `main` e `ever
 repositório (ver [`infra/README.md`](infra/README.md)); push em outra branch roda os testes, mas não
 publica.
 
+### Revisão de PRs
+
+Everson é o revisor designado da equipe: todo PR é revisado por ele antes do merge (comentário ou aprovação no PR). Vale a partir de 23/11/2026; os PRs anteriores foram mergeados sem revisão formal.
+
 ### Proteção da `main`
 
 A `main` deve exigir pull request e os testes verdes antes do merge. Só um administrador do
@@ -35,6 +39,8 @@ gh api -X PUT repos/mbalbuquerque/projeto-integrador-4-periodo/branches/main/pro
  "restrictions":null}
 EOF
 ```
+
+Estado em 23/11/2026: sem proteção nos dois repositórios, por decisão da equipe (temporária): a conta de quem desenvolve tem só permissão de escrita e a regra atrapalharia os merges e as publicações até a entrega de 30/11. O dono pode rodar o comando acima depois da entrega.
 
 Os nomes em `contexts` são os jobs do `testes.yml`; se um job for renomeado, a lista precisa
 acompanhar. O mesmo vale para o [Front-End-pi](https://github.com/mbalbuquerque/Front-End-pi)

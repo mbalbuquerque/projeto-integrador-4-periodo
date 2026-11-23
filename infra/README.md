@@ -340,12 +340,16 @@ um job da equipe, com a chave somente leitura.
 |---|---|
 | Export real de produção (16/11/2026, chave somente leitura) | 4.041 documentos em 7 containers, cerca de 1 MB, **8,1 s** (de uma máquina local) |
 | Contagens por container | `leituras` 4.025; `usuarios` 5; `empresas` 3; `limites` 3; `veiculos` 1; `dispositivos` 1; `viagens` 0 |
-| Restauração do export de produção | **não executada**: exige um Cosmos de teste e a regra do projeto proíbe Docker local para o emulador. O conteúdo real não foi restaurado em lugar nenhum |
+| Export real de produção (23/11/2026, chave somente leitura) | 16.105 documentos em 5 containers (`leituras` 16.100; `empresas` 3; `veiculos` 1; `dispositivos` 1; `viagens` 0), **9,4 s**; `usuarios` e `limites` ficaram de fora de propósito (e-mail e hash de senha) |
+| Conferência do export real e ensaio de restauração em memória (23/11/2026) | `verificar_export.py`: contagem do manifesto igual à do arquivo em todos os containers, nenhum documento sem `id` ou chave de partição, nenhum `id` repetido na partição; `restaurar.restaurar` rodou duas vezes contra um Cosmos falso em memória, 16.105 de 16.105 documentos restaurados, as duas rodadas em menos de 0,1 s, a segunda sem criar duplicata (idempotente) |
+| Restauração do export real num Cosmos de verdade | **não executada**: não há Docker nesta máquina, a regra do projeto proíbe o emulador local e o `restaurar.py` recusa contas `*.documents.azure.com`. O ensaio em memória prova que o arquivo está íntegro e que a lógica o aceita por inteiro, mas não prova que o serviço aceita os documentos. Para fechar: rodar `restaurar.py` contra o emulador ou uma conta de teste |
 | Restauração sintética no emulador (CI) | PR #74: banco sintético de 63 documentos em 4 containers exportado e restaurado em outro banco, contagens iguais, leitura de um documento por container e chave de partição e TTL recriados; execução inteira dos testes em cerca de 1 s (o emulador leva cerca de 25 s para subir) |
 
 RTO do backup lógico: tempo de recriar o destino mais o da restauração (no CI, em
 runner pequeno, o volume sintético restaurou em menos de 1 s); para o volume atual fica na ordem de minutos, e cresce de forma linear com o
 número de documentos (o `upsert` documento a documento é o gargalo).
+
+**Conferir um export sem Cosmos**: `python infra/backup/verificar_export.py <pasta-do-export>` confere o manifesto com os arquivos, procura documento sem `id` ou chave de partição e `id` repetido, e ensaia a restauração duas vezes em memória (sem rede). Sai com 1 se algo divergir. Testes em `infra/backup/test_verificar_export.py`, que o job `Backup logico` já roda.
 
 **Teste no CI**: o workflow `.github/workflows/backup-logico.yml` sobe o emulador oficial do
 Cosmos DB, cria um banco sintético com os mesmos containers e chaves de partição do real,
