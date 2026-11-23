@@ -68,7 +68,7 @@ back-end/firmware/infra (`projeto-integrador-4-periodo`) e painel web (`Front-En
 | ID | Requisito | Onde está | Evidência | Status |
 |---|---|---|---|---|
 | MOB-01 | App autenticando e listando leituras reais | `Front-End-pi` (PWA: `manifest.json`, `sw.js`) | PWA com login, consumindo a API publicada; tela do motorista (`/motorista`) e alertas push (Web Push) | Atendido |
-| MOB-02 | Protótipo navegável | PWA em produção | O PWA funcional serve como protótipo navegável; não há arquivo no Figma (entendimento da equipe) | Atendido |
+| MOB-02 | Protótipo navegável | PWA em produção | O PWA funcional serve como protótipo navegável; não há arquivo no Figma, e o professor confirmou que o PWA cobre a exigência (23/11) | Atendido |
 
 ## Comportamento do Consumidor
 
