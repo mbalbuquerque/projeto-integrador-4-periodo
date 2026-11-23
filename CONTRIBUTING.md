@@ -21,6 +21,10 @@ O login do GitHub Actions no Azure é aceito só para as branches `main` e `ever
 repositório (ver [`infra/README.md`](infra/README.md)); push em outra branch roda os testes, mas não
 publica.
 
+### Revisão de PRs
+
+Everson é o revisor designado da equipe: todo PR é revisado por ele antes do merge (comentário ou aprovação no PR). Vale a partir de 23/11/2026; os PRs anteriores foram mergeados sem revisão formal.
+
 ### Proteção da `main`
 
 A `main` deve exigir pull request e os testes verdes antes do merge. Só um administrador do
