@@ -18,6 +18,7 @@ Payload esperado (POST /api/telemetria):
 import bisect
 import re
 import time
+from datetime import datetime
 
 DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{3,40}$")
 
@@ -217,11 +218,21 @@ def filtros_de_leitura(params, agora=None):
 
     horas:  1 a 168 — só leituras medidas nas últimas N horas.
     status: lista separada por vírgula (ex.: ATENCAO,CRITICO).
+    antes:  ISO 8601 — cursor de paginação, só leituras medidas antes dele (use `proximo`).
 
-    Retorna (erros, filtros), com filtros = {"desde": epoch | None, "status": [..] | None}.
+    Retorna (erros, filtros), com filtros = {"desde": epoch | None, "status": [..] | None,
+    "antes": str | None}.
     """
     erros = []
-    filtros = {"desde": None, "status": None}
+    filtros = {"desde": None, "status": None, "antes": None}
+
+    antes = params.get("antes")
+    if antes is not None:
+        try:
+            datetime.fromisoformat(antes.replace("Z", "+00:00"))
+            filtros["antes"] = antes
+        except ValueError:
+            erros.append("antes: data e hora ISO 8601 (use o campo proximo da resposta)")
 
     horas = params.get("horas")
     if horas is not None:

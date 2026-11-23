@@ -1188,6 +1188,16 @@
               "pattern": "^[A-Za-z, ]+$"
             },
             "example": "ATENCAO,CRITICO"
+          },
+          {
+            "name": "antes",
+            "in": "query",
+            "required": false,
+            "description": "Pagination cursor (ISO 8601): only readings measured before it. Pass the `proximo` value of the previous page.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2026-11-09T12:00:00+00:00"
           }
         ],
         "responses": {
@@ -1210,6 +1220,11 @@
                       "items": {
                         "$ref": "#/components/schemas/Leitura"
                       }
+                    },
+                    "proximo": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Cursor for the next (older) page: pass it as `antes`. Null when there are no more readings."
                     },
                     "lacunas": {
                       "type": "array",
@@ -1235,6 +1250,7 @@
                       "seq": 42
                     }
                   ],
+                  "proximo": null,
                   "lacunas": [
                     {
                       "de": 38,

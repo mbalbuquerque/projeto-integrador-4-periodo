@@ -49,6 +49,8 @@ class ContainerRotas(ContainerFalso):
                 itens = [i for i in itens if i.get("deviceId") == p[nome]]
         if "@desde" in p:
             itens = [i for i in itens if i["medidoEm"] >= p["@desde"]]
+        if "@antes" in p:
+            itens = [i for i in itens if i["medidoEm"] < p["@antes"]]
         if "@status" in p:
             itens = [i for i in itens if i.get("status") in p["@status"]]
         if "ORDER BY c.medidoEm DESC" in query:
@@ -417,6 +419,50 @@ class TestLeituras(BaseRotas):
         self.assertEqual(status, 200)
         self.assertEqual(corpo["lacunas"], [{"de": 9, "ate": 10, "faltam": 2}])
         self.assertEqual(corpo["leituras"][0]["seq"], 11)
+
+
+class TestPaginacaoLeituras(BaseRotas):
+    def setUp(self):
+        super().setUp()
+        # Duas leituras de teste podem existir no setUp: filtra as nossas por prefixo.
+        self.containers["leituras"].itens[:] = [
+            i for i in self.containers["leituras"].itens if i.get("deviceId") != "dev-01"]
+        base = {"deviceId": "dev-01", "empresaId": "E-A", "temperatura": 12.0, "umidade": 85.0,
+                "rssi": -60, "perfil": "manga", "status": "NORMAL",
+                "recebidoEm": "2026-05-10T11:00:01+00:00"}
+        for m in range(5):
+            self.containers["leituras"].create_item({
+                **base, "id": f"dev-01~p{m}", "seq": m,
+                "medidoEm": f"2026-05-10T11:0{m}:00+00:00"})
+
+    def pagina(self, **extra):
+        params = {"deviceId": "dev-01", "limite": "2", **extra}
+        return self.chamar(LEITURAS, "GET", "/api/leituras", email="operador@a.com",
+                           params=params)
+
+    def test_percorre_todas_as_paginas_sem_repetir(self):
+        vistas, cursor = [], None
+        for _ in range(5):
+            status, corpo = self.pagina(**({"antes": cursor} if cursor else {}))
+            self.assertEqual(status, 200)
+            vistas += [i["seq"] for i in corpo["leituras"]]
+            cursor = corpo["proximo"]
+            if cursor is None:
+                break
+        self.assertEqual(vistas, [4, 3, 2, 1, 0])
+
+    def test_ultima_pagina_sem_proximo(self):
+        status, corpo = self.pagina(antes="2026-05-10T11:02:00+00:00")
+        self.assertEqual(status, 200)
+        self.assertEqual([i["seq"] for i in corpo["leituras"]], [1, 0])
+        self.assertEqual(corpo["proximo"], "2026-05-10T11:00:00+00:00")
+        status, corpo = self.pagina(antes="2026-05-10T11:00:00+00:00")
+        self.assertEqual(corpo["leituras"], [])
+        self.assertIsNone(corpo["proximo"])
+
+    def test_antes_invalido_responde_400(self):
+        status, corpo = self.pagina(antes="ontem")
+        self.assertEqual(status, 400)
 
 
 class TestDispositivos(BaseRotas):

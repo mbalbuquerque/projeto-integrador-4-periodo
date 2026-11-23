@@ -961,10 +961,11 @@ def _dispositivo_da_empresa(device, empresa):
     return disp if disp and disp.get("empresaId") == empresa else None
 
 
-def consultar_leituras(device, empresa, limite, desde=None, status=None):
+def consultar_leituras(device, empresa, limite, desde=None, status=None, antes=None):
     """Leituras de um sensor da empresa, da mais nova para a mais antiga.
 
-    `desde` é epoch UTC em segundos; `status`, lista de status aceitos.
+    `desde` é epoch UTC em segundos; `status`, lista de status aceitos; `antes`, ISO 8601
+    (cursor de paginação: só leituras medidas antes dele).
     Usada por GET /leituras e pelo assistente do painel.
     """
     condicoes = ["c.deviceId = @device", "c.empresaId = @empresa"]
@@ -979,6 +980,9 @@ def consultar_leituras(device, empresa, limite, desde=None, status=None):
             "name": "@desde",
             "value": datetime.fromtimestamp(desde, timezone.utc).isoformat(),
         })
+    if antes is not None:
+        condicoes.append("c.medidoEm < @antes")
+        parametros.append({"name": "@antes", "value": antes})
     if status is not None:
         condicoes.append("ARRAY_CONTAINS(@status, c.status)")
         parametros.append({"name": "@status", "value": status})
@@ -1024,8 +1028,10 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"erros": erros}, 400)
 
     itens = consultar_leituras(device, usuario["empresaId"], limite,
-                               filtros["desde"], filtros["status"])
+                               filtros["desde"], filtros["status"], filtros["antes"])
     corpo = {"deviceId": device, "leituras": itens}
+    # Página cheia: `proximo` é o cursor (?antes=) da página seguinte; sem mais, null.
+    corpo["proximo"] = itens[-1]["medidoEm"] if len(itens) == limite else None
     # Lacuna só faz sentido sem filtro de status (o filtro tira leituras de propósito).
     if filtros["status"] is None:
         corpo["lacunas"] = lacunas_de_sequencia(itens)

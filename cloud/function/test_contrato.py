@@ -189,7 +189,18 @@ class TestFiltros(unittest.TestCase):
         return filtros_de_leitura(params, agora=self.AGORA)
 
     def test_sem_filtros(self):
-        self.assertEqual(self.filtros(), ([], {"desde": None, "status": None}))
+        self.assertEqual(self.filtros(),
+                         ([], {"desde": None, "status": None, "antes": None}))
+
+    def test_antes_cursor_de_paginacao(self):
+        erros, f = self.filtros(antes="2026-11-09T12:00:00+00:00")
+        self.assertEqual(erros, [])
+        self.assertEqual(f["antes"], "2026-11-09T12:00:00+00:00")
+        self.assertEqual(self.filtros(antes="2026-11-09T12:00:00Z")[0], [])
+
+    def test_antes_invalido(self):
+        for valor in ("ontem", "", "2026-13-40"):
+            self.assertTrue(self.filtros(antes=valor)[0], valor)
 
     def test_horas(self):
         erros, f = self.filtros(horas="24")
