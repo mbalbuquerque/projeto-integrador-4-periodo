@@ -26,7 +26,7 @@ resultado foi observado e registrado aqui.
 | F2 Queda de energia | Volta a enviar em até 60 s, sem perder a sequência | Aprovado na placa física (17/11) |
 | F4 Serviço em nuvem fora (30 s) | Serviço volta sozinho; dispositivo retém e reenvia; zero perda | Parcial: lado da nuvem aprovado em 23/11 (a API voltou a responder 200 em 20,6 s depois do `start`); retenção e reenvio pela placa seguem pendentes, pois a placa está desligada (issue de F4 na placa) |
 | F5 Mensagem duplicada | Apenas 1 registro no banco | Aprovado: reenvio idêntico responde `duplicada: true` e não grava de novo (placa física em 17/11; testes `test_telemetria_duplicada_reenvio_identico` e `test_reenvio_igual` passando em 23/11) |
-| F6 ThingSpeak indisponível | O fluxo pela API continua e o painel segue atualizado | Pendente de execução com a placa (chave inválida no canal). O painel e a API não dependem do ThingSpeak (a placa envia direto à API; o ThingSpeak só alimenta a tela Monitoramento) |
+| F6 ThingSpeak indisponível | O fluxo pela API continua e o painel segue atualizado | **Parcial.** Execução real (chave inválida no canal com a placa ligada) pendente (#123). Verificado sem a placa: a Function App não referencia o ThingSpeak em nenhum módulo (teste `cloud/function/test_independencia_thingspeak.py`); a placa envia à API por HTTPS e publica no ThingSpeak por MQTT depois, com falha do MQTT só adiando a próxima tentativa (`garantirMqtt`, `coldtrack.ino`); o painel lê a API em tudo (`src/lib/api.js`, `src/lib/leituras.js`, `Dashboard.jsx` a cada 20 s) e só a tela Monitoramento consulta o ThingSpeak, onde a falha do canal mostra "indisponível" sem valor antigo (`Monitoramento.test.jsx`, caso "falha do canal") e não afeta as outras telas |
 
 Resultados de cada teste (data, procedimento, tempo medido) são anotados abaixo.
 
@@ -69,3 +69,20 @@ Fonte: leituras gravadas no Cosmos DB pela placa física (`analise/sensor/relato
 | Recuperação em F4 (nuvem) | 20,6 s depois do `start` (23/11) | volta sozinho |
 
 A perda mede o que a placa numerou e a API não recebeu; o tempo com a placa desligada ou sem rede não gera `seq` e entra na disponibilidade, não na perda. A causa das lacunas não consta nos dados.
+
+### Medições de campo adicionais (23/11/2026, sem a placa ligada)
+
+Fonte e método em `analise/sensor/relatorio_campo.md` (script `medir_campo.py`, a partir do mesmo export de `leituras`). Só dado gravado; nenhuma medição ao vivo.
+
+| Medida | Resultado | Meta |
+|---|---|---|
+| Perda em 24 h (50 janelas deslizantes de 24 h, passo 1 h, pela `seq`) | melhor 0,00%; mediana 1,12%; pior 1,96%; **23 de 50 janelas ficam em até 1%** | no máximo 1% em 24 h |
+| Onde está a perda | um único buraco de **63 leituras** (18/11 17:18 a 17:39 UTC) responde por 62,4% das 101 faltantes; o resto são 31 buracos de 1 a 4 leituras, 26 deles (33 leituras) em 20/11 entre 04:31 e 05:11 UTC | explicar |
+| Latência placa → banco, tempo real (10.692 leituras com atraso < 60 s) | mediana 3,9 s; p95 7,8 s; p99 19,1 s; máximo 58,8 s | até 2 intervalos de envio (40 s) |
+| Reenvio de buffer (R2) em campo | 1.018 leituras (8,7%) entregues com atraso ≥ 60 s, em 21 reenvios, todos com `seq` consecutivo e na ordem da medição; o maior: 641 leituras (`seq` 6352 a 6992), medidas entre 17:39 e 21:46 UTC de 18/11 e entregues até 21:47, com atraso máximo de 166,9 min | guardar e reenviar em ordem |
+| Última etapa, banco → tela | o painel consulta a API a cada 20 s (`UPDATE_INTERVAL`, `config.js`; `usePolling` no `Dashboard.jsx`): de 0 a 20 s | n/a |
+| Latência ponta a ponta, **estimada** (composição, não medida) | espera pela próxima leitura (até 20 s) + upload (mediana 3,9 s, p95 7,8 s) + painel (até 20 s): típico em torno de 24 s e no pior caso cerca de 48 s | até 2 intervalos de envio (40 s); acima disso, explicar |
+
+Leitura honesta: a perda de 24 h **não é sempre ≤ 1%**. Metade das janelas passa da meta por causa de dois episódios (o buraco de 63 leituras em 18/11 e a instabilidade de 20/11 de madrugada), em que a placa numerou leituras que não chegaram ao banco. O dado não registra a causa; é o ponto a investigar antes de 30/11 e a medição de 24 h seguidas com a placa ligada continua pendente (#125).
+
+**Não medido** (depende da placa ligada): latência ao vivo com estímulo (#126), watchdog travando na placa física (#124), F4 com retenção e reenvio pela placa (#121) e F6 real (#123).
