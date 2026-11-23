@@ -13,6 +13,9 @@ demanda, toda segunda-feira e quando as dependências mudam. O relatório do ZAP
 | ZAP baseline (passivo) | `https://func-coldtrack-7319.azurewebsites.net/api/docs` | **0 alertas altos**, 12 avisos, 56 verificações sem apontamento |
 | ZAP API scan (ativo, autenticado) | Contêiner da API com emulador do Cosmos, nunca produção (workflow `Compose e ZAP`) | **0 alertas altos**, 1 médio, 6 baixos, 4 informativos; 117 verificações sem apontamento |
 
+| `bandit` (análise estática) | `cloud/function` (sem os testes) | **0 altos**; 3 médios de baixa confiança e 1 baixo, todos triados na seção abaixo (23/11) |
+| Segredos no histórico do Git | Os dois repositórios, todas as branches | Nenhum segredo real (23/11, seção abaixo) |
+
 A varredura é passiva: observa as respostas, não ataca. Ela não substitui um teste de invasão nem a
 verificação de autorização por objeto, que está nos testes automatizados (`test_acesso.py`,
 `test_seguranca.py`).
@@ -70,3 +73,44 @@ exercitados de ponta a ponta; o painel (site estático) não foi coberto; a auto
 continua nos testes automatizados. A varredura envia o mesmo token a todas as rotas, e as rotas
 `/api/sair` e `/api/senha` invalidam a sessão durante o scan, o que pode reduzir a profundidade das
 requisições seguintes.
+
+## Análise estática (bandit) e dependências, 23/11/2026
+
+O `bandit` roda no job da API do `testes.yml` e falha o CI com achado de severidade e confiança
+médias ou mais. Resultado em `cloud/function` (2.713 linhas, sem os testes e os scripts):
+
+| Achado | Onde | Triagem |
+|---|---|---|
+| B608, médio, confiança baixa (3) | `function_app.py` (consulta de exportação, consulta de leituras e consulta do assistente) | Falso positivo: o texto SQL junta só nomes de campo e condições escritos no código; todo valor vindo do usuário entra como parâmetro (`@e`, `@device`, `@limite`) |
+| B105, baixo (1) | `chat.py` | Falso positivo: é a URL de escopo do Azure OpenAI (`.../.default`), não uma senha |
+
+Painel: o ESLint roda com `--max-warnings 0` e proíbe `innerHTML`. O `npm audit --omit=dev` aponta
+2 avisos **moderados** em `react-router` 6.x / `react-router-dom` (redirecionamento aberto por
+barra invertida em `<Link>` e injeção de construtor na hidratação de SSR, GHSA-wrjc-x8rr-h8h6 e
+GHSA-337j-9hxr-rhxg). O painel é uma SPA estática, sem SSR, e os destinos dos `<Link>` são rotas
+internas fixas; a correção exige a versão 7.18, que muda a API, então fica como item do Dependabot
+para depois da entrega, sem bloquear o CI (que só falha em alerta alto).
+
+## Segredos no histórico do Git, 23/11/2026
+
+Varredura de todos os commits de todas as branches dos dois repositórios (`git log --all -p`),
+procurando chaves de conta, cadeias de conexão, chaves privadas, tokens do GitHub, chaves de API e
+atribuições de `senha`, `secret`, `token` ou `key` com valor literal. Nenhum arquivo `secrets.h`,
+`.env`, `local.settings.json`, `.pem` ou `.pfx` passou pelo histórico. Os 7 apontamentos do filtro
+foram conferidos um a um e são todos falsos positivos:
+
+| Apontamento | Natureza |
+|---|---|
+| `AccountKey=` em `.env.example` e `compose-zap.yml` (back) | Chave pública e conhecida do emulador do Cosmos DB, usada só em contêiner de teste |
+| Senhas literais em `test_rotas.py` e `test_acesso.py` (back) e em `sensores-cabo.spec.js` e `Sensores.test.jsx` (front) | Dados de teste (usuários e Wi-Fi fictícios) |
+| Cadeias longas em `package-lock.json` (front) | Hashes de integridade (`sha512`) dos pacotes |
+
+A varredura não encontrou a chave de escrita do ThingSpeak nem chaves de sensores em nenhum commit. Como a
+regra do professor é zerar o critério de Segurança por segredo no histórico, repetir a varredura
+antes de criar a tag `v1.0`.
+
+## Proteção da `main`
+
+Em 23/11 a `main` dos dois repositórios segue sem proteção: a conta usada nos testes tem permissão
+de escrita, mas não de administrador, e só um administrador consegue ligar a regra (comando em
+[`CONTRIBUTING.md`](../CONTRIBUTING.md)). Item pendente para o dono do repositório antes de 30/11.

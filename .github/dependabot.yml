@@ -1,0 +1,18 @@
+# Acompanha as dependências da API, das Actions e da imagem Docker. Um PR por semana, no máximo 3 abertos.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /cloud/function
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: docker
+    directory: /infra
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
