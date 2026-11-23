@@ -34,3 +34,7 @@
 
 // Azure Function (endpoint de telemetria). Opcional: o firmware já usa este por padrão.
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
+
+// Filtro de mediana sobre as leituras validas do DHT (3 a 9 leituras; padrao 5; 1 desliga).
+// Mediana de 5 leituras a cada 20 s descarta um pico isolado e atrasa a tendencia em ~40 s.
+// #define FILTRO_JANELA 5
