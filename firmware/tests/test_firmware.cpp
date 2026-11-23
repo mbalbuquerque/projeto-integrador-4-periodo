@@ -268,7 +268,14 @@ int main() {
     test_extrair_numero_do_json();
     test_classificacao_de_faixa_termica();
     test_classificacao_sem_limite_inferior();
-XX: " << testes_passaram << "/" << total_testes << " testes passaram.\n";
+    test_extrair_numero_com_espaco_e_texto_invalido();
+    test_filtro_mediana_descarta_pico_isolado();
+    test_filtro_mediana_janela_parcial_e_par();
+    test_filtro_mediana_janela_desliza();
+    test_filtro_mediana_nan_nao_entra();
+    test_filtro_mediana_estado_corrompido_reinicia();
+
+    std::cout << "\nResultado: " << testes_passaram << "/" << total_testes << " testes passaram.\n";
     return (testes_passaram == total_testes) ? 0 : 1;
 }
 
