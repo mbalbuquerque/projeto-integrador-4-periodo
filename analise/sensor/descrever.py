@@ -184,13 +184,14 @@ def relatorio(m):
         L.append(f"**Atendida.** Há um trecho contínuo de {_f(_h(maior_s))} h (sem lacuna maior que "
                  f"{FATOR_LACUNA * INTERVALO_S} s), acima das {META_HORAS} h exigidas.\n")
     else:
-        L.append(f"**Não atendida como trecho contínuo.** A maior janela sem lacuna tem "
-                 f"{_f(_h(maior_s))} h, abaixo das {META_HORAS} h. A soma das horas cobertas é "
-                 f"{_f(cob_h)} h ({'acima' if cob_h >= META_HORAS else 'também abaixo'} das "
-                 f"{META_HORAS} h), mas isso são trechos separados por lacunas, não "
-                 f"{META_HORAS} h seguidas. O período total (primeira a última leitura) é muito "
-                 "maior que a cobertura real: há semanas sem leitura entre as sessões "
-                 "(placa desligada ou sem rede; a causa não consta nos dados).\n")
+        soma = cob_h >= META_HORAS
+        titulo = ("**Não atendida como trecho contínuo; atendida pela soma das horas cobertas.**"
+                  if soma else "**Não atendida.**")
+        L.append(f"{titulo} A maior janela sem lacuna tem {_f(_h(maior_s))} h, abaixo das "
+                 f"{META_HORAS} h seguidas. A soma das horas cobertas é {_f(cob_h)} h "
+                 f"({'acima' if soma else 'abaixo'} das {META_HORAS} h), em trechos separados "
+                 "por lacunas (placa desligada ou sem rede; a causa não consta nos dados). "
+                 "O período entre a primeira e a última leitura é maior que a cobertura real.\n")
     L.append("## Intervalo entre leituras\n")
     L.append("| métrica | valor |\n|---|---|")
     L.append(f"| esperado | {INTERVALO_S} s |")
