@@ -92,3 +92,5 @@ Faixa física do DHT11: temperatura 0 a 50 °C, umidade 20 a 90 %. Faixa aceita 
 ![série](figuras/serie.png)
 
 ![janelas](figuras/janelas.png)
+
+Limpeza passo a passo da base do Cosmos (outro dispositivo, sem `seq`, duplicados, fora de faixa, instante repetido), com contagens antes e depois: `limpeza.md`.
