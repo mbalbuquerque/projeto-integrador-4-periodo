@@ -9,11 +9,11 @@ Versão completa por categoria STRIDE em [`docs/stride.md`](../docs/stride.md).
 | **Elevation of privilege / IDOR** | Usuário da empresa A troca o `deviceId` e lê a carga da empresa B | Vazamento de dados de cliente | **Verificação de dono** em toda rota com ID (`exigir_dono` em `function_app.py`) |
 | **Spoofing do sensor** | Alguém manda leitura falsa para `/api/telemetria` | Alarme falso, ou carga estragada sem alarme | Chave aleatória por sensor, guardada só como SHA-256 (já existia) |
 | **Denial of service** | Força bruta no login | Conta bloqueada e custo na nuvem | Limite por IP e espera crescente no login (já existia) |
-| **Information Disclosure** | Usuário acessa leituras de sensor de outra empresa via `?deviceId=` | Vazamento de temperatura/carga de cliente | `exigir_dono("sensor", deviceId, usuario)` em `GET /api/leituras` e `GET /api/predict/sensor` |
-| **Tampering** | Gestor malicioso altera veículo/viagem de outro gestor via `PUT /api/veiculos/{id}` | Dados de frota corrompidos | `exigir_dono("veiculo", id, usuario)` e `exigir_dono("viagem", id, usuario)` nas rotas PUT/DELETE |
+| **Information Disclosure** | Usuário acessa leituras de sensor de outra empresa via `?deviceId=` | Vazamento de temperatura/carga de cliente | `exigir_dono("dispositivos", deviceId, usuario, ...)` em `GET /api/leituras` e `GET /api/predict/sensor` |
+| **Tampering** | Gestor da empresa A altera veículo ou viagem da empresa B via `PUT /api/veiculos/{id}` | Dados de frota corrompidos | `exigir_dono("veiculos", id, usuario, ...)` e `exigir_dono("viagens", id, usuario, ...)` nas rotas GET/PUT/DELETE com ID |
 
 ## O que continua aberto
 
 - A chave do sensor fica gravada na flash da placa: quem tiver a placa na mão consegue lê-la e forjar aquele sensor.
-- O 2FA vale para o gestor; o motorista não tem 2FA.
+- O 2FA é opcional: cada usuário liga o seu; a API não obriga nenhum perfil a usar.
 - O Cosmos DB não tem criptografia em repouso gerenciada pelo cliente (usa chaves Microsoft).
