@@ -90,6 +90,9 @@ def ler_token(token, segredo):
                            options={"require": ["sub", "perfil", "emp", "exp"]})
     except jwt.PyJWTError:
         return None
+    # O desafio do 2FA (senha certa, código ainda não) nunca vale como token de acesso.
+    if carga.get("2fa"):
+        return None
     return carga if carga.get("perfil") in PERFIS else None
 
 
@@ -147,22 +150,22 @@ def mascarar_email(email):
 
 
 def _codigo_missao() -> str:
-    """Lê o código de missão do ambiente (placeholder até o professor enviar)."""
-    return os.environ.get("MISSAO_CODIGO", "SEM_CODIGO")
+    """Código de missão da app setting MISSAO_CODIGO (nunca no código)."""
+    return os.environ.get("MISSAO_CODIGO") or "SEM-CODIGO"
 
 
 def log_2fa_bloqueado(motivo: str, email: str = "") -> None:
-    """Registra bloqueio de 2FA no formato esperado pelo Log Analytics."""
+    """'2fa bloqueado [CODIGO] - motivo - a***@x.com': consulta do Log Analytics."""
     logging.warning("2fa bloqueado [%s] - %s - %s", _codigo_missao(), motivo, mascarar_email(email))
 
 
-def log_idor_bloqueado(recurso: str, detalhe: str = "") -> None:
-    """Registra bloqueio de IDOR no formato esperado pelo Log Analytics."""
-    if detalhe:
-        msg = f"{recurso} - {detalhe}"
-    else:
-        msg = recurso
-    logging.warning("idor bloqueado [%s] - %s", _codigo_missao(), msg)
+def log_idor_bloqueado(rota: str, email: str, alvo) -> None:
+    """'idor bloqueado [CODIGO] rota=... usuario=a***@x.com alvo=...'.
+
+    O alvo vem da URL (dado do atacante): entra entre aspas e cortado, sem quebrar o log.
+    """
+    logging.warning("idor bloqueado [%s] rota=%s usuario=%s alvo=%r", _codigo_missao(), rota,
+                    mascarar_email(email), str(alvo)[:80])
 
 
 # ------------------------------------------------------------ chave de dispositivo
@@ -209,17 +212,19 @@ def verificar_totp(
     Returns:
         (valido, novo_contador): True se código válido e não repetido; novo contador a gravar
     """
-    if not isinstance(codigo, str) or not codigo.isdigit() or len(codigo) != 6:
+    if (not segredo or not isinstance(codigo, str) or not codigo.isdigit()
+            or len(codigo) != 6):
         return False, contador_usado
 
     totp = pyotp.TOTP(segredo)
     agora = int(time.time())
-    contador_atual = totp.timecode(agora)
+    contador_atual = agora // totp.interval  # passo de 30 s (timecode() pede datetime na 2.9)
 
     # Verifica na janela permitida
     for delta in range(-janela, janela + 1):
         contador_teste = contador_atual + delta
-        if totp.at(contador_teste) == codigo:
+        # generate_otp recebe o passo; totp.at() receberia um horário (epoch).
+        if hmac.compare_digest(totp.generate_otp(contador_teste), codigo):
             # Anti-replay: contador deve ser maior que o último usado
             if contador_teste <= contador_usado:
                 return False, contador_usado

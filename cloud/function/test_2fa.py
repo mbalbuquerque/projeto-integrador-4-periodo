@@ -1,16 +1,16 @@
-#!/usr/bin/env python3
-"""Testes de 2FA (TOTP + Recovery Codes) — roda com: python -m unittest seguranca_mod.testes.test_2fa"""
+"""Testes do módulo de 2FA em seguranca.py (TOTP, códigos de recuperação, desafio, logs).
+
+Rodar em cloud/function: python -m unittest test_2fa -v
+As rotas (/login/2fa, /2fa/...) estão em test_2fa_rotas.py.
+"""
 
 import os
-import sys
 import time
 import unittest
 from unittest import mock
 
-# Adiciona o diretório cloud/function ao path (onde está seguranca_mod.py)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'cloud', 'function'))
+import pyotp
 
-# Importa o módulo seguranca do cloud/function
 import seguranca as seguranca_mod
 
 
@@ -32,11 +32,11 @@ class TestTOTP(unittest.TestCase):
         self.assertIn("teste%40coldtrack.dev", uri)  # email URL-encoded
 
     def test_verificar_totp_codigo_valido(self):
-        totp = __import__('pyotp').TOTP(self.segredo)
+        totp = pyotp.TOTP(self.segredo)
         # Usa tempo fixo para evitar flakiness
         agora = 1_700_000_000
-        contador = totp.timecode(agora)
-        codigo = totp.at(contador)
+        contador = agora // 30
+        codigo = totp.at(agora)  # o que o app autenticador mostra neste horário
 
         # Mock time.time to return our fixed time
         with mock.patch('time.time', return_value=agora):
@@ -46,37 +46,50 @@ class TestTOTP(unittest.TestCase):
         self.assertIn(novo, (contador - 1, contador, contador + 1))
 
     def test_verificar_totp_replay_bloqueado(self):
-        totp = __import__('pyotp').TOTP(self.segredo)
-        agora = int(time.time())
-        contador = totp.timecode(agora)
-        codigo = totp.at(contador)
+        totp = pyotp.TOTP(self.segredo)
+        agora = 1_700_000_000
+        codigo = totp.at(agora)
 
         # Primeira vez: passa
-        valido, novo = seguranca_mod.verificar_totp(self.segredo, codigo, self.contador_inicial)
+        with mock.patch('time.time', return_value=agora):
+            valido, novo = seguranca_mod.verificar_totp(self.segredo, codigo,
+                                                        self.contador_inicial)
         self.assertTrue(valido)
 
         # Segunda vez com mesmo contador: falha (replay)
-        valido2, novo2 = seguranca_mod.verificar_totp(self.segredo, codigo, novo)
+        with mock.patch('time.time', return_value=agora):
+            valido2, novo2 = seguranca_mod.verificar_totp(self.segredo, codigo, novo)
         self.assertFalse(valido2)
         self.assertEqual(novo2, novo)  # contador não muda
 
     def test_verificar_totp_codigo_errado(self):
-        self.assertFalse(seguranca_mod.verificar_totp(self.segredo, "000000", self.contador_inicial)[0])
+        verificar = seguranca_mod.verificar_totp
+        self.assertFalse(verificar(self.segredo, "000000", self.contador_inicial)[0])
 
     def test_verificar_totp_formato_invalido(self):
-        self.assertFalse(seguranca_mod.verificar_totp(self.segredo, "abc", self.contador_inicial)[0])
-        self.assertFalse(seguranca_mod.verificar_totp(self.segredo, "12345", self.contador_inicial)[0])
-        self.assertFalse(seguranca_mod.verificar_totp(self.segredo, "1234567", self.contador_inicial)[0])
+        verificar = seguranca_mod.verificar_totp
+        for codigo in ("abc", "12345", "1234567"):
+            self.assertFalse(verificar(self.segredo, codigo, self.contador_inicial)[0])
 
     def test_verificar_totp_janela_adjacente(self):
-        totp = __import__('pyotp').TOTP(self.segredo)
-        agora = int(time.time())
-        contador = totp.timecode(agora)
-        # Código do passo anterior (contador - 1)
-        codigo_anterior = totp.at(contador - 1)
-        valido, novo = seguranca_mod.verificar_totp(self.segredo, codigo_anterior, self.contador_inicial, janela=1)
+        totp = pyotp.TOTP(self.segredo)
+        agora = 1_700_000_000
+        contador = agora // 30
+        # Código do passo anterior (30 s atrás)
+        codigo_anterior = totp.at(agora - 30)
+        with mock.patch('time.time', return_value=agora):
+            valido, novo = seguranca_mod.verificar_totp(self.segredo, codigo_anterior,
+                                                        self.contador_inicial, janela=1)
         self.assertTrue(valido)
         self.assertEqual(novo, contador - 1)
+
+    def test_verificar_totp_codigo_de_2_minutos_atras_falha(self):
+        totp = pyotp.TOTP(self.segredo)
+        agora = 1_700_000_000
+        with mock.patch('time.time', return_value=agora):
+            valido, _ = seguranca_mod.verificar_totp(self.segredo, totp.at(agora - 120),
+                                                     self.contador_inicial)
+        self.assertFalse(valido)
 
 
 class TestRecoveryCodes(unittest.TestCase):
@@ -137,9 +150,44 @@ class TestDesafio2FA(unittest.TestCase):
         usuario = {"id": "teste@coldtrack.dev", "empresaId": "E-TESTE"}
         segredo_jwt = "segredo-de-teste-com-tamanho-suficiente-32b"
         # Gera desafio no passado (6 min atrás)
-        desafio = seguranca_mod.gerar_desafio_2fa(usuario, segredo_jwt, agora=int(time.time()) - 360)
+        desafio = seguranca_mod.gerar_desafio_2fa(usuario, segredo_jwt,
+                                                  agora=int(time.time()) - 360)
         email = seguranca_mod.ler_desafio_2fa(desafio, segredo_jwt)
         self.assertIsNone(email)
+
+
+class TestDesafioNaoEToken(unittest.TestCase):
+    def test_ler_token_recusa_o_desafio(self):
+        segredo_jwt = "segredo-de-teste-com-tamanho-suficiente-32b"
+        usuario = {"id": "teste@coldtrack.dev", "empresaId": "E-TESTE", "nome": "T",
+                   "perfil": "gestor"}
+        desafio = seguranca_mod.gerar_desafio_2fa(usuario, segredo_jwt)
+        self.assertIsNone(seguranca_mod.ler_token(desafio, segredo_jwt))
+        # E o token de acesso não serve como desafio.
+        token = seguranca_mod.gerar_token(usuario, segredo_jwt)
+        self.assertIsNone(seguranca_mod.ler_desafio_2fa(token, segredo_jwt))
+
+    def test_desafio_adulterado(self):
+        usuario = {"id": "teste@coldtrack.dev", "empresaId": "E-TESTE"}
+        desafio = seguranca_mod.gerar_desafio_2fa(usuario, "outro-segredo-com-32-bytes-ou-mais")
+        ler = seguranca_mod.ler_desafio_2fa
+        self.assertIsNone(ler(desafio, "segredo-de-teste-com-32b-ou-mais"))
+
+    def test_token_com_perfil_e_marca_de_2fa_nao_vale(self):
+        import jwt
+        segredo_jwt = "segredo-de-teste-com-tamanho-suficiente-32b"
+        carga = {"sub": "a@a.com", "perfil": "gestor", "emp": "E", "2fa": True,
+                 "exp": int(time.time()) + 60}
+        self.assertIsNone(seguranca_mod.ler_token(jwt.encode(carga, segredo_jwt), segredo_jwt))
+        carga["2fa"] = False  # marca presente mas falsa: não é desafio
+        self.assertIsNone(seguranca_mod.ler_desafio_2fa(jwt.encode(carga, segredo_jwt),
+                                                        segredo_jwt))
+
+    def test_totp_sem_segredo_recusa(self):
+        self.assertEqual(seguranca_mod.verificar_totp(None, "123456", -1), (False, -1))
+
+    def test_recovery_code_nao_texto(self):
+        self.assertEqual(seguranca_mod.verificar_recovery_code(None, ["h"]), (False, ["h"]))
 
 
 class TestLog2FA(unittest.TestCase):
@@ -156,6 +204,20 @@ class TestLog2FA(unittest.TestCase):
         self.assertEqual(format_args[0], "ABC123")
         self.assertEqual(format_args[1], "totp_invalido")
         self.assertEqual(format_args[2], "u***@teste.com")
+
+    @mock.patch.dict(os.environ, {"MISSAO_CODIGO": ""})
+    def test_sem_codigo_de_missao_usa_marcador(self):
+        with self.assertLogs(level="WARNING") as logs:
+            seguranca_mod.log_2fa_bloqueado("x", "")
+        self.assertIn("2fa bloqueado [SEM-CODIGO]", logs.output[0])
+
+    @mock.patch.dict(os.environ, {"MISSAO_CODIGO": "ABC123"})
+    def test_log_idor_bloqueado_formato(self):
+        with self.assertLogs(level="WARNING") as logs:
+            seguranca_mod.log_idor_bloqueado("leituras", "ana@a.com", "sensor-b1\nfalso")
+        # A quebra de linha do atacante sai escrita (\n): não cria uma linha falsa no log.
+        self.assertIn("idor bloqueado [ABC123] rota=leituras usuario=a***@a.com "
+                      "alvo='sensor-b1\\nfalso'", logs.output[0])
 
 
 if __name__ == "__main__":
