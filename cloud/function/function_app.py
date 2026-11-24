@@ -174,10 +174,14 @@ MSG_LOGIN_RECUSADO = ("e-mail ou senha incorretos. Se errou várias vezes, "
                       "aguarde alguns minutos.")
 MSG_IP_EM_ESPERA = "muitas tentativas de login erradas. Aguarde alguns minutos."
 
-# 2FA: limites de tentativas no 2º passo (mesma janela do login)
+# 2FA: limites de tentativas no 2º passo (por IP e por conta, na mesma janela).
+# Por conta é o que segura o chute dos 6 dígitos de quem já tem a senha: 5 erros
+# em 5 min dão ~5 chances em 1 milhão por janela.
 LOGIN_2FA_FALHAS_POR_IP = 10
-LOGIN_2FA_JANELA_IP_S = 5 * 60
+LOGIN_2FA_FALHAS_POR_CONTA = 5
+LOGIN_2FA_JANELA_S = 5 * 60
 MSG_2FA_RECUSADO = "código inválido ou vencido."
+MSG_2FA_ESPERA = "muitas tentativas. Aguarde alguns minutos."
 
 _banco = None
 _containers = {}
@@ -285,7 +289,9 @@ def publico(usuario):
 
 def com_empresa(usuario):
     empresa = ler("empresas", usuario["empresaId"])
-    return {**publico(usuario), "empresa": empresa["nome"] if empresa else ""}
+    # totpAtivo: a tela de Configurações mostra "Ativar" ou "Desativar" o 2FA (GET /eu e login).
+    return {**publico(usuario), "empresa": empresa["nome"] if empresa else "",
+            "totpAtivo": bool(usuario.get("totpAtivo"))}
 
 
 def lista(nome, empresa, campos="*"):
@@ -724,18 +730,15 @@ def totp_iniciar(req: func.HttpRequest) -> func.HttpResponse:
     if erro:
         return erro
 
-    # Se já tem 2FA ativo, não permite iniciar de novo sem desativar antes
-    if usuario.get("totpAtivo"):
-        return resposta({"erros": ["verificação em duas etapas já está ativa"]}, 400)
-
     segredo = gerar_totp_secret()
     uri = totp_uri(segredo, usuario["id"])
 
-    # Salva o segredo temporariamente (não ativo ainda) no usuário
-    _patch_usuario(usuario["id"], [
-        {"op": "set", "path": "/totpSecretTemp", "value": segredo},
-        {"op": "set", "path": "/totpContadorUsado", "value": -1},
-    ])
+    # O segredo novo fica num campo provisório: com o 2FA já ligado (troca de
+    # celular), o segredo em uso continua valendo até o `ativar` confirmar o novo.
+    operacoes = [{"op": "set", "path": "/totpSecretTemp", "value": segredo}]
+    if "totpContadorUsado" not in usuario:
+        operacoes.append({"op": "set", "path": "/totpContadorUsado", "value": -1})
+    _patch_usuario(usuario["id"], operacoes)
 
     logging.info("%s iniciou ativação do 2FA", mascarar_email(usuario["id"]))
     return resposta({"uri": uri})
@@ -799,7 +802,8 @@ def totp_desativar(req: func.HttpRequest) -> func.HttpResponse:
         return erro
 
     senha = str((dados or {}).get("senha", ""))
-    codigo = str((dados or {}).get("codigo", "")).strip()
+    # O código de recuperação pode vir em `codigo` ou em `recuperacao`.
+    codigo = str((dados or {}).get("codigo") or (dados or {}).get("recuperacao") or "").strip()
 
     if not senha or not codigo:
         log_2fa_bloqueado("senha_ou_codigo_ausente", usuario["id"])
@@ -831,10 +835,11 @@ def totp_desativar(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
 
     # Desativa: remove segredo, contador, recovery codes e flag
+    # `set` e não `remove`: o Cosmos recusa remover um campo que não existe.
     _patch_usuario(usuario["id"], [
-        {"op": "remove", "path": "/totpSecret"},
-        {"op": "remove", "path": "/totpContadorUsado"},
-        {"op": "remove", "path": "/recoveryCodes"},
+        {"op": "set", "path": "/totpSecret", "value": None},
+        {"op": "set", "path": "/totpSecretTemp", "value": None},
+        {"op": "set", "path": "/recoveryCodes", "value": []},
         {"op": "set", "path": "/totpAtivo", "value": False},
     ])
 
@@ -842,73 +847,80 @@ def totp_desativar(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(status_code=204)
 
 
+def _patch_se_nao_mudou(doc, operacoes):
+    """Patch do usuário que só vale se o documento não mudou desde a leitura (etag).
+
+    Dois logins ao mesmo tempo com o mesmo código: só o primeiro grava; o segundo
+    recebe None (412 do Cosmos) e é recusado. Devolve o documento atualizado.
+    """
+    condicao = ({"etag": doc["_etag"], "match_condition": MatchConditions.IfNotModified}
+                if doc.get("_etag") else {})
+    try:
+        return container("usuarios").patch_item(doc["id"], partition_key=doc["id"],
+                                                 patch_operations=operacoes, **condicao)
+    except (exceptions.CosmosResourceNotFoundError,
+            exceptions.CosmosAccessConditionFailedError):
+        return None
+
+
+def _recusar_2fa(motivo, email, chaves):
+    for chave in chaves:
+        LIMITES.contar(chave, LOGIN_2FA_JANELA_S)
+    log_2fa_bloqueado(motivo, email)
+    return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
+
+
 @app.route(route="login/2fa", methods=["POST"])
 def login_2fa(req: func.HttpRequest) -> func.HttpResponse:
-    """2º passo do login: valida desafio JWT + código TOTP ou recovery code."""
+    """2º passo do login: desafio (JWT de 5 min) + código TOTP ou de recuperação."""
     dados, erro = corpo_json(req)
     if erro:
         return erro
+    dados = dados if isinstance(dados, dict) else {}
+    desafio = str(dados.get("desafio") or "").strip()
+    codigo = str(dados.get("codigo") or "").strip()
+    recuperacao = str(dados.get("recuperacao") or "").strip()
 
-    desafio = str((dados or {}).get("desafio", "")).strip()
-    codigo = str((dados or {}).get("codigo", "")).strip()
-    recuperacao = str((dados or {}).get("recuperacao", "")).strip()
-
-    if not desafio:
-        return resposta({"erros": ["desafio ausente"]}, 400)
-
-    # Lê o desafio (JWT de 5 min)
-    email = ler_desafio_2fa(desafio, os.environ["JWT_SECRET"])
-    if not email:
-        log_2fa_bloqueado("desafio_invalido_ou_vencido", "")
-        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
-
-    # Limite por IP no 2º passo
     chave_ip = f"login2fa:ip:{ip_do_cliente(req.headers)}"
-    if LIMITES.total(chave_ip, LOGIN_2FA_JANELA_IP_S) >= LOGIN_2FA_FALHAS_POR_IP:
-        logging.warning("login/2fa recusado: IP com %d falhas ou mais", LOGIN_2FA_FALHAS_POR_IP)
-        return resposta({"erros": ["muitas tentativas. aguarde alguns minutos."]}, 429)
+    if LIMITES.total(chave_ip, LOGIN_2FA_JANELA_S) >= LOGIN_2FA_FALHAS_POR_IP:
+        log_2fa_bloqueado("muitas tentativas do mesmo IP", "")
+        return resposta({"erros": [MSG_2FA_ESPERA]}, 429)
 
+    # Desafio ausente, adulterado ou vencido: 401, igual a código errado.
+    email = ler_desafio_2fa(desafio, os.environ["JWT_SECRET"]) if desafio else None
+    if not email:
+        return _recusar_2fa("desafio ausente, invalido ou vencido", "", [chave_ip])
+
+    # Limite por conta: trocar de IP não dá mais chutes no mesmo usuário.
+    chave_conta = f"login2fa:conta:{email}"
+    if LIMITES.total(chave_conta, LOGIN_2FA_JANELA_S) >= LOGIN_2FA_FALHAS_POR_CONTA:
+        log_2fa_bloqueado("muitas tentativas na conta", email)
+        return resposta({"erros": [MSG_2FA_ESPERA]}, 429)
+
+    chaves = [chave_ip, chave_conta]
     usuario = ler("usuarios", email)
-    if not usuario or not usuario.get("totpAtivo"):
-        LIMITES.contar(chave_ip, LOGIN_2FA_JANELA_IP_S)
-        log_2fa_bloqueado("usuario_sem_2fa_ou_inexistente", email)
-        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
+    if not usuario or not usuario.get("totpAtivo") or bloqueado_ate(usuario) > 0:
+        return _recusar_2fa("conta sem 2FA, removida ou em espera", email, chaves)
 
-    if bloqueado_ate(usuario) > 0:
-        LIMITES.contar(chave_ip, LOGIN_2FA_JANELA_IP_S)
-        log_2fa_bloqueado("conta_em_espera", email)
-        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
-
-    segredo = usuario.get("totpSecret")
-    contador_usado = usuario.get("totpContadorUsado", -1)
-    recovery_hashes = usuario.get("recoveryCodes", [])
-
-    valido = False
-    novos_hashes = recovery_hashes
-    novo_contador = contador_usado
-
+    operacoes = None
     if recuperacao:
-        valido, novos_hashes = verificar_recovery_code(recuperacao, recovery_hashes)
-    elif codigo:
-        if len(codigo) == 6 and codigo.isdigit():
-            valido, novo_contador = verificar_totp(segredo, codigo, contador_usado)
-        else:
-            valido = False
+        valido, restantes = verificar_recovery_code(recuperacao,
+                                                    usuario.get("recoveryCodes") or [])
+        if valido:  # uso único: o hash usado sai da lista
+            operacoes = [{"op": "set", "path": "/recoveryCodes", "value": restantes}]
+    else:
+        valido, passo = verificar_totp(usuario.get("totpSecret"), codigo,
+                                       usuario.get("totpContadorUsado", -1))
+        if valido:  # anti-replay: o passo aceito fica gravado
+            operacoes = [{"op": "set", "path": "/totpContadorUsado", "value": passo}]
+    if operacoes is None:
+        return _recusar_2fa("codigo errado, vencido ou ja usado", email, chaves)
 
-    if not valido:
-        LIMITES.contar(chave_ip, LOGIN_2FA_JANELA_IP_S)
-        log_2fa_bloqueado("totp_ou_recovery_invalido", email)
-        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
-
-    # Sucesso: atualiza contador e recovery codes se usou recovery
-    operacoes = [{"op": "set", "path": "/totpContadorUsado", "value": novo_contador}]
-    if recuperacao:
-        operacoes.append({"op": "set", "path": "/recoveryCodes", "value": novos_hashes})
     if usuario.get("falhas") or usuario.get("bloqueadoAte"):
         operacoes += OPERACOES_DE_SUCESSO
-    atualizado = _patch_usuario(usuario["id"], operacoes)
+    atualizado = _patch_se_nao_mudou(usuario, operacoes)
     if atualizado is None:
-        return resposta({"erros": ["faça login para continuar"]}, 401)
+        return _recusar_2fa("codigo usado em paralelo ou conta removida", email, chaves)
 
     token = gerar_token(atualizado, os.environ["JWT_SECRET"])
     logging.info("%s entrou com 2FA", mascarar_email(email))
