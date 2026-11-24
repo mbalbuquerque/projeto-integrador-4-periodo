@@ -1,102 +1,24 @@
 #!/usr/bin/env python3
-"""Testes de IDOR (verificação de dono) — roda com: python -m unittest seguranca.testes.test_idor"""
+"""Testes de IDOR (verificacao de dono) — roda com: python -m unittest seguranca.testes.test_idor"""
 
 import os
 import sys
 import unittest
 from unittest import mock
 
-# Adiciona o diretório cloud/function ao path
+# Set environment variables BEFORE importing any modules that read them
+os.environ["JWT_SECRET"] = "segredo-de-teste-com-tamanho-suficiente-32b"
+os.environ["COSMOS_CONNECTION"] = "AccountEndpoint=https://test.documents.azure.com:443/;AccountKey=test"
+os.environ["COSMOS_DATABASE"] = "coldtrack"
+os.environ["COSMOS_CONTAINER"] = "leituras"
+os.environ["LIMITES_CONTAINER"] = "limites"
+os.environ["MISSAO_CODIGO"] = "TEST123"
+
+# Adiciona o diretorio cloud/function ao path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'cloud', 'function'))
 
 import function_app as function_app_mod
-
-
-# Use the same ContainerFalso as test_falsos.py (which properly filters by empresaId in query_items)
-class ContainerFalso:
-    """Container Cosmos DB falso para testes (igual ao de test_falsos.py)."""
-
-    def __init__(self, itens):
-        self.itens = [dict(i) for i in itens]
-        self.consultas = []
-        self.escritas = []
-        self.antes_do_patch = None
-
-    def read_item(self, item, partition_key):
-        for i in self.itens:
-            if i["id"] == item:
-                return dict(i)
-        from azure.cosmos import exceptions
-        raise exceptions.CosmosResourceNotFoundError(status_code=404, message="não achou")
-
-    def query_items(self, query, parameters=(), partition_key=None, **_):
-        self.consultas.append(query)
-        p = {x["name"]: x["value"] for x in parameters}
-        itens = list(self.itens)
-        if partition_key is not None:
-            itens = [i for i in itens if i.get("deviceId") == partition_key]
-        for nome in ("@e", "@empresa"):
-            if nome in p:
-                itens = [i for i in itens if i.get("empresaId") == p[nome]]
-        for nome in ("@d", "@device"):
-            if nome in p:
-                itens = [i for i in itens if i.get("deviceId") == p[nome]]
-        if "@desde" in p:
-            itens = [i for i in itens if i["medidoEm"] >= p["@desde"]]
-        if "@antes" in p:
-            itens = [i for i in itens if i["medidoEm"] < p["@antes"]]
-        if "ORDER BY c.medidoEm DESC" in query:
-            itens.sort(key=lambda i: i["medidoEm"], reverse=True)
-        if "@limite" in p:
-            itens = itens[:p["@limite"]]
-        import re
-        campos = re.match(r"SELECT (?:TOP @limite )?(.+?) FROM", query)
-        if campos:
-            campos = campos.group(1)
-            if campos != "*" and not campos.startswith("VALUE"):
-                nomes = [c.strip()[2:] for c in campos.split(",")]
-                itens = [{k: i[k] for k in nomes if k in i} for i in itens]
-        return iter(itens)
-
-    def _achar(self, item_id):
-        for i in self.itens:
-            if i["id"] == item_id:
-                return i
-        from azure.cosmos import exceptions
-        raise exceptions.CosmosResourceNotFoundError(status_code=404, message="não achou")
-
-    def create_item(self, body, **_):
-        if any(i["id"] == body["id"] for i in self.itens):
-            from azure.cosmos import exceptions
-            raise exceptions.CosmosResourceExistsError(status_code=409, message="já existe")
-        self.itens.append(dict(body))
-        return dict(body)
-
-    def upsert_item(self, body, **_):
-        self.escritas.append(("upsert", body["id"], None))
-        self.itens = [i for i in self.itens if i["id"] != body["id"]] + [dict(body)]
-        return dict(body)
-
-    def delete_item(self, item, partition_key, **_):
-        self._achar(item)
-        self.itens = [i for i in self.itens if i["id"] != item]
-
-    def patch_item(self, item, partition_key, patch_operations, **_):
-        self.escritas.append(("patch", item, [dict(o) for o in patch_operations]))
-        if self.antes_do_patch:
-            self.antes_do_patch(item)
-        doc = self._achar(item)
-        for op in patch_operations:
-            campo = op["path"].lstrip("/")
-            if op["op"] in ("set", "replace", "add"):
-                doc[campo] = op["value"]
-            elif op["op"] == "incr":
-                doc[campo] = doc.get(campo, 0) + op["value"]
-            elif op["op"] == "remove":
-                doc.pop(campo, None)
-            else:
-                raise ValueError(op["op"])
-        return dict(doc)
+from test_falsos import ContainerFalso
 
 
 def usuario(email, perfil="gestor", empresa="E-A", **extra):
@@ -106,17 +28,6 @@ def usuario(email, perfil="gestor", empresa="E-A", **extra):
 
 class TestAcessoIDOR(unittest.TestCase):
     def setUp(self):
-        # Patch os.environ globally so all modules see it
-        self.env_patcher = mock.patch.dict('os.environ', {
-            "JWT_SECRET": "segredo-de-teste-com-tamanho-suficiente-32b",
-            "COSMOS_CONNECTION": "AccountEndpoint=https://test.documents.azure.com:443/;AccountKey=test",
-            "COSMOS_DATABASE": "coldtrack",
-            "COSMOS_CONTAINER": "leituras",
-            "LIMITES_CONTAINER": "limites",
-            "MISSAO_CODIGO": "TEST123"
-        })
-        self.env_patcher.start()
-
         self.SEGREDO = "segredo-de-teste-com-tamanho-suficiente-32b"
 
         self.containers = {
@@ -141,21 +52,17 @@ class TestAcessoIDOR(unittest.TestCase):
                 {"id": "E-A~V-001", "empresaId": "E-A", "veiculo": "CT-001"},
                 {"id": "E-B~V-002", "empresaId": "E-B", "veiculo": "CT-002"},
             ]),
+            "leituras": ContainerFalso([]),
             "limites": ContainerFalso([]),
         }
         # Mock the container function to return our fake containers
         self.container_patcher = mock.patch.object(function_app_mod, "container",
-                                                   lambda nome=None: self.containers[nome])
+                                                   lambda nome=None: self.containers[nome or "leituras"])
         self.container_patcher.start()
         # Recreate LIMITES with the mocked container
         function_app_mod.LIMITES = function_app_mod.Limites(
             lambda: function_app_mod.container(os.getenv("LIMITES_CONTAINER", "limites")))
         function_app_mod.LIMITES.reiniciar()
-
-        # Mock time
-        self.agora = 1_700_000_000
-        self.relogio = mock.patch("time.time", lambda: self.agora)
-        self.relogio.start()
 
         # Mock conferir_senha
         self.senha = mock.patch.object(function_app_mod, "conferir_senha",
@@ -164,9 +71,7 @@ class TestAcessoIDOR(unittest.TestCase):
 
     def tearDown(self):
         self.senha.stop()
-        self.relogio.stop()
         self.container_patcher.stop()
-        self.env_patcher.stop()
         function_app_mod.LIMITES.reiniciar()
 
     def token(self, email):
@@ -200,7 +105,7 @@ class TestAcessoIDOR(unittest.TestCase):
         self.assertIn("dispositivo não encontrado", str(corpo))
 
     def test_usuario_b_le_proprrio_dispositivo(self):
-        # Caio (empresa B) lê seu próprio sensor
+        # Caio (empresa B) le seu proprio sensor
         LEITURAS = function_app_mod.leituras.build().get_user_function()
         status, corpo = self.chamar(LEITURAS, "GET", "/api/leituras?deviceId=sensor-b1",
                                     email="caio@b.com")
@@ -215,7 +120,7 @@ class TestAcessoIDOR(unittest.TestCase):
         self.assertEqual(status, 404)
 
     def test_usuario_b_acessa_proprrio_veiculo(self):
-        # Caio acessa seu próprio veículo
+        # Caio acessa seu proprio veiculo
         VEICULOS = function_app_mod.veiculos.build().get_user_function()
         status, corpo = self.chamar(VEICULOS, "GET", "/api/veiculos/CT-002",
                                     email="caio@b.com", id="CT-002")
@@ -247,17 +152,16 @@ class TestAcessoIDOR(unittest.TestCase):
         self.assertEqual(status, 200)
 
     def test_log_idor_bloqueado_formato(self):
-        from seguranca import log_idor_bloqueado
-        import logging
-        with mock.patch("logging.warning") as mock_warning:
-            log_idor_bloqueado("dispositivo", "id=sensor-b1 user=a***@a.com")
-            mock_warning.assert_called_once()
-            args, _ = mock_warning.call_args
-            format_string = args[0]
-            self.assertEqual(format_string, "idor bloqueado [%s] - %s%s")
-            self.assertEqual(args[1], "TEST123")
-            self.assertEqual(args[2], "dispositivo")
-            self.assertIn("id=sensor-b1 user=a***@a.com", args[3])
+            from seguranca import log_idor_bloqueado
+            import logging
+            with mock.patch("logging.warning") as mock_warning:
+                log_idor_bloqueado("dispositivo", "id=sensor-b1 user=a***@a.com")
+                mock_warning.assert_called_once()
+                args, _ = mock_warning.call_args
+                format_string = args[0]
+                self.assertEqual(format_string, "idor bloqueado [%s] - %s")
+                self.assertEqual(args[1], "TEST123")
+                self.assertIn("dispositivo - id=sensor-b1 user=a***@a.com", args[2])
 
 
 if __name__ == "__main__":

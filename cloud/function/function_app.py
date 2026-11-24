@@ -95,6 +95,7 @@ from seguranca import (
     conferir_senha,
     espera_para,
     gerar_chave_dispositivo,
+    gerar_desafio_2fa,
     gerar_hash,
     gerar_recovery_codes,
     gerar_token,
@@ -270,7 +271,8 @@ def exigir_dono(recurso_tipo: str, recurso_id: str, usuario: dict) -> tuple[bool
     if recurso_tipo == "dispositivo":
         disp = ler("dispositivos", recurso_id.lower())
         if not disp or disp.get("empresaId") != empresa:
-            log_idor_bloqueado("dispositivo", f"id={recurso_id} user={mascarar_email(usuario['id'])}")
+            email_masked = mascarar_email(usuario['id'])
+            log_idor_bloqueado("dispositivo", f"id={recurso_id} user={email_masked}")
             return False, None
         return True, disp
 
@@ -278,7 +280,8 @@ def exigir_dono(recurso_tipo: str, recurso_id: str, usuario: dict) -> tuple[bool
         veic_id = id_interno(empresa, recurso_id)
         veic = ler("veiculos", veic_id)
         if not veic or veic.get("empresaId") != empresa:
-            log_idor_bloqueado("veiculo", f"id={recurso_id} user={mascarar_email(usuario['id'])}")
+            email_masked = mascarar_email(usuario['id'])
+            log_idor_bloqueado("veiculo", f"id={recurso_id} user={email_masked}")
             return False, None
         return True, veic
 
@@ -286,7 +289,8 @@ def exigir_dono(recurso_tipo: str, recurso_id: str, usuario: dict) -> tuple[bool
         viagem_id = id_interno(empresa, recurso_id)
         viagem = ler("viagens", viagem_id)
         if not viagem or viagem.get("empresaId") != empresa:
-            log_idor_bloqueado("viagem", f"id={recurso_id} user={mascarar_email(usuario['id'])}")
+            email_masked = mascarar_email(usuario['id'])
+            log_idor_bloqueado("viagem", f"id={recurso_id} user={email_masked}")
             return False, None
         return True, viagem
 
@@ -294,14 +298,16 @@ def exigir_dono(recurso_tipo: str, recurso_id: str, usuario: dict) -> tuple[bool
         # Para leituras/sensores, valida se o deviceId pertence à empresa
         disp = _dispositivo_da_empresa(recurso_id, empresa)
         if not disp:
-            log_idor_bloqueado(recurso_tipo, f"deviceId={recurso_id} user={mascarar_email(usuario['id'])}")
+            email_masked = mascarar_email(usuario['id'])
+            log_idor_bloqueado(recurso_tipo, f"deviceId={recurso_id} user={email_masked}")
             return False, None
         return True, disp
 
     if recurso_tipo == "usuario":
         alvo = ler("usuarios", recurso_id.lower())
         if not alvo or alvo.get("empresaId") != empresa:
-            log_idor_bloqueado("usuario", f"id={recurso_id} user={mascarar_email(usuario['id'])}")
+            email_masked = mascarar_email(usuario['id'])
+            log_idor_bloqueado("usuario", f"id={recurso_id} user={email_masked}")
             return False, None
         return True, alvo
 
@@ -1561,7 +1567,23 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
 
     if metodo == "GET":
         usuario, erro = autorizar(req, TODOS)
-        return erro or resposta({nome: [id_externo(d) for d in lista(nome, usuario["empresaId"])] })
+        if erro:
+            return erro
+
+        # IDOR protection for GET with item_id: verify specific resource belongs to user's empresa
+        if item_id:
+            tipo_recurso = {
+                "veiculos": "veiculo",
+                "viagens": "viagem",
+                "dispositivos": "dispositivo",
+                "usuarios": "usuario",
+            }.get(nome)
+            if tipo_recurso:
+                autorizado, _ = exigir_dono(tipo_recurso, item_id, usuario)
+                if not autorizado:
+                    return resposta({"erros": ["não encontrado"]}, 404)
+
+        return resposta({nome: [id_externo(d) for d in lista(nome, usuario["empresaId"])] })
 
     usuario, erro = autorizar(req, GESTOR)
     if erro:

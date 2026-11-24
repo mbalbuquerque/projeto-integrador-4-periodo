@@ -158,7 +158,11 @@ def log_2fa_bloqueado(motivo: str, email: str = "") -> None:
 
 def log_idor_bloqueado(recurso: str, detalhe: str = "") -> None:
     """Registra bloqueio de IDOR no formato esperado pelo Log Analytics."""
-    logging.warning("idor bloqueado [%s] - %s%s", _codigo_missao(), recurso, f" - {detalhe}" if detalhe else "")
+    if detalhe:
+        msg = f"{recurso} - {detalhe}"
+    else:
+        msg = recurso
+    logging.warning("idor bloqueado [%s] - %s", _codigo_missao(), msg)
 
 
 # ------------------------------------------------------------ chave de dispositivo
@@ -191,7 +195,9 @@ def totp_uri(segredo: str, email: str, emissor: str = "ColdTrack") -> str:
     return pyotp.totp.TOTP(segredo).provisioning_uri(name=email, issuer_name=emissor)
 
 
-def verificar_totp(segredo: str, codigo: str, contador_usado: int, janela: int = 1) -> tuple[bool, int]:
+def verificar_totp(
+    segredo: str, codigo: str, contador_usado: int, janela: int = 1
+) -> tuple[bool, int]:
     """Verifica um código TOTP de 6 dígitos com proteção anti-replay.
 
     Args:
