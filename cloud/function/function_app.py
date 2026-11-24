@@ -347,6 +347,10 @@ def telemetria(req: func.HttpRequest) -> func.HttpResponse:
     }
     if "seq" in dados:
         leitura["seq"] = dados["seq"]
+    # Valor antes do filtro de mediana da placa: só auditoria, não entra no status.
+    for campo in ("temperaturaBruta", "umidadeBruta"):
+        if campo in dados:
+            leitura[campo] = float(dados[campo])
     try:
         # create, nunca upsert: leitura gravada não se altera.
         container().create_item(leitura)

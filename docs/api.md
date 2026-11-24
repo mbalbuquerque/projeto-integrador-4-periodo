@@ -86,6 +86,7 @@ Acesso: chave do sensor (`x-device-key`). A chave só vale para o próprio `devi
 | `umidade` | número de 0 a 100 (%), obrigatório |
 | `rssi` | número de -120 a 0, ou `null` (o simulador Wokwi reporta valor positivo); a chave é obrigatória |
 | `medidoEm` | opcional; epoch UTC em segundos. Até 5 min no futuro e até 7 dias no passado |
+| `temperaturaBruta`, `umidadeBruta` | opcionais; leitura antes do filtro de mediana da placa, na mesma faixa de `temperatura`/`umidade`. Gravadas junto só para auditoria; status e alertas usam o valor filtrado |
 
 Booleanos não valem como número; `NaN` é rejeitado; campo não previsto é erro.
 

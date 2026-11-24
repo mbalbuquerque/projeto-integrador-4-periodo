@@ -11,8 +11,13 @@ Payload esperado (POST /api/telemetria):
   "rssi": -58,
   "medidoEm": 1790000000,     (opcional: epoch UTC em segundos da medição)
   "seq": 42,                  (opcional: número de sequência da leitura no sensor)
-  "origem": "placa"           (opcional: "placa" ou "simulador")
+  "origem": "placa",          (opcional: "placa" ou "simulador")
+  "temperaturaBruta": 12.9,   (opcional: leitura antes do filtro de mediana da placa)
+  "umidadeBruta": 80.4        (opcional: idem para a umidade)
 }
+
+`temperatura` e `umidade` chegam já filtradas (mediana na placa); os valores brutos
+ficam gravados junto, só para auditoria do filtro. Status e alertas usam o filtrado.
 """
 
 import bisect
@@ -33,6 +38,9 @@ SEQ_MIN, SEQ_MAX = 1, 2**32 - 1
 # Origem da leitura: placa física ou simulador (Wokwi). Firmware antigo não manda.
 ORIGENS = ("placa", "simulador")
 ORIGEM_NAO_INFORMADA = "nao_informada"
+
+# Leitura do sensor antes do filtro de mediana da placa (opcional, para auditoria).
+BRUTOS = (("temperaturaBruta", TEMP_MIN, TEMP_MAX), ("umidadeBruta", UMID_MIN, UMID_MAX))
 
 # Janela aceita para o horário da medição.
 MEDIDO_FUTURO_MAX_S = 5 * 60
@@ -116,8 +124,15 @@ def validar(dados, agora=None):
     if "origem" in dados and dados["origem"] not in ORIGENS:
         erros.append("origem: use " + " ou ".join(ORIGENS))
 
+    # Valor bruto (antes do filtro de mediana da placa), opcional: mesma faixa física.
+    for campo, minimo, maximo in BRUTOS:
+        if campo in dados:
+            valor = dados[campo]
+            if not _numero(valor) or valor != valor or not minimo <= valor <= maximo:
+                erros.append(f"{campo}: número na faixa [{minimo}, {maximo}]")
+
     extras = set(dados) - {"deviceId", "temperatura", "umidade", "rssi", "medidoEm", "seq",
-                           "origem"}
+                           "origem"} - {campo for campo, _, _ in BRUTOS}
     if extras:
         erros.append("campos não previstos: " + ", ".join(sorted(extras)))
 

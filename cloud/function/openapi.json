@@ -3530,6 +3530,18 @@
             "maximum": 100,
             "description": "%."
           },
+          "temperaturaBruta": {
+            "type": "number",
+            "minimum": -40,
+            "maximum": 80,
+            "description": "Optional. Temperature read by the sensor before the board's median filter (`temperatura` is the filtered value). Stored with the reading for audit only; status and alerts use `temperatura`."
+          },
+          "umidadeBruta": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Optional. Humidity before the board's median filter, stored for audit only."
+          },
           "rssi": {
             "type": "number",
             "minimum": -120,

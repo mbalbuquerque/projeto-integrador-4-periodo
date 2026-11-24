@@ -56,12 +56,52 @@ Verificado em `firmware/coldtrack/coldtrack.ino` (firmware 2026.11.17.4):
 
 ## Filtro de mediana nas leituras
 
-O firmware aplica uma mediana de `FILTRO_JANELA` leituras válidas (padrão 5, valores de 3 a 9;
-1 desliga) à temperatura e à umidade antes de classificar e enviar. Leitura inválida (checksum
-ruim ou NAN) nunca entra na janela e continua indo para o fluxo de falha de sensor (R5). Com
-leitura a cada 20 s, a mediana de 5 atrasa uma mudança real em cerca de 40 s e elimina picos
-isolados. O parâmetro se troca no `secrets.h` (ver `secrets.example.h`).
+O firmware aplica uma mediana das últimas leituras válidas (janela padrão 5, valores aceitos 1
+ou 3 a 9; 1 desliga) à temperatura e à umidade antes de classificar e enviar. Leitura inválida
+(checksum ruim ou NAN) nunca entra na janela e continua indo para o fluxo de falha de sensor
+(R5). Com leitura a cada 20 s, a mediana de 5 atrasa uma mudança real em cerca de 40 s e
+elimina picos isolados.
 
-Validação: testes unitários C++ (`firmware/tests/test_firmware.cpp`, rodam no CI) e compilação
-do firmware no CI. **Validação na placa física: pendente** (conferir no monitor serial que um
-pico induzido, como soprar no sensor por uma leitura, não chega ao painel como valor isolado).
+**Valor bruto preservado.** O payload leva o valor filtrado em `temperatura`/`umidade` e a
+leitura do sensor antes do filtro em `temperaturaBruta`/`umidadeBruta`. A API valida os dois
+na mesma faixa física e grava os brutos junto da leitura no Cosmos, só para auditoria: status,
+alertas e painel usam o valor filtrado. Firmware antigo (sem os campos) continua aceito.
+
+## Parâmetros de coleta (fora do código)
+
+Intervalo entre leituras e janela do filtro ficam na flash da placa (Preferences, namespace
+`config`, chaves `intervalo` e `janela`) e são lidos no boot. Valor ausente ou fora da regra
+volta ao padrão de fábrica do `payload_core.h`.
+
+| parâmetro | padrão | faixa aceita | por quê |
+|---|---|---|---|
+| intervalo (`intervalo`, ms) | 20000 | 15000 a 300000 | mínimo de 15 s do ThingSpeak gratuito; acima de 5 min o painel já trata o sensor como sem leitura recente |
+| janela do filtro (`filtroJanela`) | 5 | 1 (desliga) ou 3 a 9 | 5 leituras descartam um pico isolado com atraso de ~2 intervalos |
+
+Troca pelo cabo USB (monitor serial a 115200, linha terminada em Enter):
+
+```
+CT<{"cmd":"parametros","intervalo":30000,"filtroJanela":3}
+CT>{"ok":true,"intervalo":30000,"filtroJanela":3}
+```
+
+Os dois campos são opcionais; `CT<{"cmd":"parametros"}` só consulta os valores em uso. A placa
+valida tudo antes de gravar (tudo ou nada) e recusa com
+`CT>{"ok":false,"erro":"intervalo_invalido"|"janela_invalida","intervalo":..,"filtroJanela":..}`,
+sempre devolvendo os valores que continuam valendo. Aplica sem reiniciar: a janela nova começa
+vazia e o próximo ciclo sai um intervalo novo depois do comando. O padrão de fábrica ainda pode
+ser trocado na compilação (`FILTRO_JANELA` e `INTERVALO_ENVIO_PADRAO_MS` no `secrets.h`), mas
+o que estiver gravado na placa vale mais.
+
+**Limites de temperatura (faixas):** não ficam no firmware. A faixa de cada carga (mínimo,
+máximo e margem) vem da nuvem na resposta de `POST /api/telemetria`, conforme o perfil do
+veículo, e a placa guarda a última recebida na flash (namespace `coldtrack`) para o LED e a
+tela seguirem funcionando sem rede. Mudar a faixa é cadastro no painel, não firmware.
+
+Validação: testes unitários C++ (`firmware/tests/test_firmware.cpp`: filtro com janela
+configurada, valor bruto no payload, faixas aceitas, leitura da flash e o comando
+`parametros`), testes de contrato e de rota da API (`test_contrato.py`, `test_rotas.py`) e
+compilação do firmware no CI. **Validação na placa física: pendente** (conferir no monitor
+serial que um pico induzido, como soprar no sensor por uma leitura, não chega ao painel como
+valor isolado, que `temperaturaBruta` mostra o pico, e que o comando `parametros` sobrevive a
+um reinício da placa).

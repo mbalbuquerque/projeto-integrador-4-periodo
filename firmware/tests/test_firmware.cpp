@@ -250,14 +250,148 @@ void test_filtro_mediana_nan_nao_entra() {
 
 void test_filtro_mediana_estado_corrompido_reinicia() {
     TEST("filtroMediana recupera estado fora da faixa");
-    FiltroMediana f; f.quantidade = 99; f.proximo = -4;
+    FiltroMediana f; filtroReiniciar(&f); f.quantidade = 99; f.proximo = -4;
     ASSERT(fabsf(filtroMediana(&f, 28.5f) - 28.5f) < 0.001f);
     ASSERT(f.quantidade == 1);
     PASS();
 }
+void test_payload_com_valor_bruto() {
+    TEST("montarPayloadCore leva o valor bruto (antes do filtro) para auditoria");
+    char buffer[PAYLOAD_TAMANHO];
+    montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 1790000000, 7,
+                      "placa", 19.8f, 64.5f);
+    std::string s(buffer);
+    ASSERT(s.find("\"temperatura\":12.4") != std::string::npos);
+    ASSERT(s.find("\"temperaturaBruta\":19.8") != std::string::npos);
+    ASSERT(s.find("\"umidadeBruta\":64.5") != std::string::npos);
+    ASSERT(s.find("\"seq\":7") != std::string::npos);
+    ASSERT(s.back() == '}');
+    // Sem valor bruto (NAN), os campos nao aparecem: payload igual ao de antes.
+    montarPayloadCore(buffer, sizeof(buffer), "coldtrack-01", 12.4f, 81.0f, -58, 0);
+    ASSERT(std::string(buffer).find("Bruta") == std::string::npos);
+    PASS();
+}
+
+void test_payload_maior_cabe_no_buffer() {
+    TEST("payload com todos os campos e deviceId de 40 cabe em PAYLOAD_TAMANHO");
+    char buffer[PAYLOAD_TAMANHO];
+    std::string id(40, 'a');
+    montarPayloadCore(buffer, sizeof(buffer), id.c_str(), -40.0f, 100.0f, -120, 1790000000,
+                      4294967295u, "simulador", -40.0f, 100.0f);
+    std::string s(buffer);
+    ASSERT(s.size() < sizeof(buffer) - 1);
+    ASSERT(s.find("\"origem\":\"simulador\"}") != std::string::npos);
+    PASS();
+}
+
+void test_filtro_janela_configurada() {
+    TEST("filtroMediana usa a janela definida em filtroReiniciar");
+    FiltroMediana f; filtroReiniciar(&f, 3);
+    ASSERT(janelaDoFiltro(&f) == 3);
+    float saida = 0;
+    for (float v : {20.0f, 20.0f, 20.0f}) saida = filtroMediana(&f, v);
+    saida = filtroMediana(&f, 30.0f);                  // janela 3: [20,20,30]
+    ASSERT(fabsf(saida - 20.0f) < 0.001f);
+    saida = filtroMediana(&f, 30.0f);                  // [20,30,30]: so 3 leituras contam
+    ASSERT(fabsf(saida - 30.0f) < 0.001f);
+    filtroReiniciar(&f, 1);                            // 1 desliga o filtro
+    ASSERT(fabsf(filtroMediana(&f, 99.0f) - 99.0f) < 0.001f);
+    filtroReiniciar(&f, 2);                            // invalida: volta ao padrao
+    ASSERT(janelaDoFiltro(&f) == filtroJanela());
+    PASS();
+}
+
+void test_janela_e_intervalo_validos() {
+    TEST("faixas aceitas de janela e intervalo");
+    ASSERT(janelaFiltroValida(1));
+    ASSERT(!janelaFiltroValida(0));
+    ASSERT(!janelaFiltroValida(2));
+    ASSERT(janelaFiltroValida(3) && janelaFiltroValida(9));
+    ASSERT(!janelaFiltroValida(10));
+    ASSERT(!intervaloEnvioValido(14999));              // ThingSpeak: minimo 15 s
+    ASSERT(intervaloEnvioValido(15000));
+    ASSERT(intervaloEnvioValido(300000));
+    ASSERT(!intervaloEnvioValido(300001));
+    ASSERT(intervaloEnvioPadrao() == 20000UL);
+    ASSERT(filtroJanela() == 5);
+    PASS();
+}
+
+void test_parametros_da_flash() {
+    TEST("parametros da flash: vazio ou invalido volta ao padrao de fabrica");
+    ParametrosColeta p = parametrosDaFlashCore(0, 0);  // flash sem nada gravado
+    ASSERT(p.intervaloMs == 20000UL && p.filtroJanela == 5);
+    p = parametrosDaFlashCore(60000, 7);
+    ASSERT(p.intervaloMs == 60000UL && p.filtroJanela == 7);
+    p = parametrosDaFlashCore(1000, 4000);
+    ASSERT(p.intervaloMs == 20000UL && p.filtroJanela == 5);
+    p = parametrosDaFlashCore(4294967295UL, 1);
+    ASSERT(p.intervaloMs == 20000UL && p.filtroJanela == 1);
+    PASS();
+}
+
+void test_inteiro_do_json() {
+    TEST("inteiroDoJsonCore aceita so inteiro sem sinal");
+    long v = -1;
+    ASSERT(inteiroDoJsonCore("{\"intervalo\":30000}", "intervalo", &v) == CampoJson::OK && v == 30000);
+    ASSERT(inteiroDoJsonCore("{\"intervalo\" : 30000 ,\"x\":1}", "intervalo", &v) == CampoJson::OK && v == 30000);
+    ASSERT(inteiroDoJsonCore("{\"cmd\":\"parametros\"}", "intervalo", &v) == CampoJson::AUSENTE);
+    ASSERT(inteiroDoJsonCore("{\"intervalo\":\"30000\"}", "intervalo", &v) == CampoJson::INVALIDO);
+    ASSERT(inteiroDoJsonCore("{\"intervalo\":-5}", "intervalo", &v) == CampoJson::INVALIDO);
+    ASSERT(inteiroDoJsonCore("{\"intervalo\":2.5}", "intervalo", &v) == CampoJson::INVALIDO);
+    ASSERT(inteiroDoJsonCore("{\"intervalo\":1e5}", "intervalo", &v) == CampoJson::INVALIDO);
+    ASSERT(inteiroDoJsonCore("{\"intervalo\":null}", "intervalo", &v) == CampoJson::INVALIDO);
+    ASSERT(inteiroDoJsonCore("{\"intervalo\":1234567890}", "intervalo", &v) == CampoJson::INVALIDO);
+    PASS();
+}
+
+void test_comando_parametros() {
+    TEST("comando parametros: valida tudo antes de aplicar");
+    ParametrosColeta p = {20000UL, 5};
+    ASSERT(parametrosDoComandoCore("{\"cmd\":\"parametros\",\"intervalo\":60000,\"filtroJanela\":3}", &p) == nullptr);
+    ASSERT(p.intervaloMs == 60000UL && p.filtroJanela == 3);
+    // So um campo: o outro fica como estava.
+    ASSERT(parametrosDoComandoCore("{\"cmd\":\"parametros\",\"filtroJanela\":7}", &p) == nullptr);
+    ASSERT(p.intervaloMs == 60000UL && p.filtroJanela == 7);
+    // Sem campos: consulta, nada muda.
+    ASSERT(parametrosDoComandoCore("{\"cmd\":\"parametros\"}", &p) == nullptr);
+    ASSERT(p.intervaloMs == 60000UL && p.filtroJanela == 7);
+    // Tudo ou nada: janela invalida nao deixa o intervalo valido passar.
+    const char *erro = parametrosDoComandoCore("{\"cmd\":\"parametros\",\"intervalo\":30000,\"filtroJanela\":2}", &p);
+    ASSERT(erro && std::string(erro) == "janela_invalida");
+    ASSERT(p.intervaloMs == 60000UL && p.filtroJanela == 7);
+    erro = parametrosDoComandoCore("{\"cmd\":\"parametros\",\"intervalo\":5000}", &p);
+    ASSERT(erro && std::string(erro) == "intervalo_invalido");
+    erro = parametrosDoComandoCore("{\"cmd\":\"parametros\",\"intervalo\":\"abc\"}", &p);
+    ASSERT(erro && std::string(erro) == "intervalo_invalido");
+    ASSERT(p.intervaloMs == 60000UL && p.filtroJanela == 7);
+    PASS();
+}
+
+void test_falha_temporaria_so_descarta_dado_recusado() {
+    TEST("falhaTemporaria guarda na fila tudo menos dado recusado (400, 409, 413, 422)");
+    ASSERT(falhaTemporaria(-1));     // sem rede
+    ASSERT(falhaTemporaria(0));
+    ASSERT(falhaTemporaria(500));
+    ASSERT(falhaTemporaria(503));
+    ASSERT(falhaTemporaria(401));    // chave trocada no painel
+    ASSERT(falhaTemporaria(403));    // App Service parado (F4)
+    ASSERT(falhaTemporaria(404));
+    ASSERT(falhaTemporaria(408));
+    ASSERT(falhaTemporaria(429));
+    ASSERT(!falhaTemporaria(200));
+    ASSERT(!falhaTemporaria(201));
+    ASSERT(!falhaTemporaria(400));   // contrato recusou: reenviar nao muda nada
+    ASSERT(!falhaTemporaria(409));
+    ASSERT(!falhaTemporaria(413));
+    ASSERT(!falhaTemporaria(422));
+    PASS();
+}
+
 int main() {
     std::cout << "=== Executando Testes Unitarios do Firmware (C++) ===\n";
     test_agenda_fixa_de_20_s();
+    test_falha_temporaria_so_descarta_dado_recusado();
     test_linha_da_fila_sem_relogio();
     test_heartbeat();
     test_url_do_heartbeat();
@@ -274,6 +408,13 @@ int main() {
     test_filtro_mediana_janela_desliza();
     test_filtro_mediana_nan_nao_entra();
     test_filtro_mediana_estado_corrompido_reinicia();
+    test_payload_com_valor_bruto();
+    test_payload_maior_cabe_no_buffer();
+    test_filtro_janela_configurada();
+    test_janela_e_intervalo_validos();
+    test_parametros_da_flash();
+    test_inteiro_do_json();
+    test_comando_parametros();
 
     std::cout << "\nResultado: " << testes_passaram << "/" << total_testes << " testes passaram.\n";
     return (testes_passaram == total_testes) ? 0 : 1;

@@ -349,6 +349,22 @@ class TestTelemetria(BaseRotas):
         gravada = self.containers["leituras"].read_item(corpo["id"], partition_key="dev-01")
         self.assertEqual(gravada["origem"], "nao_informada")
 
+    def test_telemetria_grava_o_valor_bruto(self):
+        status, corpo = self._enviar_origem({"temperaturaBruta": 19.8, "umidadeBruta": 64.5}, 34)
+        self.assertEqual(status, 201)
+        gravada = self.containers["leituras"].read_item(corpo["id"], partition_key="dev-01")
+        self.assertEqual(gravada["temperaturaBruta"], 19.8)
+        self.assertEqual(gravada["umidadeBruta"], 64.5)
+        # Status sai do valor filtrado (temperatura), não do bruto.
+        self.assertEqual(gravada["temperatura"], 12.5)
+
+    def test_telemetria_sem_valor_bruto_nao_grava_o_campo(self):
+        status, corpo = self._enviar_origem({}, 35)
+        self.assertEqual(status, 201)
+        gravada = self.containers["leituras"].read_item(corpo["id"], partition_key="dev-01")
+        self.assertNotIn("temperaturaBruta", gravada)
+        self.assertNotIn("umidadeBruta", gravada)
+
     def test_telemetria_origem_invalida(self):
         for valor in ("real", "", None, 1):
             with self.subTest(origem=valor):
