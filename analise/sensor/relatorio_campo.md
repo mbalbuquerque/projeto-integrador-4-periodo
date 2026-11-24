@@ -74,7 +74,7 @@ Maiores reenvios:
 
 ## O que este relatório não mede
 
-- Latência ao vivo com estímulo (aquecer o sensor e cronometrar até a tela): depende da placa ligada (#126).
+- Latência ao vivo com estímulo: medida com a placa em 24/11, fora deste relatório (`docs/qa/relatorio-de-testes.md`, #126).
 - Watchdog travando na placa física (#124), F4 com reenvio pela placa (#121) e F6 real (#123).
 - A causa de cada reenvio (queda de Wi-Fi, API fora, reinício): o dado não registra o motivo.
 - A última etapa, do banco até aparecer no painel, não está neste dado: ver `RESILIENCIA.md`.

@@ -104,4 +104,6 @@ Fonte e método em `analise/sensor/relatorio_campo.md` (script `medir_campo.py`,
 
 Leitura honesta: a perda de 24 h **não é sempre ≤ 1%**. Metade das janelas passa da meta por causa de dois episódios (o buraco de 63 leituras em 18/11 e a instabilidade de 20/11 de madrugada), em que a placa numerou leituras que não chegaram ao banco. O dado não registra a causa; é o ponto a investigar antes de 30/11 e a medição de 24 h seguidas com a placa ligada continua pendente (#125).
 
-**Não medido** (depende da placa ligada): latência ao vivo com estímulo (#126), watchdog travando na placa física (#124), F4 com retenção e reenvio pela placa (#121) e F6 real (#123).
+Latência ao vivo com estímulo (ventilador, 24/11, #126): ver `docs/qa/relatorio-de-testes.md`. Três estímulos, só um com efeito visível (t_banco 41 s, painel ≤ 61 s, com t0 aproximado); placa → banco na sessão com mediana 4,65 s e p95 26,3 s, sem buraco de `seq`. Repetir com objeto frio para fechar as 5 medições.
+
+**Não medido** (depende da placa ligada): watchdog travando na placa física (#124), F4 com retenção e reenvio pela placa (#121) e F6 real (#123).
