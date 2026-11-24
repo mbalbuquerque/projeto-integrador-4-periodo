@@ -388,6 +388,23 @@ void test_falha_temporaria_so_descarta_dado_recusado() {
     PASS();
 }
 
+void test_comando_teste() {
+    TEST("comando teste: so as tres acoes conhecidas");
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\",\"acao\":\"travar\"}") == AcaoTeste::TRAVAR);
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\",\"acao\":\"thingspeak_invalido\"}") == AcaoTeste::THINGSPEAK_INVALIDO);
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\", \"acao\" : \"normal\"}") == AcaoTeste::NORMAL);
+    ASSERT(acaoTesteCore("{\"acao\":\"normal\",\"cmd\":\"teste\"}") == AcaoTeste::NORMAL);
+    // Desconhecida, vazia, sem aspas, cortada, ausente ou com caixa diferente: nada acontece.
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\",\"acao\":\"reiniciar\"}") == AcaoTeste::DESCONHECIDA);
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\",\"acao\":\"\"}") == AcaoTeste::DESCONHECIDA);
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\",\"acao\":travar}") == AcaoTeste::DESCONHECIDA);
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\",\"acao\":\"travar") == AcaoTeste::DESCONHECIDA);
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\"}") == AcaoTeste::DESCONHECIDA);
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\",\"acao\":\"TRAVAR\"}") == AcaoTeste::DESCONHECIDA);
+    ASSERT(acaoTesteCore("{\"cmd\":\"teste\",\"acao\":\"travar_agora\"}") == AcaoTeste::DESCONHECIDA);
+    PASS();
+}
+
 int main() {
     std::cout << "=== Executando Testes Unitarios do Firmware (C++) ===\n";
     test_agenda_fixa_de_20_s();
@@ -415,6 +432,7 @@ int main() {
     test_parametros_da_flash();
     test_inteiro_do_json();
     test_comando_parametros();
+    test_comando_teste();
 
     std::cout << "\nResultado: " << testes_passaram << "/" << total_testes << " testes passaram.\n";
     return (testes_passaram == total_testes) ? 0 : 1;

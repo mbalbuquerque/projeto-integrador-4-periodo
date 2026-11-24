@@ -96,7 +96,7 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.23.1"
+#define FW_VERSAO "2026.11.24.1"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
@@ -516,7 +516,7 @@ uint32_t proximaSeq() {
 // envio retoma sozinho depois do reinicio. Vigia as duas tarefas: o loop
 // (medicao) e a tarefa de envio. Os trechos longos alimentam o watchdog no
 // meio; o pior caso legitimo entre duas alimentacoes e uma requisicao HTTPS
-// ou uma conexao MQTT (4 s de TCP + 8 s de TLS + 5 s de resposta).
+// (4 s de TCP + 8 s de TLS + 5 s de resposta) ou uma conexao MQTT (3 + 8 + 3 s).
 
 #ifndef WATCHDOG_S
 #define WATCHDOG_S 60
@@ -554,6 +554,23 @@ bool reiniciouPorWatchdog() {
   esp_reset_reason_t motivo = esp_reset_reason();
 
   return motivo == ESP_RST_TASK_WDT || motivo == ESP_RST_INT_WDT || motivo == ESP_RST_WDT;
+}
+
+
+// Teste do watchdog (R4, #124): chamada do loop, a tarefa que o watchdog vigia
+// desde o setup. Para de alimentar e fica presa; em WATCHDOG_S segundos o
+// watchdog reinicia a placa. A tarefa de envio segue alimentando o proprio
+// registro e esvaziando a fila, entao nada medido se perde.
+void travarParaTesteWatchdog() {
+
+  Serial.printf("TESTE: loop travado de proposito em millis=%lu, ultima seq=%lu. "
+                "O watchdog deve reiniciar a placa em %d s.\n",
+                millis(), (unsigned long)seqAtual, WATCHDOG_S);
+  Serial.flush();
+
+  while (true) {
+    delay(1000);
+  }
 }
 
 
@@ -1382,14 +1399,29 @@ int enviarHeartbeat(const char *motivo) {
 #define MQTT_HOST       "mqtt3.thingspeak.com"
 #define MQTT_PORTA      8883
 #define MQTT_KEEPALIVE  120   // s
-#define MQTT_TIMEOUT    5     // s (resposta do broker)
+#define MQTT_TIMEOUT    3     // s (resposta do broker)
+#define MQTT_CONEXAO_MS 3000  // conexao TCP, em ms
+
+// O MQTT roda na mesma tarefa do envio a API, depois dele. Para o ThingSpeak
+// fora do ar nao atrasar a API (F6), uma tentativa de conexao que falha custa
+// no maximo ~14 s (3 s de TCP + 8 s de TLS + 3 s de resposta) e a seguinte so
+// sai depois de 20 s, dobrando ate 60 s: com o broker fora, no maximo um ciclo
+// em dois tenta, e envio + tentativa cabem nos 20 s do ciclo.
+#define MQTT_ESPERA_MIN_MS 20000UL
+#define MQTT_ESPERA_MAX_MS 60000UL
 
 ClienteContado clienteMqtt;
 PubSubClient mqtt(clienteMqtt);
 
 unsigned long mqttProximaTentativa = 0;
-unsigned long mqttEspera = 5000;       // backoff: 5 s, dobra ate 60 s
+unsigned long mqttEspera = MQTT_ESPERA_MIN_MS;
 bool mqttAvisouRelogio = false;
+
+// Teste F6 (#123), comando CT<{"cmd":"teste","acao":"thingspeak_invalido"}:
+// conecta com senha invalida (so na RAM; reiniciar desfaz). "normal" volta.
+// O loop so marca; quem desconecta e a tarefa de envio, dona do cliente MQTT.
+volatile bool mqttSenhaInvalida = false;
+volatile bool mqttReconectar = false;
 
 
 // Texto do estado do PubSubClient, para a serial dizer por que caiu.
@@ -1435,7 +1467,7 @@ bool garantirMqtt() {
   }
 
   clienteMqtt.setCACert(AZURE_ROOT_CA);
-  clienteMqtt.setConnectionTimeout(CONEXAO_TIMEOUT_MS);
+  clienteMqtt.setConnectionTimeout(MQTT_CONEXAO_MS);
   clienteMqtt.setHandshakeTimeout(TLS_HANDSHAKE_S);
   clienteMqtt.zerar();
 
@@ -1443,17 +1475,19 @@ bool garantirMqtt() {
   mqtt.setKeepAlive(MQTT_KEEPALIVE);
   mqtt.setSocketTimeout(MQTT_TIMEOUT);
 
-  Serial.println("MQTT: conectando ao ThingSpeak...");
+  bool invalida = mqttSenhaInvalida;
+  Serial.println(invalida ? "MQTT: conectando ao ThingSpeak (TESTE: senha invalida)..."
+                          : "MQTT: conectando ao ThingSpeak...");
 
   unsigned long inicio = millis();
-  bool ok = mqtt.connect(MQTT_CLIENT_ID, MQTT_USUARIO, MQTT_SENHA);
+  bool ok = mqtt.connect(MQTT_CLIENT_ID, MQTT_USUARIO, invalida ? "senha-invalida-teste" : MQTT_SENHA);
 
   registrarMedida("mqtt-conexao", millis() - inicio, clienteMqtt.enviados, clienteMqtt.recebidos, ok);
 
   if (ok) {
 
     Serial.println("MQTT: conectado.");
-    mqttEspera = 5000;
+    mqttEspera = MQTT_ESPERA_MIN_MS;
     return true;
   }
 
@@ -1464,7 +1498,7 @@ bool garantirMqtt() {
                 mqtt.state(), estadoMqtt(mqtt.state()), erroTls[0] ? erroTls : "ok", mqttEspera / 1000);
 
   mqttProximaTentativa = millis() + mqttEspera;
-  mqttEspera = min(mqttEspera * 2, 60000UL);
+  mqttEspera = min(mqttEspera * 2, MQTT_ESPERA_MAX_MS);
 
   return false;
 }
@@ -2053,6 +2087,14 @@ void tarefaEnvio(void *parametro) {
     }
 
 #ifdef COM_MQTT
+    // Comando de teste trocou a senha: derruba a conexao e tenta no proximo ciclo.
+    if (mqttReconectar) {
+      mqttReconectar = false;
+      mqtt.disconnect();
+      mqttProximaTentativa = 0;
+      mqttEspera = MQTT_ESPERA_MIN_MS;
+    }
+
     // Mantem a conexao viva (PINGREQ) e processa o que o broker mandar.
     mqtt.loop();
 #endif
@@ -2120,6 +2162,13 @@ void iniciarTarefaEnvio() {
 //   CT<{"cmd":"config","ssid":"..","senha":"..","id":"..","chave":".."}
 //   CT<{"cmd":"redes"}                                              redes 2.4 GHz vistas
 //   CT<{"cmd":"parametros","intervalo":20000,"filtroJanela":5}       grava na flash
+//   CT<{"cmd":"teste","acao":"travar"}               teste R4: watchdog reinicia
+//   CT<{"cmd":"teste","acao":"thingspeak_invalido"}  teste F6: MQTT com senha errada (RAM)
+//   CT<{"cmd":"teste","acao":"normal"}               desfaz o thingspeak_invalido
+//
+// "teste": responde CT>{"ok":true,"teste":"<acao>","ms":..} ("travar" leva
+// tambem "seq" e "watchdogS"); acao desconhecida: CT>{"ok":false,"erro":"acao_desconhecida"};
+// firmware sem MQTT: CT>{"ok":false,"erro":"sem_mqtt"}.
 //
 // "parametros": intervalo entre leituras em ms (15000 a 300000) e janela do
 // filtro de mediana (1 = desligado, ou 3 a 9). Os dois sao opcionais; sem
@@ -2692,6 +2741,42 @@ void tratarParametros(const String &cmd) {
 }
 
 
+// CT<{"cmd":"teste","acao":"travar"|"thingspeak_invalido"|"normal"}: so para os
+// testes fisicos R4 (#124) e F6 (#123). Nada vai para a flash e nenhuma
+// credencial aparece na resposta ou no log.
+void tratarTeste(const String &cmd) {
+
+  AcaoTeste acao = acaoTesteCore(std::string(cmd.c_str()));
+
+  if (acao == AcaoTeste::TRAVAR) {
+
+    responder(String("{\"ok\":true,\"teste\":\"travar\",\"seq\":") + seqAtual +
+              ",\"ms\":" + millis() + ",\"watchdogS\":" + WATCHDOG_S + "}");
+    travarParaTesteWatchdog();
+  }
+
+  if (acao == AcaoTeste::DESCONHECIDA) {
+
+    responder("{\"ok\":false,\"erro\":\"acao_desconhecida\"}");
+    return;
+  }
+
+#ifdef COM_MQTT
+  bool invalida = acao == AcaoTeste::THINGSPEAK_INVALIDO;
+
+  mqttSenhaInvalida = invalida;
+  mqttReconectar = true;
+
+  Serial.println(invalida ? "TESTE: MQTT com senha invalida (so na RAM); a API segue normal."
+                          : "TESTE: MQTT de volta a senha do firmware.");
+  responder(String("{\"ok\":true,\"teste\":") + (invalida ? "\"thingspeak_invalido\"" : "\"normal\"") +
+            ",\"ms\":" + millis() + "}");
+#else
+  responder("{\"ok\":false,\"erro\":\"sem_mqtt\"}");
+#endif
+}
+
+
 void tratarComando() {
 
   String cmd = comandoPendente;
@@ -2719,6 +2804,12 @@ void tratarComando() {
   if (tipo == "parametros") {
 
     tratarParametros(cmd);
+    return;
+  }
+
+  if (tipo == "teste") {
+
+    tratarTeste(cmd);
     return;
   }
 
@@ -2957,10 +3048,7 @@ void loop() {
   // Teste do watchdog: para de alimentar e espera o reinicio.
   if (SIMULAR_TRAVAMENTO_S > 0 && millis() > SIMULAR_TRAVAMENTO_S * 1000UL &&
       !reiniciouPorWatchdog()) {
-    Serial.println("TESTE: loop travado de proposito; o watchdog deve reiniciar a placa.");
-    while (true) {
-      delay(1000);
-    }
+    travarParaTesteWatchdog();
   }
 
   // --------------------------------------------------------
