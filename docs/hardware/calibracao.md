@@ -1,6 +1,6 @@
 # Calibração do sensor contra uma referência
 
-**Situação: procedimento pronto, medição pendente.** Precisa da placa e de um termo-higrômetro
+**Situação: lacuna justificada, medição não feita** (resumo e motivo em [`../calibracao.md`](../calibracao.md)). Precisa da placa e de um termo-higrômetro
 de referência; nenhuma medição foi registrada ainda.
 
 ## Material
