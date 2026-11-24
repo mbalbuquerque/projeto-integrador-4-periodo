@@ -18,7 +18,9 @@ serve de verificação cruzada):
 5. Baseline: persistência (alvo = última leitura). Modelo: ridge sem intercepto sobre a
    variação (alvo - y0), lambda fixo, com numpy.
 6. Métrica principal: MAE em °C no teste (RMSE junto). O modelo só é "recomendado" se o MAE
-   dele for menor que o do baseline.
+   dele for menor que o do baseline. O MAE também sai separado na janela com excursão térmica
+   provocada (EXCURSOES) e, como referência sem treino, para a extrapolação da tendência
+   (alvo = última leitura + d10).
 7. Exporta ../../cloud/function/modelo_sensor.json (coeficientes e métricas, lido pela rota
    GET /api/predict/sensor) e escreve relatorio_previsao.md e figuras/previsao_teste.png.
 
@@ -46,7 +48,7 @@ RELATORIO = AQUI / "relatorio_previsao.md"
 FIGURA = AQUI / "figuras" / "previsao_teste.png"
 SAIDA_MODELO = FUNCAO / "modelo_sensor.json"
 
-VERSAO = "sensor-ridge-10min-v2"
+VERSAO = "sensor-ridge-10min-v3"
 FONTES = {
     "cosmos": "Cosmos DB de produção, leituras da placa ESP32-C3 + DHT11 da equipe, em bancada",
     "thingspeak": "ThingSpeak 3515173 (placa ESP32-C3 + DHT11 da equipe, em bancada)",
@@ -60,6 +62,9 @@ ATRIBUTOS = ["d5", "d10", "m10"]
 ARQUIVOS = {"cosmos": CSV_COSMOS, "thingspeak": CSV_THINGSPEAK}
 FAIXA_DHT11 = (0.0, 50.0)
 CORTES_SENSIBILIDADE = (0.20, 0.30, 0.40)
+# Sessões de excursão provocada em bancada (UTC): placa numa panela fechada aquecendo até
+# ~35 °C, depois panela aberta com ventilador, esfriando. Só servem para recortar a avaliação.
+EXCURSOES = [("2026-11-23T22:00:00+00:00", "2026-11-24T02:00:00+00:00")]
 
 
 def limpar(df):
@@ -126,12 +131,29 @@ def avaliar(teste, coef):
             "rmseModelo": round(rmse(modelo), 4), "rmseBaseline": round(rmse(base), 4)}
 
 
+def na_excursao(parte, janelas=None):
+    """Amostras de `parte` cujo instante cai numa das janelas de excursão provocada."""
+    janelas = EXCURSOES if janelas is None else janelas
+    dentro = pd.Series(False, index=parte.index)
+    for de, ate in janelas:
+        dentro |= (parte["momento"] >= pd.Timestamp(de)) & (parte["momento"] <= pd.Timestamp(ate))
+    return parte[dentro]
+
+
+def mae_tendencia(parte):
+    """MAE (°C) da extrapolação da tendência sem treino: alvo = última leitura + d10."""
+    if parte.empty:
+        return None
+    return round(float(np.mean(np.abs(parte["y0"] + parte["d10"] - parte["alvo"]))), 4)
+
+
 def periodo(parte):
     return {"de": parte["momento"].min().isoformat(), "ate": parte["momento"].max().isoformat(),
             "amostras": int(len(parte))}
 
 
 def montar_modelo(treino, teste, coef, metricas, fonte):
+    excursao = na_excursao(teste)
     return {
         "versao": VERSAO,
         "fonte": FONTES[fonte],
@@ -145,6 +167,8 @@ def montar_modelo(treino, teste, coef, metricas, fonte):
         "treino": periodo(treino),
         "teste": periodo(teste),
         "metricas": metricas,
+        "metricasExcursao": ({**avaliar(excursao, coef), "amostras": int(len(excursao))}
+                             if len(excursao) else None),
         "superaBaseline": metricas["maeModelo"] < metricas["maeBaseline"],
     }
 
@@ -264,6 +288,7 @@ def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens, fonte, c
         "",
         veredito,
         "",
+        *secao_excursao(teste, modelo),
         "Coeficientes (variação prevista = soma de coeficiente × atributo, sem intercepto, "
         f"lambda = {LAMBDA}):",
         "",
@@ -292,9 +317,11 @@ def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens, fonte, c
         "absoluto, janela de 30 min com mais atributos, hora do dia) também não passaram da "
         "persistência no MAE; o resumo está em `docs/model-card.md`.",
         "- Sensor em bancada, em ambiente interno, não dentro de um baú refrigerado: não há "
-        "nenhuma excursão térmica real (porta aberta, falha do frio) na base. A série é quase "
-        "estável e varia em degraus de resolução do DHT11, cenário em que a persistência é "
-        "difícil de bater.",
+        "excursão real de transporte (porta aberta, falha do frio) na base. A única excursão é "
+        "a provocada em bancada (seção acima), curta e inteira no teste, então o treino não "
+        "tem nenhuma subida ou descida forte para aprender. Fora dela a série é quase estável "
+        "e varia em degraus de resolução do DHT11, cenário em que a persistência é difícil de "
+        "bater.",
         "- O modelo não sabe nada de clima, rota ou porta: só extrapola a própria série.",
         "",
         "## Re-treinar",
@@ -310,6 +337,36 @@ def relatorio(passos, serie, dados, treino, teste, corte, modelo, sens, fonte, c
         "",
     ]
     RELATORIO.write_text("\n".join(linhas), encoding="utf-8")
+
+
+def secao_excursao(teste, modelo):
+    """Linhas do relatório com o recorte do teste na janela de excursão provocada."""
+    e = modelo["metricasExcursao"]
+    if e is None:
+        return []
+    m = modelo["metricas"]
+    janelas = ", ".join(f"{de[:16].replace('T', ' ')} a {ate[:16].replace('T', ' ')}" for de, ate in EXCURSOES)
+    return [
+        "## Janela com excursão provocada (recorte do teste)",
+        "",
+        f"Sessão em bancada ({janelas} UTC): placa numa panela fechada aquecendo até ~35 °C, "
+        "depois panela aberta com ventilador, esfriando. É o caso que o modelo deveria "
+        f"antecipar. Recorte do mesmo teste, mesmos coeficientes: {e['amostras']} amostras.",
+        "",
+        "| recorte | amostras | MAE modelo (ridge) | MAE baseline (persistência) | "
+        "MAE tendência (y0 + d10, sem treino) |",
+        "|---|---|---|---|---|",
+        f"| teste inteiro | {modelo['teste']['amostras']} | {m['maeModelo']:.3f} | "
+        f"{m['maeBaseline']:.3f} | {mae_tendencia(teste):.3f} |",
+        f"| janela com excursão | {e['amostras']} | {e['maeModelo']:.3f} | "
+        f"{e['maeBaseline']:.3f} | {mae_tendencia(na_excursao(teste)):.3f} |",
+        "",
+        "A tendência é só referência e não foi escolhida por este recorte: ela erra menos que a "
+        "persistência durante a excursão, mas erra bem mais no teste inteiro (ruído de degrau "
+        "do DHT11 vira tendência falsa), então não é recomendada. O veredito usa só o teste "
+        "inteiro.",
+        "",
+    ]
 
 
 def secao_cruzada(cruzada):

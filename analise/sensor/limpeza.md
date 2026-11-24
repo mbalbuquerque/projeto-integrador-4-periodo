@@ -1,21 +1,21 @@
 # Limpeza da base do sensor
 
-Gerado por `limpar_sensor.py` a partir do container `leituras` do Cosmos (export de 17 a 20/11/2026). Requisito do plano de ação (#138). Os números saem todos do export; nada é estimado à mão. O export bruto tem endereço de e-mail em outros containers e fica fora do repositório; só o CSV sem dado pessoal (`dados/cosmos_leituras.csv`) é versionado.
+Gerado por `limpar_sensor.py` a partir do container `leituras` do Cosmos (export de 17 a 24/11/2026). Requisito do plano de ação (#138). Os números saem todos do export; nada é estimado à mão. O export bruto tem endereço de e-mail em outros containers e fica fora do repositório; só o CSV sem dado pessoal (`dados/cosmos_leituras.csv`) é versionado.
 
 ## Passo a passo
 
 | passo | removidas | restantes |
 |---|---|---|
-| leituras no container | 0 | 16100 |
-| de outro dispositivo (testes de push) | 12 | 16088 |
-| sem número de sequência (`seq`) | 4073 | 12015 |
-| `seq` repetido (reenvio idêntico) | 0 | 12015 |
-| sem data ou sem temperatura | 0 | 12015 |
-| temperatura fora de 0 a 50 °C (faixa do DHT11) | 0 | 12015 |
-| umidade fora de 20 a 90 % (faixa do DHT11) | 0 | 12015 |
-| instante repetido | 0 | 12015 |
+| leituras no container | 0 | 16323 |
+| de outro dispositivo (testes de push) | 12 | 16311 |
+| sem número de sequência (`seq`) | 4073 | 12238 |
+| `seq` repetido (reenvio idêntico) | 0 | 12238 |
+| sem data ou sem temperatura | 0 | 12238 |
+| temperatura fora de 0 a 50 °C (faixa do DHT11) | 0 | 12238 |
+| umidade fora de 20 a 90 % (faixa do DHT11) | 0 | 12238 |
+| instante repetido | 0 | 12238 |
 
-A base limpa tem **12015 leituras**, de 17/11 02:33 a 20/11 08:10 UTC (77.6 h entre a primeira e a última).
+A base limpa tem **12238 leituras**, de 17/11 02:33 a 24/11 01:35 UTC (167.0 h entre a primeira e a última).
 
 ## O que cada passo trata
 
@@ -28,13 +28,13 @@ A base limpa tem **12015 leituras**, de 17/11 02:33 a 20/11 08:10 UTC (77.6 h en
 
 ## Lacunas e perda (não removem leitura)
 
-- Lacunas maiores que 2 min na base limpa: **7** (maior: 286.7 min).
-- Números de `seq` faltando entre o menor e o maior: **103** (0.85% da faixa).
+- Lacunas maiores que 2 min na base limpa: **11** (maior: 5157.2 min).
+- Números de `seq` faltando entre o menor e o maior: **165** (1.33% da faixa).
 - O modelo quebra a série em trechos nas lacunas (`LACUNA_S` em `modelo_previsao.py`), então nenhum alvo atravessa um buraco.
 
 ## Ligação com o modelo
 
-`dados/cosmos_leituras.csv`, que alimenta `modelo_previsao.py`, tem 12015 linhas; esta limpeza deixa 12015 (mesma quantidade). Todas as `seq` do CSV estão na base limpa: **sim**. Depois disso `modelo_previsao.py` ainda descarta, na temperatura, vazio, fora de 0 a 50 °C e instante repetido (a tabela de limpeza dele, em `relatorio_previsao.md`).
+`dados/cosmos_leituras.csv`, que alimenta `modelo_previsao.py`, tem 12238 linhas; esta limpeza deixa 12238 (mesma quantidade). Todas as `seq` do CSV estão na base limpa: **sim**. Depois disso `modelo_previsao.py` ainda descarta, na temperatura, vazio, fora de 0 a 50 °C e instante repetido (a tabela de limpeza dele, em `relatorio_previsao.md`).
 
 ## Reproduzir
 

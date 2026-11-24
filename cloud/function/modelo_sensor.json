@@ -1,5 +1,5 @@
 {
-  "versao": "sensor-ridge-10min-v2",
+  "versao": "sensor-ridge-10min-v3",
   "fonte": "Cosmos DB de produção, leituras da placa ESP32-C3 + DHT11 da equipe, em bancada",
   "horizonteMin": 10,
   "janelaMin": 10,
@@ -10,27 +10,34 @@
     "m10"
   ],
   "coeficientes": [
-    0.00795,
-    -0.000667,
-    0.27131
+    0.008288,
+    -0.000431,
+    0.272877
   ],
   "lambda": 1.0,
   "baseline": "persistencia",
   "treino": {
     "de": "2026-11-17T02:44:00+00:00",
-    "ate": "2026-11-19T04:56:00+00:00",
-    "amostras": 2944
+    "ate": "2026-11-19T05:27:00+00:00",
+    "amostras": 2975
   },
   "teste": {
-    "de": "2026-11-19T05:07:00+00:00",
-    "ate": "2026-11-20T08:00:00+00:00",
-    "amostras": 1267
+    "de": "2026-11-19T05:38:00+00:00",
+    "ate": "2026-11-24T01:25:00+00:00",
+    "amostras": 1280
   },
   "metricas": {
-    "maeModelo": 0.3338,
-    "maeBaseline": 0.319,
-    "rmseModelo": 0.6618,
-    "rmseBaseline": 0.652
+    "maeModelo": 0.3828,
+    "maeBaseline": 0.3643,
+    "rmseModelo": 0.7421,
+    "rmseBaseline": 0.723
+  },
+  "metricasExcursao": {
+    "maeModelo": 1.6076,
+    "maeBaseline": 1.4955,
+    "rmseModelo": 1.8552,
+    "rmseBaseline": 1.7339,
+    "amostras": 44
   },
   "superaBaseline": false
 }

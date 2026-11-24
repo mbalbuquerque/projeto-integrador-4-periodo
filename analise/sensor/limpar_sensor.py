@@ -102,7 +102,7 @@ def relatorio(passos, limpa, cruzamento):
         "# Limpeza da base do sensor",
         "",
         "Gerado por `limpar_sensor.py` a partir do container `leituras` do Cosmos (export de "
-        "17 a 20/11/2026). Requisito do plano de ação (#138). Os números saem todos do export; "
+        "17 a 24/11/2026). Requisito do plano de ação (#138). Os números saem todos do export; "
         "nada é estimado à mão. O export bruto tem endereço de e-mail em outros containers e "
         "fica fora do repositório; só o CSV sem dado pessoal (`dados/cosmos_leituras.csv`) é "
         "versionado.",
