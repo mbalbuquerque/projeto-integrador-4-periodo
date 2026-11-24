@@ -10,7 +10,6 @@ Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`
 |---|---|---|---|---|---|
 | Latência P1 a P6 sem medição | IoT / Integração | Medido com ventilador em 24/11: 3 estímulos, 1 com efeito visível, causa do > 40 s explicada. Repetir com objeto frio para chegar a 5 degraus claros | Everson (placa) | 27/11 | Tabela em `docs/qa/relatorio-de-testes.md` (#126) |
 | Sem calibração (**Lacuna justificada**, #128) | IoT / Placa | Não calibrado: a equipe não teve termômetro de referência antes de 30/11; a precisão do datasheet do DHT11 é de ±2 °C. Desde o firmware 2026.11.23.1 cada leitura guarda o valor bruto (`temperaturaBruta`/`umidadeBruta`), então uma correção pode ser aplicada depois sem perder o histórico. Próximo passo: comparar em 3 pontos contra uma referência e registrar em `docs/calibracao.md` | Everson (placa) | depois de 30/11 | `docs/calibracao.md` (#128) |
-| Sem caixa adequada | IoT / Placa | Acomodar o artefato em caixa adequada | Everson (placa) | 28/11 | Foto da caixa (#129), `docs/hardware/caixa.md` |
 | Modelo do sensor não supera o baseline (**Lacuna justificada**, #37) | IA | Re-treinado em 24/11 com a base de 17/11 a 24/11 (Cosmos, 71 h de amostras, incluindo a excursão provocada em bancada de 23-24/11): ridge MAE 0,383 °C contra 0,364 °C da persistência no teste temporal; na janela da excursão, 1,608 contra 1,496 °C. LAD e gradient boosting também não passaram. A excursão caiu inteira no teste, então o treino segue sem subida ou descida forte para aprender. A rota recomenda o baseline e o painel exibe a previsão. Justificativa: reavaliado em 24/11 (PR #171), a rota recomenda a persistência e o painel a exibe, e o model card explica. Próximo passo: coletar excursões em dias diferentes (caixa refrigerada real), algumas no período de treino | Everson | 30/11 | Model card e `relatorio_previsao.md` (#37) |
 | Banco sem diagrama ER e script | IoT / Banco | Diagrama, script de criação e dados de exemplo para o Cosmos | Everson | 27/11 | `docs/` e `infra/` (#130) |
 | Estrutura e README finais | Cloud / Tech English | Mapa de pastas, usuário de teste e passos de execução | Everson | 28/11 | README em português e inglês (#132) |
@@ -31,6 +30,7 @@ Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`
 
 | Lacuna | Evidência |
 |---|---|
+| Caixa adequada (23/11) | Placa e DHT montados no pote, protoboard presa na maquete do caminhão; fotos em `docs/hardware/fotos/` e checklist em `docs/hardware/caixa.md` (#129) |
 | F1, F2 e F3 na placa física (17/11) | `RESILIENCIA.md` (#34) |
 | F4 na nuvem (23/11) | `RESILIENCIA.md`: API volta a responder em 20,6 s |
 | F4 na placa física (24/11) | `RESILIENCIA.md` (#121): serviço voltou em 20 s, a placa reteve e reenviou em ordem, zero leitura perdida, sem duplicado |
