@@ -1,112 +1,98 @@
 #!/usr/bin/env bash
-# Script para gerar evidências de antes/depois da proteção IDOR
-# Uso: bash seguranca/testes/idor_antes_depois.sh
+# Antes e depois da protecao contra IDOR (#114).
+#
+# Roda o MESMO teste (cloud/function/test_idor.py) em dois pontos da historia:
+#   antes  = commit d44b301, de antes da verificacao de dono (qualquer usuario lia
+#            qualquer sensor trocando o deviceId);
+#   depois = o commit atual (HEAD), com exigir_dono em todas as rotas com ID.
+# No "antes" os testes de bloqueio FALHAM (prova de que o ataque funcionava); no
+# "depois" passam.
+#
+# Uso, da raiz do repositorio, com as dependencias da API instaladas
+# (pip install -r cloud/function/requirements.txt):
+#   MISSAO_CODIGO=<codigo> bash seguranca/testes/idor_antes_depois.sh
+# Sem MISSAO_CODIGO, os arquivos saem como SEM-CODIGO-idor-antes.txt e -depois.txt.
+#
+# Ajustes para o teste rodar no commit antigo (anotados no README da pasta seguranca):
+# - o commit antigo nao tem test_idor.py nem o Cosmos falso (test_falsos.py): os dois
+#   sao copiados do commit atual para uma copia temporaria do d44b301 (git worktree);
+# - no "antes" roda so a classe TestAtaqueEntreEmpresas, que usa apenas o que existe
+#   nos dois commits. Rota que nao existia em d44b301 (dispositivos, predict/sensor)
+#   aparece como "skipped" la.
 
-set -euo pipefail
+set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SEGURANCA_DIR="$REPO_ROOT/seguranca"
-EVIDENCIAS_DIR="$SEGURANCA_DIR/evidencias"
-ANTES_DIR="C:/tmp/antes"
-DEPOIS_DIR="C:/tmp/depois"
-MISSAO_CODIGO="XXXXXX"  # Placeholder até o professor passar o código oficial
-
-echo "=== Gerando evidências de IDOR (antes/depois) ==="
-echo "Código da missão: $MISSAO_CODIGO"
-echo ""
-
-# Verifica se estamos no repo correto
-if [ ! -d "$REPO_ROOT/.git" ]; then
-    echo "ERRO: Execute a partir da raiz do repositório"
-    exit 1
-fi
-
-# Commit base para "antes" (d44b301 - antes do IDOR)
+MISSAO_CODIGO="${MISSAO_CODIGO:-SEM-CODIGO}"
 ANTES_COMMIT="d44b301"
+TESTES_ANTES="test_idor.TestAtaqueEntreEmpresas"
+TESTES_DEPOIS="test_idor"
 
-# Limpa worktrees anteriores se existirem
-if [ -d "$ANTES_DIR" ]; then
-    echo "Removendo worktree anterior em $ANTES_DIR..."
-    git worktree remove --force "$ANTES_DIR" 2>/dev/null || true
-    rm -rf "$ANTES_DIR"
-fi
+RAIZ="$(git rev-parse --show-toplevel)"
+EVIDENCIAS="$RAIZ/seguranca/evidencias"
+SAIDA_ANTES="$EVIDENCIAS/${MISSAO_CODIGO}-idor-antes.txt"
+SAIDA_DEPOIS="$EVIDENCIAS/${MISSAO_CODIGO}-idor-depois.txt"
 
-if [ -d "$DEPOIS_DIR" ]; then
-    echo "Removendo worktree anterior em $DEPOIS_DIR..."
-    git worktree remove --force "$DEPOIS_DIR" 2>/dev/null || true
-    rm -rf "$DEPOIS_DIR"
-fi
+TMP="$(mktemp -d)"
+ANTES="$TMP/antes"
+limpar() {
+    git -C "$RAIZ" worktree remove --force "$ANTES" >/dev/null 2>&1
+    rm -rf "$TMP"
+}
+trap limpar EXIT
 
-# Cria worktree para o commit antigo (antes do IDOR)
-echo "Criando worktree para commit $ANTES_COMMIT (antes do IDOR)..."
-git worktree add "$ANTES_DIR" "$ANTES_COMMIT"
-
-# Cria worktree para o estado atual (depois do IDOR)
-echo "Criando worktree para estado atual (depois do IDOR)..."
-git worktree add "$DEPOIS_DIR" HEAD
-
-# Função para rodar testes de IDOR em um worktree
-rodar_testes_idor() {
-    local worktree_dir="$1"
-    local output_file="$2"
-    local label="$3"
-
-    echo "Rodando testes de IDOR em $label..."
-    cd "$worktree_dir"
-
-    # Determina o Python correto
-    PYTHON_CMD="python"
-    if command -v "C:/Users/Chupetinha/AppData/Local/Programs/Python/Python312/python.exe" &> /dev/null; then
-        PYTHON_CMD="C:/Users/Chupetinha/AppData/Local/Programs/Python/Python312/python.exe"
-    fi
-
-    # Instala dependências se necessário
-    if [ -f "cloud/function/requirements.txt" ]; then
-        "$PYTHON_CMD" -m pip install -q -r cloud/function/requirements.txt 2>/dev/null || true
-    fi
-
-    # Roda os testes de IDOR se o arquivo existir
-    if [ -f "seguranca/testes/test_idor.py" ]; then
-        cd seguranca/testes
-        "$PYTHON_CMD" -m pytest test_idor.py -v 2>&1 | tee "$output_file"
-        local exit_code=${PIPESTATUS[0]}
-        if [ $exit_code -eq 0 ]; then
-            echo "✓ Testes de IDOR passaram em $label" | tee -a "$output_file"
-        else
-            echo "✗ Testes de IDOR falharam em $label (esperado para o 'antes')" | tee -a "$output_file"
-        fi
-    else
-        echo "AVISO: test_idor.py não encontrado em $worktree_dir (commit anterior ao IDOR)" | tee "$output_file"
-        echo "Isso é esperado - o commit antigo não tem os testes de IDOR implementados." | tee -a "$output_file"
-    fi
+# Tira caminhos da maquina de quem rodou (pasta temporaria, usuario, site-packages).
+sem_caminho_local() {
+    sed -E \
+        -e 's#File "[^"]*[/\\](cloud[/\\]function[/\\])#File "\1#' \
+        -e 's#File "[^"]*site-packages[/\\]#File "<site-packages>/#' \
+        -e 's#File "[^"]*[/\\][Ll]ib[/\\]#File "<python>/lib/#'
 }
 
-# Roda testes no commit antigo (ANTES)
-ANTES_OUTPUT="$EVIDENCIAS_DIR/${MISSAO_CODIGO}-idor-antes.txt"
-echo ""
-echo "=== TESTE ANTES (commit $ANTES_COMMIT) ==="
-rodar_testes_idor "$ANTES_DIR" "$ANTES_OUTPUT" "ANTES (commit $ANTES_COMMIT)"
+rodar() {  # rodar <pasta cloud/function> <testes> <titulo> <commit> <arquivo>
+    local pasta="$1" testes="$2" titulo="$3" commit="$4" arquivo="$5" codigo
+    {
+        echo "# $titulo"
+        echo "# codigo de missao: $MISSAO_CODIGO"
+        echo "# commit: $commit"
+        echo "# comando: cd cloud/function && python -m unittest $testes -v"
+        echo "# gerado em: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo
+    } > "$arquivo"
+    (cd "$pasta" && PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python -m unittest "$testes" -v 2>&1) | sem_caminho_local >> "$arquivo"
+    codigo="${PIPESTATUS[0]}"
+    echo >> "$arquivo"
+    echo "# saida do unittest: $codigo (0 = todos passaram)" >> "$arquivo"
+    return "$codigo"
+}
 
-# Roda testes no estado atual (DEPOIS)
-DEPOIS_OUTPUT="$EVIDENCIAS_DIR/${MISSAO_CODIGO}-idor-depois.txt"
-echo ""
-echo "=== TESTE DEPOIS (HEAD atual) ==="
-rodar_testes_idor "$DEPOIS_DIR" "$DEPOIS_OUTPUT" "DEPOIS (HEAD atual)"
+echo "Criando copia temporaria do commit $ANTES_COMMIT..."
+git -C "$RAIZ" worktree add --detach "$ANTES" "$ANTES_COMMIT" >/dev/null 2>&1 || {
+    echo "ERRO: nao consegui criar o worktree de $ANTES_COMMIT" >&2
+    exit 2
+}
+cp "$RAIZ/cloud/function/test_idor.py" "$RAIZ/cloud/function/test_falsos.py" \
+    "$ANTES/cloud/function/"
 
-# Limpa worktrees
-echo ""
-echo "Limpando worktrees temporários..."
-git worktree remove --force "$ANTES_DIR" 2>/dev/null || true
-git worktree remove --force "$DEPOIS_DIR" 2>/dev/null || true
-rm -rf "$ANTES_DIR" "$DEPOIS_DIR"
+ANTES_SHA="$(git -C "$ANTES" rev-parse --short HEAD)"
+DEPOIS_SHA="$(git -C "$RAIZ" rev-parse --short HEAD)"
+if [ -n "$(git -C "$RAIZ" status --porcelain -- cloud/function)" ]; then
+    DEPOIS_SHA="$DEPOIS_SHA (com alteracoes nao commitadas em cloud/function)"
+fi
 
-# Resumo
-echo ""
-echo "=== RESUMO ==="
-echo "Arquivos gerados:"
-echo "  - $ANTES_OUTPUT"
-echo "  - $DEPOIS_OUTPUT"
-echo ""
-echo "Compare os resultados para verificar a proteção IDOR implementada."
-echo "No 'antes', espera-se falhas (acesso indevido permitido)."
-echo "No 'depois', espera-se sucesso (bloqueio com 404)."
+rodar "$ANTES/cloud/function" "$TESTES_ANTES" \
+    "IDOR ANTES: commit $ANTES_COMMIT, sem verificacao de dono (o ataque deve funcionar)" \
+    "$ANTES_SHA" "$SAIDA_ANTES"
+r_antes=$?
+rodar "$RAIZ/cloud/function" "$TESTES_DEPOIS" \
+    "IDOR DEPOIS: exigir_dono em todas as rotas com ID (o ataque deve ser bloqueado)" \
+    "$DEPOIS_SHA" "$SAIDA_DEPOIS"
+r_depois=$?
+
+echo "antes  ($ANTES_COMMIT): saida $r_antes -> ${SAIDA_ANTES#"$RAIZ"/}"
+echo "depois ($DEPOIS_SHA): saida $r_depois -> ${SAIDA_DEPOIS#"$RAIZ"/}"
+if [ "$r_antes" -ne 0 ] && [ "$r_depois" -eq 0 ]; then
+    echo "OK: no antes o ataque funcionou (testes de bloqueio falharam); no depois foi bloqueado."
+    exit 0
+fi
+echo "ATENCAO: resultado diferente do esperado (antes deve falhar, depois deve passar)." >&2
+exit 1

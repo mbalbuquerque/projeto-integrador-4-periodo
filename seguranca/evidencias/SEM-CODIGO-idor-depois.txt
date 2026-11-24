@@ -1,0 +1,34 @@
+# IDOR DEPOIS: exigir_dono em todas as rotas com ID (o ataque deve ser bloqueado)
+# codigo de missao: SEM-CODIGO
+# commit: 737dcd6
+# comando: cd cloud/function && python -m unittest test_idor -v
+# gerado em: 2026-11-24T03:20:11Z
+
+test_apagar_usuario_de_b (test_idor.TestAtaqueEntreEmpresas) ... ok
+test_apagar_veiculo_de_b (test_idor.TestAtaqueEntreEmpresas) ... ok
+test_apagar_viagem_de_b (test_idor.TestAtaqueEntreEmpresas) ... ok
+test_b_continua_lendo_o_proprio_sensor (test_idor.TestAtaqueEntreEmpresas) ... ok
+test_ler_leituras_do_sensor_de_b (test_idor.TestAtaqueEntreEmpresas) ... ok
+test_previsao_do_sensor_de_b (test_idor.TestAtaqueEntreEmpresas) ... ok
+test_trocar_chave_do_sensor_de_b (test_idor.TestAtaqueEntreEmpresas) ... ok
+test_dispositivo_de_b_put_e_delete (test_idor.TestMatrizDeRotas) ... ok
+test_dono_continua_usando_os_proprios (test_idor.TestMatrizDeRotas) ... ok
+test_inexistente_e_de_outra_empresa_recebem_a_mesma_resposta (test_idor.TestMatrizDeRotas) ... ok
+test_item_apagado_entre_a_checagem_e_o_delete (test_idor.TestMatrizDeRotas) ... ok
+test_motorista_so_ve_o_veiculo_do_proprio_cadastro (test_idor.TestMatrizDeRotas) ... ok
+test_operador_le_leituras_e_previsao_de_b (test_idor.TestMatrizDeRotas) ... ok
+test_usuario_de_b_put (test_idor.TestMatrizDeRotas) ... ok
+test_veiculo_de_b_get_put_delete (test_idor.TestMatrizDeRotas) ... ok
+test_viagem_de_b_get_put (test_idor.TestMatrizDeRotas) ... ok
+test_device_id_em_maiusculas (test_idor.TestTentativasDeContorno) ... ok
+test_device_id_repetido_na_url (test_idor.TestTentativasDeContorno) ... ok
+test_empresa_de_b_no_corpo_do_put (test_idor.TestTentativasDeContorno) ... ok
+test_id_de_veiculo_com_prefixo_de_outra_empresa (test_idor.TestTentativasDeContorno) ... ok
+test_token_de_usuario_apagado (test_idor.TestTentativasDeContorno) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 0.143s
+
+OK
+
+# saida do unittest: 0 (0 = todos passaram)
