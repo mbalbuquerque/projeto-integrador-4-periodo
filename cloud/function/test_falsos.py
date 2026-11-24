@@ -78,12 +78,20 @@ class ContainerFalso:
         self._achar(item)
         self.itens = [i for i in self.itens if i["id"] != item]
 
-    def patch_item(self, item, partition_key, patch_operations, **_):
-        """Aplica set/replace/incr/remove só nos campos pedidos, como o Cosmos."""
+    def patch_item(self, item, partition_key, patch_operations, etag=None,
+                   match_condition=None, **_):
+        """Aplica set/replace/incr/remove só nos campos pedidos, como o Cosmos.
+
+        Com `etag` + `match_condition`, só grava se o documento não mudou desde a
+        leitura (senão 412, como o Cosmos). Documento com `_etag` ganha um novo a cada patch.
+        """
         self.escritas.append(("patch", item, [dict(o) for o in patch_operations]))
         if self.antes_do_patch:
             self.antes_do_patch(item)
         doc = self._achar(item)
+        if match_condition is not None and doc.get("_etag") != etag:
+            raise exceptions.CosmosAccessConditionFailedError(status_code=412,
+                                                              message="etag mudou")
         for op in patch_operations:
             campo = op["path"].lstrip("/")
             if op["op"] in ("set", "replace", "add"):
@@ -94,4 +102,7 @@ class ContainerFalso:
                 doc.pop(campo, None)
             else:
                 raise ValueError(op["op"])
+        if "_etag" in doc:
+            self.versao = getattr(self, "versao", 0) + 1
+            doc["_etag"] = f"etag-{self.versao}"
         return dict(doc)

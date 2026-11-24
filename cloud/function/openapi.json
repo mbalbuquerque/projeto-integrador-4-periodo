@@ -586,7 +586,7 @@
         ],
         "operationId": "login",
         "summary": "Logs in with e-mail and password",
-        "description": "**Who can call:** public (no authentication). Returns a JWT valid for 8 hours.\n\nThe `401` is identical, in message and in timing, for an unknown e-mail, a wrong password and an account on hold. From the 5th wrong password in a row the account is put on hold (1, 2, 4, 8 and at most 15 min). A single IP with 20 wrong attempts in 15 min receives `429`.",
+        "description": "**Who can call:** public (no authentication). Returns a JWT valid for 8 hours.\n\nThe `401` is identical, in message and in timing, for an unknown e-mail, a wrong password and an account on hold. From the 5th wrong password in a row the account is put on hold (1, 2, 4, 8 and at most 15 min). A single IP with 20 wrong attempts in 15 min receives `429`. When the user has 2FA active, the right password returns `{ \"exige2fa\": true, \"desafio\": \"...\" }` instead of the token; finish with `POST /login/2fa`.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -600,11 +600,18 @@
         },
         "responses": {
           "200": {
-            "description": "Logged in.",
+            "description": "Logged in, or `{exige2fa, desafio}` (no token) when the user has 2FA active.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LoginResposta"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/LoginResposta"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Login2faDesafio"
+                    }
+                  ]
                 }
               }
             }
@@ -806,6 +813,297 @@
           },
           "403": {
             "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      }
+    },
+    "/2fa/iniciar": {
+      "post": {
+        "tags": [
+          "Autenticação"
+        ],
+        "operationId": "iniciar2FA",
+        "summary": "Starts 2FA activation: generates TOTP secret and QR code URI",
+        "description": "**Who can call:** authenticated user (token from the login). Returns the `otpauth://` URI to scan with an authenticator app (Google Authenticator, Authy, etc.). The secret is stored temporarily; call `POST /2fa/ativar` with the first 6-digit code to activate. If 2FA is already active (new phone), the new secret is kept in a provisional field and the current one keeps working until `POST /2fa/ativar` confirms the new one.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TOTP secret and QR code URI.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpIniciarResposta"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NaoAutenticado"
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      }
+    },
+    "/2fa/ativar": {
+      "post": {
+        "tags": [
+          "Autenticação"
+        ],
+        "operationId": "ativar2FA",
+        "summary": "Activates 2FA: validates the first TOTP code and stores secret + recovery codes",
+        "description": "**Who can call:** authenticated user (token from the login). Requires a pending 2FA activation (from `POST /2fa/iniciar`). Body: `{ \"codigo\": \"123456\" }`. On success returns 10 recovery codes (8 lowercase alphanumeric chars each). Store them safely; each works once and is then invalidated.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpAtivarPedido"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "2FA activated; recovery codes returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpAtivarResposta"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No pending 2FA activation, or body is not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "nenhuma ativação de 2FA em andamento",
+                    "value": {
+                      "erros": [
+                        "nenhuma ativação de 2FA em andamento"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "codigo: obrigatório",
+                    "value": {
+                      "erros": [
+                        "codigo: obrigatório"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or replayed TOTP code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "código de verificação inválido ou expirado"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      }
+    },
+    "/2fa/desativar": {
+      "post": {
+        "tags": [
+          "Autenticação"
+        ],
+        "operationId": "desativar2FA",
+        "summary": "Deactivates 2FA: requires current password + TOTP code (or recovery code)",
+        "description": "**Who can call:** authenticated user (token from the login) with 2FA active. Body: `{ \"senha\": \"...\", \"codigo\": \"123456\" }` or `{ \"senha\": \"...\", \"recuperacao\": \"abc12345\" }`. A wrong password counts toward the escalating wait (same as login). On success returns `204` (no body).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpDesativarPedido"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "2FA deactivated."
+          },
+          "400": {
+            "description": "2FA is not active, or body is not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "senha: informe a sua senha atual",
+                    "value": {
+                      "erros": [
+                        "senha: informe a sua senha atual"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "informe codigo (6 digitos) ou recuperacao (8 chars)",
+                    "value": {
+                      "erros": [
+                        "informe codigo (6 digitos) ou recuperacao (8 chars)"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong password, or invalid TOTP or recovery code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "examples": {
+                  "caso1": {
+                    "summary": "senha: senha atual incorreta",
+                    "value": {
+                      "erros": [
+                        "senha: senha atual incorreta"
+                      ]
+                    }
+                  },
+                  "caso2": {
+                    "summary": "código de verificação inválido ou expirado",
+                    "value": {
+                      "erros": [
+                        "código de verificação inválido ou expirado"
+                      ]
+                    }
+                  },
+                  "caso3": {
+                    "summary": "muitas tentativas de senha atual erradas. Aguarde alguns minutos.",
+                    "value": {
+                      "erros": [
+                        "muitas tentativas de senha atual erradas. Aguarde alguns minutos."
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/SemPerfil"
+          }
+        }
+      }
+    },
+    "/login/2fa": {
+      "post": {
+        "tags": [
+          "Autenticação"
+        ],
+        "operationId": "login2FA",
+        "summary": "2nd step of login: validates challenge JWT + TOTP code or recovery code",
+        "description": "**Who can call:** public (no authentication). Called after `POST /login` returns `{ \"exige2fa\": true, \"desafio\": \"...\" }` when the user has 2FA active. Body: `{ \"desafio\": \"...\", \"codigo\": \"123456\" }` or `{ \"desafio\": \"...\", \"recuperacao\": \"abc12345\" }`. The challenge JWT expires in 5 minutes. On success returns the same token structure as `POST /login`. Wrong, expired or already used code, missing or expired challenge: `401` with the same message. A TOTP code is accepted once (the accepted time step is stored and the write is conditional on the document's etag); a recovery code is removed from the list when used. Limits: 10 wrong attempts per IP and 5 per account every 5 minutes (`429`).",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Login2faPedido"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in with 2FA.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResposta"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body is not JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "desafio ausente"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired challenge; wrong, expired or reused TOTP code; unknown or used recovery code; user without 2FA, removed or on hold.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "código de verificação inválido ou expirado"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many wrong attempts from the IP or on the account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erro"
+                },
+                "example": {
+                  "erros": [
+                    "muitas tentativas. aguarde alguns minutos."
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -3223,6 +3521,10 @@
               "empresa": {
                 "type": "string",
                 "description": "Company name."
+              },
+              "totpAtivo": {
+                "type": "boolean",
+                "description": "Whether the user has 2FA (TOTP) active. The settings screen shows \"Activate\" or \"Deactivate\" from it."
               }
             }
           }
@@ -3232,7 +3534,8 @@
           "nome": "Maria Exemplo",
           "perfil": "gestor",
           "empresaId": "E-1A2B3C4D",
-          "empresa": "Transportes Exemplo"
+          "empresa": "Transportes Exemplo",
+          "totpAtivo": false
         }
       },
       "UsuarioResumo": {
@@ -3313,8 +3616,125 @@
             "nome": "Maria Exemplo",
             "perfil": "gestor",
             "empresaId": "E-1A2B3C4D",
-            "empresa": "Transportes Exemplo"
+            "empresa": "Transportes Exemplo",
+            "totpAtivo": false
           }
+        }
+      },
+      "TotpIniciarResposta": {
+        "type": "object",
+        "required": [
+          "uri"
+        ],
+        "properties": {
+          "uri": {
+            "type": "string",
+            "description": "otpauth:// URI to scan with an authenticator app (Google Authenticator, Authy, etc.)"
+          }
+        },
+        "example": {
+          "uri": "otpauth://totp/ColdTrack:gestor%40empresa.com?secret=JBSWY3DPEHPK3PXP&issuer=ColdTrack"
+        }
+      },
+      "TotpAtivarPedido": {
+        "type": "object",
+        "required": [
+          "codigo"
+        ],
+        "properties": {
+          "codigo": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "description": "6-digit TOTP code from the authenticator app"
+          }
+        },
+        "example": {
+          "codigo": "123456"
+        }
+      },
+      "TotpAtivarResposta": {
+        "type": "object",
+        "required": [
+          "recuperacao"
+        ],
+        "properties": {
+          "recuperacao": {
+            "type": "array",
+            "minItems": 10,
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9]{8}$",
+              "description": "Recovery code (8 lowercase alphanumeric chars). Each works once."
+            }
+          }
+        },
+        "example": {
+          "recuperacao": [
+            "a1b2c3d4",
+            "e5f6g7h8",
+            "i9j0k1l2",
+            "m3n4o5p6",
+            "q7r8s9t0",
+            "u1v2w3x4",
+            "y5z6a7b8",
+            "c9d0e1f2",
+            "g3h4i5j6",
+            "k7l8m9n0"
+          ]
+        }
+      },
+      "TotpDesativarPedido": {
+        "type": "object",
+        "required": [
+          "senha"
+        ],
+        "properties": {
+          "senha": {
+            "type": "string",
+            "format": "password",
+            "description": "Current password"
+          },
+          "codigo": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "description": "6-digit TOTP code from the authenticator app (optional if using recovery code)"
+          },
+          "recuperacao": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{8}$",
+            "description": "Recovery code (optional if using TOTP code)"
+          }
+        },
+        "example": {
+          "senha": "senha-atual-123",
+          "codigo": "123456"
+        }
+      },
+      "Login2faPedido": {
+        "type": "object",
+        "required": [
+          "desafio"
+        ],
+        "properties": {
+          "desafio": {
+            "type": "string",
+            "description": "Challenge JWT from POST /login (expires in 5 min)"
+          },
+          "codigo": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "description": "6-digit TOTP code from the authenticator app (optional if using recovery code)"
+          },
+          "recuperacao": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{8}$",
+            "description": "Recovery code (optional if using TOTP code)"
+          }
+        },
+        "example": {
+          "desafio": "eyJhbGciOiJIUzI1NiIs...",
+          "codigo": "123456"
         }
       },
       "EmpresaNova": {
@@ -3555,7 +3975,10 @@
           },
           "origem": {
             "type": "string",
-            "enum": ["placa", "simulador"],
+            "enum": [
+              "placa",
+              "simulador"
+            ],
             "description": "Optional. Where the reading came from: the physical board (`placa`) or the Wokwi simulator (`simulador`). Without it (older firmware) the reading is stored as `nao_informada`. Any other value is rejected with 400."
           },
           "seq": {
@@ -3768,7 +4191,11 @@
           },
           "origem": {
             "type": "string",
-            "enum": ["placa", "simulador", "nao_informada"],
+            "enum": [
+              "placa",
+              "simulador",
+              "nao_informada"
+            ],
             "description": "Where the reading came from: physical board, Wokwi simulator, or `nao_informada` (older firmware or reading stored before the field existed)."
           }
         },
@@ -4819,6 +5246,30 @@
               }
             }
           }
+        }
+      },
+      "Login2faDesafio": {
+        "type": "object",
+        "required": [
+          "exige2fa",
+          "desafio"
+        ],
+        "properties": {
+          "exige2fa": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "The password was accepted, but the user has 2FA active: no token yet."
+          },
+          "desafio": {
+            "type": "string",
+            "description": "Challenge JWT (5 min) to send to `POST /login/2fa`. It is not an access token: the other routes reject it with `401`."
+          }
+        },
+        "example": {
+          "exige2fa": true,
+          "desafio": "eyJhbGciOiJIUzI1NiIs.exemplo-ficticio"
         }
       }
     },

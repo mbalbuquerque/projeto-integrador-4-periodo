@@ -53,6 +53,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import azure.functions as func
+from azure.core import MatchConditions
 from azure.cosmos import CosmosClient, exceptions
 
 import assistente
@@ -94,13 +95,23 @@ from seguranca import (
     conferir_senha,
     espera_para,
     gerar_chave_dispositivo,
+    gerar_desafio_2fa,
     gerar_hash,
+    gerar_recovery_codes,
     gerar_token,
+    gerar_totp_secret,
     hash_chave,
+    hash_recovery_codes,
+    ler_desafio_2fa,
     ler_token,
+    log_2fa_bloqueado,
+    log_idor_bloqueado,
     mascarar_email,
     operacoes_de_falha,
     token_do_cabecalho,
+    totp_uri,
+    verificar_recovery_code,
+    verificar_totp,
 )
 
 # Quem confere o acesso é o próprio código (token ou chave do dispositivo).
@@ -162,6 +173,15 @@ LOGIN_JANELA_IP_S = 15 * 60
 MSG_LOGIN_RECUSADO = ("e-mail ou senha incorretos. Se errou várias vezes, "
                       "aguarde alguns minutos.")
 MSG_IP_EM_ESPERA = "muitas tentativas de login erradas. Aguarde alguns minutos."
+
+# 2FA: limites de tentativas no 2º passo (por IP e por conta, na mesma janela).
+# Por conta é o que segura o chute dos 6 dígitos de quem já tem a senha: 5 erros
+# em 5 min dão ~5 chances em 1 milhão por janela.
+LOGIN_2FA_FALHAS_POR_IP = 10
+LOGIN_2FA_FALHAS_POR_CONTA = 5
+LOGIN_2FA_JANELA_S = 5 * 60
+MSG_2FA_RECUSADO = "código inválido ou vencido."
+MSG_2FA_ESPERA = "muitas tentativas. Aguarde alguns minutos."
 
 _banco = None
 _containers = {}
@@ -239,6 +259,29 @@ def autorizar(req, perfis):
     return usuario, None
 
 
+# Containers cujo id gravado é "<empresa>~<código>" (o código se repete entre empresas).
+POR_EMPRESA = ("veiculos", "viagens")
+
+
+def exigir_dono(nome, item_id, usuario, rota=None, msg="não encontrado"):
+    """Devolve (item, None) se o item é da empresa do usuário; senão (None, resposta 404).
+
+    O id vem da URL; o dono vem sempre do token (`usuario` relido do banco por
+    `autorizar`), nunca do corpo. "Não existe" e "é de outra empresa" recebem a
+    mesma resposta, e as duas viram `idor bloqueado [<MISSAO_CODIGO>]` no log.
+    """
+    empresa = usuario["empresaId"]
+    item = None
+    if isinstance(item_id, str) and item_id.strip():
+        codigo = item_id.strip()
+        chave = id_interno(empresa, codigo) if nome in POR_EMPRESA else codigo.lower()
+        item = ler(nome, chave)
+    if item is not None and item.get("empresaId") == empresa:
+        return item, None
+    log_idor_bloqueado(rota or nome, usuario["id"], item_id)
+    return None, resposta({"erros": [msg]}, 404)
+
+
 def publico(usuario):
     return {k: usuario[k] for k in ("id", "nome", "perfil", "empresaId", "veiculo")
             if k in usuario}
@@ -246,7 +289,9 @@ def publico(usuario):
 
 def com_empresa(usuario):
     empresa = ler("empresas", usuario["empresaId"])
-    return {**publico(usuario), "empresa": empresa["nome"] if empresa else ""}
+    # totpAtivo: a tela de Configurações mostra "Ativar" ou "Desativar" o 2FA (GET /eu e login).
+    return {**publico(usuario), "empresa": empresa["nome"] if empresa else "",
+            "totpAtivo": bool(usuario.get("totpAtivo"))}
 
 
 def lista(nome, empresa, campos="*"):
@@ -655,6 +700,10 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
     if usuario is not None and senha_ok and not em_espera:
         if usuario.get("falhas") or usuario.get("bloqueadoAte"):
             usuario = _patch_usuario(usuario["id"], OPERACOES_DE_SUCESSO) or usuario
+        # Se tem 2FA ativo, retorna desafio em vez do token
+        if usuario.get("totpAtivo"):
+            desafio = gerar_desafio_2fa(usuario, os.environ["JWT_SECRET"])
+            return resposta({"exige2fa": True, "desafio": desafio})
         token = gerar_token(usuario, os.environ["JWT_SECRET"])
         return resposta({"token": token, "usuario": com_empresa(usuario)})
 
@@ -668,6 +717,214 @@ def login(req: func.HttpRequest) -> func.HttpResponse:
     logging.warning("login recusado para %s%s", mascarar_email(email),
                     " (conta em espera)" if em_espera else "")
     return resposta({"erros": [MSG_LOGIN_RECUSADO]}, 401)
+
+
+# ------------------------------------------------------------ 2FA (TOTP)
+
+
+@app.route(route="2fa/iniciar", methods=["POST"])
+def totp_iniciar(req: func.HttpRequest) -> func.HttpResponse:
+    """Inicia ativação do 2FA: gera segredo, QR Code e devolve URI otpauth://.
+    Requer autenticação (token válido)."""
+    usuario, erro = autorizar(req, CONTA)
+    if erro:
+        return erro
+
+    segredo = gerar_totp_secret()
+    uri = totp_uri(segredo, usuario["id"])
+
+    # O segredo novo fica num campo provisório: com o 2FA já ligado (troca de
+    # celular), o segredo em uso continua valendo até o `ativar` confirmar o novo.
+    operacoes = [{"op": "set", "path": "/totpSecretTemp", "value": segredo}]
+    if "totpContadorUsado" not in usuario:
+        operacoes.append({"op": "set", "path": "/totpContadorUsado", "value": -1})
+    _patch_usuario(usuario["id"], operacoes)
+
+    logging.info("%s iniciou ativação do 2FA", mascarar_email(usuario["id"]))
+    return resposta({"uri": uri})
+
+
+@app.route(route="2fa/ativar", methods=["POST"])
+def totp_ativar(req: func.HttpRequest) -> func.HttpResponse:
+    """Ativa o 2FA: valida o primeiro código TOTP e grava segredo + códigos de recuperação."""
+    usuario, erro = autorizar(req, CONTA)
+    if erro:
+        return erro
+
+    segredo_temp = usuario.get("totpSecretTemp")
+    if not segredo_temp:
+        return resposta({"erros": ["nenhuma ativação de 2FA em andamento"]}, 400)
+
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+
+    codigo = str((dados or {}).get("codigo", "")).strip()
+    if not codigo:
+        log_2fa_bloqueado("codigo_ausente", usuario["id"])
+        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
+
+    contador_usado = usuario.get("totpContadorUsado", -1)
+    valido, novo_contador = verificar_totp(segredo_temp, codigo, contador_usado)
+    if not valido:
+        log_2fa_bloqueado("totp_invalido_ou_replay", usuario["id"])
+        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
+
+    # Gera códigos de recuperação e hashes
+    codigos = gerar_recovery_codes()
+    hashes = hash_recovery_codes(codigos)
+
+    # Ativa o 2FA: move segredo para definitivo, limpa temp, grava hashes e contador
+    _patch_usuario(usuario["id"], [
+        {"op": "set", "path": "/totpSecret", "value": segredo_temp},
+        {"op": "remove", "path": "/totpSecretTemp"},
+        {"op": "set", "path": "/totpContadorUsado", "value": novo_contador},
+        {"op": "set", "path": "/recoveryCodes", "value": hashes},
+        {"op": "set", "path": "/totpAtivo", "value": True},
+    ])
+
+    logging.info("%s ativou o 2FA", mascarar_email(usuario["id"]))
+    return resposta({"recuperacao": codigos})
+
+
+@app.route(route="2fa/desativar", methods=["POST"])
+def totp_desativar(req: func.HttpRequest) -> func.HttpResponse:
+    """Desativa o 2FA: exige senha atual + código TOTP (ou recovery code)."""
+    usuario, erro = autorizar(req, CONTA)
+    if erro:
+        return erro
+
+    if not usuario.get("totpAtivo"):
+        return resposta({"erros": ["verificação em duas etapas não está ativa"]}, 400)
+
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+
+    senha = str((dados or {}).get("senha", ""))
+    # O código de recuperação pode vir em `codigo` ou em `recuperacao`.
+    codigo = str((dados or {}).get("codigo") or (dados or {}).get("recuperacao") or "").strip()
+
+    if not senha or not codigo:
+        log_2fa_bloqueado("senha_ou_codigo_ausente", usuario["id"])
+        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
+
+    # Verifica senha
+    if not conferir_senha(senha, usuario["senhaHash"]):
+        _registrar_falha(usuario)
+        log_2fa_bloqueado("senha_incorreta", usuario["id"])
+        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
+
+    # Verifica TOTP ou recovery code
+    segredo = usuario.get("totpSecret")
+    contador_usado = usuario.get("totpContadorUsado", -1)
+    recovery_hashes = usuario.get("recoveryCodes", [])
+
+    valido = False
+    novos_hashes = recovery_hashes
+
+    if len(codigo) == 6 and codigo.isdigit():
+        valido, novo_contador = verificar_totp(segredo, codigo, contador_usado)
+        if valido:
+            contador_usado = novo_contador
+    else:
+        valido, novos_hashes = verificar_recovery_code(codigo, recovery_hashes)
+
+    if not valido:
+        log_2fa_bloqueado("totp_ou_recovery_invalido", usuario["id"])
+        return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
+
+    # Desativa: remove segredo, contador, recovery codes e flag
+    # `set` e não `remove`: o Cosmos recusa remover um campo que não existe.
+    _patch_usuario(usuario["id"], [
+        {"op": "set", "path": "/totpSecret", "value": None},
+        {"op": "set", "path": "/totpSecretTemp", "value": None},
+        {"op": "set", "path": "/recoveryCodes", "value": []},
+        {"op": "set", "path": "/totpAtivo", "value": False},
+    ])
+
+    logging.info("%s desativou o 2FA", mascarar_email(usuario["id"]))
+    return func.HttpResponse(status_code=204)
+
+
+def _patch_se_nao_mudou(doc, operacoes):
+    """Patch do usuário que só vale se o documento não mudou desde a leitura (etag).
+
+    Dois logins ao mesmo tempo com o mesmo código: só o primeiro grava; o segundo
+    recebe None (412 do Cosmos) e é recusado. Devolve o documento atualizado.
+    """
+    condicao = ({"etag": doc["_etag"], "match_condition": MatchConditions.IfNotModified}
+                if doc.get("_etag") else {})
+    try:
+        return container("usuarios").patch_item(doc["id"], partition_key=doc["id"],
+                                                 patch_operations=operacoes, **condicao)
+    except (exceptions.CosmosResourceNotFoundError,
+            exceptions.CosmosAccessConditionFailedError):
+        return None
+
+
+def _recusar_2fa(motivo, email, chaves):
+    for chave in chaves:
+        LIMITES.contar(chave, LOGIN_2FA_JANELA_S)
+    log_2fa_bloqueado(motivo, email)
+    return resposta({"erros": [MSG_2FA_RECUSADO]}, 401)
+
+
+@app.route(route="login/2fa", methods=["POST"])
+def login_2fa(req: func.HttpRequest) -> func.HttpResponse:
+    """2º passo do login: desafio (JWT de 5 min) + código TOTP ou de recuperação."""
+    dados, erro = corpo_json(req)
+    if erro:
+        return erro
+    dados = dados if isinstance(dados, dict) else {}
+    desafio = str(dados.get("desafio") or "").strip()
+    codigo = str(dados.get("codigo") or "").strip()
+    recuperacao = str(dados.get("recuperacao") or "").strip()
+
+    chave_ip = f"login2fa:ip:{ip_do_cliente(req.headers)}"
+    if LIMITES.total(chave_ip, LOGIN_2FA_JANELA_S) >= LOGIN_2FA_FALHAS_POR_IP:
+        log_2fa_bloqueado("muitas tentativas do mesmo IP", "")
+        return resposta({"erros": [MSG_2FA_ESPERA]}, 429)
+
+    # Desafio ausente, adulterado ou vencido: 401, igual a código errado.
+    email = ler_desafio_2fa(desafio, os.environ["JWT_SECRET"]) if desafio else None
+    if not email:
+        return _recusar_2fa("desafio ausente, invalido ou vencido", "", [chave_ip])
+
+    # Limite por conta: trocar de IP não dá mais chutes no mesmo usuário.
+    chave_conta = f"login2fa:conta:{email}"
+    if LIMITES.total(chave_conta, LOGIN_2FA_JANELA_S) >= LOGIN_2FA_FALHAS_POR_CONTA:
+        log_2fa_bloqueado("muitas tentativas na conta", email)
+        return resposta({"erros": [MSG_2FA_ESPERA]}, 429)
+
+    chaves = [chave_ip, chave_conta]
+    usuario = ler("usuarios", email)
+    if not usuario or not usuario.get("totpAtivo") or bloqueado_ate(usuario) > 0:
+        return _recusar_2fa("conta sem 2FA, removida ou em espera", email, chaves)
+
+    operacoes = None
+    if recuperacao:
+        valido, restantes = verificar_recovery_code(recuperacao,
+                                                    usuario.get("recoveryCodes") or [])
+        if valido:  # uso único: o hash usado sai da lista
+            operacoes = [{"op": "set", "path": "/recoveryCodes", "value": restantes}]
+    else:
+        valido, passo = verificar_totp(usuario.get("totpSecret"), codigo,
+                                       usuario.get("totpContadorUsado", -1))
+        if valido:  # anti-replay: o passo aceito fica gravado
+            operacoes = [{"op": "set", "path": "/totpContadorUsado", "value": passo}]
+    if operacoes is None:
+        return _recusar_2fa("codigo errado, vencido ou ja usado", email, chaves)
+
+    if usuario.get("falhas") or usuario.get("bloqueadoAte"):
+        operacoes += OPERACOES_DE_SUCESSO
+    atualizado = _patch_se_nao_mudou(usuario, operacoes)
+    if atualizado is None:
+        return _recusar_2fa("codigo usado em paralelo ou conta removida", email, chaves)
+
+    token = gerar_token(atualizado, os.environ["JWT_SECRET"])
+    logging.info("%s entrou com 2FA", mascarar_email(email))
+    return resposta({"token": token, "usuario": com_empresa(atualizado)})
 
 
 @app.route(route="eu", methods=["GET"])
@@ -1018,9 +1275,12 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
     device = req.params.get("deviceId")
     if not device:
         return resposta({"erros": ["informe ?deviceId="]}, 400)
+
     # Sensor de outra empresa responde igual a sensor inexistente.
-    if _dispositivo_da_empresa(device, usuario["empresaId"]) is None:
-        return resposta({"erros": ["dispositivo não encontrado"]}, 404)
+    _, erro = exigir_dono("dispositivos", device, usuario, "leituras",
+                          "dispositivo não encontrado")
+    if erro:
+        return erro
     device = device.lower()
     try:
         limite = max(1, min(int(req.params.get("limite", "50")), 500))
@@ -1185,8 +1445,10 @@ def predict_sensor(req: func.HttpRequest) -> func.HttpResponse:
         device = req.params.get("deviceId")
         if not device:
             return resposta({"erros": ["informe ?deviceId="]}, 400)
-    if _dispositivo_da_empresa(device, empresa) is None:
-        return resposta({"erros": ["dispositivo não encontrado"]}, 404)
+    _, erro = exigir_dono("dispositivos", device, usuario, "predict/sensor",
+                          "dispositivo não encontrado")
+    if erro:
+        return erro
     device = device.lower()
     try:
         modelo = previsao_sensor.carregar()
@@ -1245,9 +1507,10 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"id": doc["id"], "descricao": doc["descricao"],
                          "criadoEm": doc["criadoEm"], "chave": chave}, 201)
 
-    disp = _dispositivo_da_empresa(item_id, empresa)
-    if not item_id or disp is None:
-        return resposta({"erros": ["dispositivo não encontrado"]}, 404)
+    disp, erro = exigir_dono("dispositivos", item_id, gestor, f"dispositivos {metodo}",
+                             "dispositivo não encontrado")
+    if erro:
+        return erro
 
     if metodo == "PUT":
         # Nova chave: a anterior para de valer na hora (sensor perdido ou chave vazada).
@@ -1280,16 +1543,27 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
 
     if metodo == "GET":
         usuario, erro = autorizar(req, TODOS)
-        return erro or resposta({nome: [id_externo(d) for d in lista(nome, usuario["empresaId"])]})
+        if erro:
+            return erro
+
+        if item_id:  # GET /veiculos/{id}: só o item, e só se for da empresa
+            item, erro = exigir_dono(nome, item_id, usuario, f"{nome} GET")
+            return erro or resposta({nome: [id_externo(item)]})
+        return resposta({nome: [id_externo(d) for d in lista(nome, usuario["empresaId"])]})
 
     usuario, erro = autorizar(req, GESTOR)
     if erro:
         return erro
     empresa = usuario["empresaId"]
 
-    if metodo == "DELETE":
+    if metodo in ("PUT", "DELETE"):
         if not item_id:
             return resposta({"erros": ["informe o id na rota"]}, 400)
+        _, erro = exigir_dono(nome, item_id, usuario, f"{nome} {metodo}")
+        if erro:
+            return erro
+
+    if metodo == "DELETE":
         try:
             container(nome).delete_item(id_interno(empresa, item_id),
                                         partition_key=id_interno(empresa, item_id))
@@ -1301,8 +1575,6 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
     dados, erro = corpo_json(req)
     if erro:
         return erro
-    if metodo == "PUT" and not item_id:
-        return resposta({"erros": ["informe o id na rota"]}, 400)
     if metodo == "POST" and gerar_id:
         dados = {**dados, "id": gerar_id()} if isinstance(dados, dict) else dados
     erros, doc = validar_fn(dados, empresa, item_id if metodo == "PUT" else None)
@@ -1311,10 +1583,8 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
 
     if metodo == "PUT":
         doc["id"] = item_id
-        interno = id_interno(empresa, item_id)
-        if ler(nome, interno) is None:
-            return resposta({"erros": ["não encontrado"]}, 404)
-        container(nome).upsert_item({**doc, "id": interno, "empresaId": empresa})
+        container(nome).upsert_item({**doc, "id": id_interno(empresa, item_id),
+                                     "empresaId": empresa})
         return resposta(doc)
 
     try:
@@ -1385,9 +1655,9 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
                                            "c.id, c.nome, c.perfil, c.veiculo")})
 
     if metodo in ("PUT", "DELETE"):
-        alvo = ler("usuarios", item_id) if item_id else None
-        if alvo is None or alvo.get("empresaId") != empresa:
-            return resposta({"erros": ["não encontrado"]}, 404)
+        alvo, erro = exigir_dono("usuarios", item_id, gestor, f"usuarios {metodo}")
+        if erro:
+            return erro
 
     if metodo == "DELETE":
         if item_id == gestor["id"]:

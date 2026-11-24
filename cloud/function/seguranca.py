@@ -1,4 +1,4 @@
-"""Senhas e tokens de acesso do painel ColdTrack.
+"""Senhas, tokens e 2FA (TOTP) do painel ColdTrack.
 
 - Senha: scrypt (hashlib) com sal aleatório por usuário. O banco guarda só o
   resultado no formato "scrypt$n$r$p$sal$hash" (base64), nunca a senha.
@@ -10,6 +10,8 @@
   espera nem a senha certa entra, e as tentativas não aumentam a espera.
   Falhas com mais de 24 h são esquecidas.
 - Chave de dispositivo: 32 bytes aleatórios; o banco guarda só o SHA-256.
+- 2FA (TOTP): segredo base32 por usuário, QR Code otpauth://, 10 códigos de
+  recuperação (hash scrypt, uso único), anti-replay via contador TOTP.
 
 Não depende do Azure: testado com `python -m unittest`.
 """
@@ -17,11 +19,14 @@ Não depende do Azure: testado com `python -m unittest`.
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import time
+from typing import Optional
 
 import jwt
+import pyotp
 
 # motorista: só vê o veículo vinculado a ele (GET /motorista) e a própria conta.
 PERFIS = ("operador", "gestor", "motorista")
@@ -33,6 +38,14 @@ ESQUECER_FALHAS_S = 24 * 3600
 
 # Custo do scrypt: ~16 MB de memória por tentativa, caro para ataque de força bruta.
 N, R, P = 2 ** 14, 8, 1
+
+# 2FA: códigos de recuperação
+RECUPERACAO_QTD = 10
+RECUPERACAO_TAM = 8  # caracteres alfanuméricos minúsculos
+RECUPERACAO_ALFABETO = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+# Desafio 2FA no login: JWT de 5 min
+DESAFIO_2FA_VALIDADE_S = 5 * 60
 
 
 def _b64(dados):
@@ -76,6 +89,9 @@ def ler_token(token, segredo):
         carga = jwt.decode(token, segredo, algorithms=["HS256"],
                            options={"require": ["sub", "perfil", "emp", "exp"]})
     except jwt.PyJWTError:
+        return None
+    # O desafio do 2FA (senha certa, código ainda não) nunca vale como token de acesso.
+    if carga.get("2fa"):
         return None
     return carga if carga.get("perfil") in PERFIS else None
 
@@ -133,6 +149,25 @@ def mascarar_email(email):
     return f"{nome[:1]}***@{dominio}"
 
 
+def _codigo_missao() -> str:
+    """Código de missão da app setting MISSAO_CODIGO (nunca no código)."""
+    return os.environ.get("MISSAO_CODIGO") or "SEM-CODIGO"
+
+
+def log_2fa_bloqueado(motivo: str, email: str = "") -> None:
+    """'2fa bloqueado [CODIGO] - motivo - a***@x.com': consulta do Log Analytics."""
+    logging.warning("2fa bloqueado [%s] - %s - %s", _codigo_missao(), motivo, mascarar_email(email))
+
+
+def log_idor_bloqueado(rota: str, email: str, alvo) -> None:
+    """'idor bloqueado [CODIGO] rota=... usuario=a***@x.com alvo=...'.
+
+    O alvo vem da URL (dado do atacante): entra entre aspas e cortado, sem quebrar o log.
+    """
+    logging.warning("idor bloqueado [%s] rota=%s usuario=%s alvo=%r", _codigo_missao(), rota,
+                    mascarar_email(email), str(alvo)[:80])
+
+
 # ------------------------------------------------------------ chave de dispositivo
 
 def gerar_chave_dispositivo():
@@ -149,3 +184,109 @@ def conferir_chave(chave, armazenado):
     if not isinstance(chave, str) or not chave or not isinstance(armazenado, str):
         return False
     return hmac.compare_digest(hash_chave(chave), armazenado)
+
+# ------------------------------------------------------------ 2FA (TOTP)
+
+
+def gerar_totp_secret() -> str:
+    """Gera um segredo base32 aleatório para TOTP (RFC 6238)."""
+    return pyotp.random_base32()
+
+
+def totp_uri(segredo: str, email: str, emissor: str = "ColdTrack") -> str:
+    """Monta a URI otpauth:// para QR Code."""
+    return pyotp.totp.TOTP(segredo).provisioning_uri(name=email, issuer_name=emissor)
+
+
+def verificar_totp(
+    segredo: str, codigo: str, contador_usado: int, janela: int = 1
+) -> tuple[bool, int]:
+    """Verifica um código TOTP de 6 dígitos com proteção anti-replay.
+
+    Args:
+        segredo: segredo base32 do usuário
+        codigo: código de 6 dígitos informado
+        contador_usado: último contador (time-step) aceito para este usuário
+        janela: tolerância de passos adjacentes (padrão 1 = ±30s)
+
+    Returns:
+        (valido, novo_contador): True se código válido e não repetido; novo contador a gravar
+    """
+    if (not segredo or not isinstance(codigo, str) or not codigo.isdigit()
+            or len(codigo) != 6):
+        return False, contador_usado
+
+    totp = pyotp.TOTP(segredo)
+    agora = int(time.time())
+    contador_atual = agora // totp.interval  # passo de 30 s (timecode() pede datetime na 2.9)
+
+    # Verifica na janela permitida
+    for delta in range(-janela, janela + 1):
+        contador_teste = contador_atual + delta
+        # generate_otp recebe o passo; totp.at() receberia um horário (epoch).
+        if hmac.compare_digest(totp.generate_otp(contador_teste), codigo):
+            # Anti-replay: contador deve ser maior que o último usado
+            if contador_teste <= contador_usado:
+                return False, contador_usado
+            return True, contador_teste
+
+    return False, contador_usado
+
+
+def gerar_recovery_codes(qtd: int = RECUPERACAO_QTD, tam: int = RECUPERACAO_TAM) -> list[str]:
+    """Gera códigos de recuperação aleatórios (alfanuméricos minúsculos)."""
+    return [
+        "".join(secrets.choice(RECUPERACAO_ALFABETO) for _ in range(tam))
+        for _ in range(qtd)
+    ]
+
+
+def hash_recovery_codes(codigos: list[str]) -> list[str]:
+    """Hash scrypt de cada código de recuperação (normaliza para minúsculas)."""
+    return [gerar_hash(c.lower()) for c in codigos]
+
+
+def verificar_recovery_code(codigo: str, hashes: list[str]) -> tuple[bool, list[str]]:
+    """Verifica um código de recuperação e o invalida (remove do array).
+
+    Returns:
+        (valido, hashes_restantes): True se código encontrado e removido
+    """
+    if not isinstance(codigo, str):
+        return False, hashes
+    codigo = codigo.lower().strip()
+    for i, h in enumerate(hashes):
+        if conferir_senha(codigo, h):
+            # Remove o hash usado (uso único)
+            restantes = hashes[:i] + hashes[i + 1 :]
+            return True, restantes
+    return False, hashes
+
+
+def gerar_desafio_2fa(usuario: dict, segredo_jwt: str, agora: Optional[int] = None) -> str:
+    """Gera JWT curto (5 min) como desafio do 2º passo do login."""
+    agora = int(time.time() if agora is None else agora)
+    carga = {
+        "sub": usuario["id"],
+        "2fa": True,
+        "emp": usuario["empresaId"],
+        "iat": agora,
+        "exp": agora + DESAFIO_2FA_VALIDADE_S,
+    }
+    return jwt.encode(carga, segredo_jwt, algorithm="HS256")
+
+
+def ler_desafio_2fa(token: str, segredo_jwt: str) -> Optional[str]:
+    """Lê o desafio 2FA e devolve o e-mail (sub) se válido."""
+    try:
+        carga = jwt.decode(
+            token,
+            segredo_jwt,
+            algorithms=["HS256"],
+            options={"require": ["sub", "2fa", "exp"]},
+        )
+    except jwt.PyJWTError:
+        return None
+    if not carga.get("2fa"):
+        return None
+    return carga.get("sub")

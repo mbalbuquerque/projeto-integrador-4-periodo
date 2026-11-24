@@ -48,7 +48,7 @@ jobs:
 
       - name: Preparar o banco no emulador
         run: |
-          pip install azure-cosmos==4.17.1 PyJWT==2.15.1
+          pip install azure-cosmos==4.17.1 PyJWT==2.15.1 pyotp==2.9.0
           python infra/ci/preparar_banco.py http://localhost:8081
 
       - name: Dados de exemplo (carga idempotente)

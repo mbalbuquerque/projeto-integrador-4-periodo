@@ -1,0 +1,60 @@
+# IDOR ANTES: commit d44b301, sem verificacao de dono (o ataque deve funcionar)
+# codigo de missao: SEM-CODIGO
+# commit: d44b301
+# comando: cd cloud/function && python -m unittest test_idor.TestAtaqueEntreEmpresas -v
+# gerado em: 2026-11-24T03:20:10Z
+
+test_apagar_usuario_de_b (test_idor.TestAtaqueEntreEmpresas) ... FAIL
+test_apagar_veiculo_de_b (test_idor.TestAtaqueEntreEmpresas) ... FAIL
+test_apagar_viagem_de_b (test_idor.TestAtaqueEntreEmpresas) ... FAIL
+test_b_continua_lendo_o_proprio_sensor (test_idor.TestAtaqueEntreEmpresas) ... ok
+test_ler_leituras_do_sensor_de_b (test_idor.TestAtaqueEntreEmpresas) ... FAIL
+test_previsao_do_sensor_de_b (test_idor.TestAtaqueEntreEmpresas) ... skipped 'a rota predict_sensor não existia nesta versão da API'
+test_trocar_chave_do_sensor_de_b (test_idor.TestAtaqueEntreEmpresas) ... skipped 'a rota dispositivos não existia nesta versão da API'
+
+======================================================================
+FAIL: test_apagar_usuario_de_b (test_idor.TestAtaqueEntreEmpresas)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "cloud\function\test_idor.py", line 164, in test_apagar_usuario_de_b
+    self.bloqueado("usuarios", "DELETE", "ana@a.com", id="caio@b.com")
+  File "cloud\function\test_idor.py", line 131, in bloqueado
+    self.assertEqual(status, 404, f"o ataque passou: HTTP {status}, resposta {corpo}")
+AssertionError: 204 != 404 : o ataque passou: HTTP 204, resposta None
+
+======================================================================
+FAIL: test_apagar_veiculo_de_b (test_idor.TestAtaqueEntreEmpresas)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "cloud\function\test_idor.py", line 156, in test_apagar_veiculo_de_b
+    self.bloqueado("veiculos", "DELETE", "ana@a.com", id="CT-002")
+  File "cloud\function\test_idor.py", line 131, in bloqueado
+    self.assertEqual(status, 404, f"o ataque passou: HTTP {status}, resposta {corpo}")
+AssertionError: 204 != 404 : o ataque passou: HTTP 204, resposta None
+
+======================================================================
+FAIL: test_apagar_viagem_de_b (test_idor.TestAtaqueEntreEmpresas)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "cloud\function\test_idor.py", line 160, in test_apagar_viagem_de_b
+    self.bloqueado("viagens", "DELETE", "ana@a.com", id="V-BBB222")
+  File "cloud\function\test_idor.py", line 131, in bloqueado
+    self.assertEqual(status, 404, f"o ataque passou: HTTP {status}, resposta {corpo}")
+AssertionError: 204 != 404 : o ataque passou: HTTP 204, resposta None
+
+======================================================================
+FAIL: test_ler_leituras_do_sensor_de_b (test_idor.TestAtaqueEntreEmpresas)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "cloud\function\test_idor.py", line 152, in test_ler_leituras_do_sensor_de_b
+    corpo = self.bloqueado("leituras", "GET", "ana@a.com", params={"deviceId": "sensor-b1"})
+  File "cloud\function\test_idor.py", line 131, in bloqueado
+    self.assertEqual(status, 404, f"o ataque passou: HTTP {status}, resposta {corpo}")
+AssertionError: 200 != 404 : o ataque passou: HTTP 200, resposta {'deviceId': 'sensor-b1', 'leituras': [{'deviceId': 'sensor-b1', 'temperatura': 4.0, 'umidade': 80.0, 'rssi': -60, 'status': 'OK', 'medidoEm': '2026-11-24T03:19:11+00:00', 'recebidoEm': '2026-11-24T03:19:11+00:00'}]}
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.025s
+
+FAILED (failures=4, skipped=2)
+
+# saida do unittest: 1 (0 = todos passaram)
