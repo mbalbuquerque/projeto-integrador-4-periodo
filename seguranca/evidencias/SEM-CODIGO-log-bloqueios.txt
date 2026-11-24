@@ -1,0 +1,15 @@
+# Application Insights da Function App func-coldtrack-7319 (producao), consulta:
+# traces | where timestamp between (datetime(2026-11-24T03:37:00Z) .. datetime(2026-11-24T03:41:00Z)) and message has "bloqueado ["
+#        | project timestamp, message | order by timestamp asc
+# Gerado em 24/11/2026 apos a gravacao das evidencias (empresas sinteticas Teste Seguranca A/B 26112403385f, ja apagadas).
+# [SEM-CODIGO]: a app setting MISSAO_CODIGO ainda nao foi cadastrada; com ela, o codigo de missao aparece no lugar.
+# E-mails ja saem mascarados pelo proprio log (s***@example.com).
+# timestamp (UTC)\tmensagem
+2026-11-24T03:38:24.5062389Z	2fa bloqueado [SEM-CODIGO] - codigo errado, vencido ou ja usado - s***@example.com
+2026-11-24T03:38:36.2348493Z	2fa bloqueado [SEM-CODIGO] - codigo errado, vencido ou ja usado - s***@example.com
+2026-11-24T03:38:43.3934996Z	2fa bloqueado [SEM-CODIGO] - codigo errado, vencido ou ja usado - s***@example.com
+2026-11-24T03:39:14.362508Z	2fa bloqueado [SEM-CODIGO] - codigo errado, vencido ou ja usado - s***@example.com
+2026-11-24T03:39:35.4090879Z	idor bloqueado [SEM-CODIGO] rota=leituras usuario=s***@example.com alvo='seg-b-26112403385f'
+2026-11-24T03:39:35.7726938Z	idor bloqueado [SEM-CODIGO] rota=dispositivos DELETE usuario=s***@example.com alvo='seg-b-26112403385f'
+2026-11-24T03:39:56.5505105Z	idor bloqueado [SEM-CODIGO] rota=leituras usuario=s***@example.com alvo='seg-b-26112403385f'
+2026-11-24T03:40:02.7314834Z	idor bloqueado [SEM-CODIGO] rota=dispositivos DELETE usuario=s***@example.com alvo='seg-b-26112403385f'
