@@ -3,7 +3,7 @@
 ## 1. Identificação
 
 - **Projeto:** ColdTrack (monitoramento de temperatura de carga refrigerada).
-- **Código de missão:** CÓDIGO-DE-MISSÃO a preencher (6 caracteres enviados pelo professor).
+- **Código de missão:** `XXXXXX` (marcador de 6 caracteres aguardando envio oficial do professor na thread do Teams/AVA). Em tempo de execução, o valor é lido dinamicamente da App Setting `MISSAO_CODIGO` do Azure Functions — nunca hard-coded no repositório.
 - **Integrantes:**
 
 | Nome | Usuário no GitHub |

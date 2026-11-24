@@ -1,0 +1,25 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.2.0, pluggy-1.7.0 -- C:\Users\Chupetinha\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: C:\Users\Chupetinha\projeto-integrador-4-periodo
+plugins: anyio-4.16.0, hypothesis-6.168.5, cov-7.1.0, time-machine-3.5.1
+collecting ... collected 15 items
+
+seguranca/testes/test_2fa.py::TestTOTP::test_gerar_totp_secret_formato_base32 PASSED [  6%]
+seguranca/testes/test_2fa.py::TestTOTP::test_totp_uri_contem_segredo_e_emissor PASSED [ 13%]
+seguranca/testes/test_2fa.py::TestTOTP::test_verificar_totp_codigo_errado PASSED [ 20%]
+seguranca/testes/test_2fa.py::TestTOTP::test_verificar_totp_codigo_valido PASSED [ 26%]
+seguranca/testes/test_2fa.py::TestTOTP::test_verificar_totp_formato_invalido PASSED [ 33%]
+seguranca/testes/test_2fa.py::TestTOTP::test_verificar_totp_janela_adjacente PASSED [ 40%]
+seguranca/testes/test_2fa.py::TestTOTP::test_verificar_totp_replay_bloqueado PASSED [ 46%]
+seguranca/testes/test_2fa.py::TestRecoveryCodes::test_gerar_recovery_codes_qtd_e_formato PASSED [ 53%]
+seguranca/testes/test_2fa.py::TestRecoveryCodes::test_hash_recovery_codes_todos_diferentes PASSED [ 60%]
+seguranca/testes/test_2fa.py::TestRecoveryCodes::test_verificar_recovery_code_case_insensitive PASSED [ 66%]
+seguranca/testes/test_2fa.py::TestRecoveryCodes::test_verificar_recovery_code_inexistente PASSED [ 73%]
+seguranca/testes/test_2fa.py::TestRecoveryCodes::test_verificar_recovery_code_sucesso_e_invalida PASSED [ 80%]
+seguranca/testes/test_2fa.py::TestDesafio2FA::test_desafio_2fa_expira PASSED [ 86%]
+seguranca/testes/test_2fa.py::TestDesafio2FA::test_gerar_e_ler_desafio_2fa PASSED [ 93%]
+seguranca/testes/test_2fa.py::TestLog2FA::test_log_2fa_bloqueado_formato PASSED [100%]
+
+============================= 15 passed in 0.97s ==============================
