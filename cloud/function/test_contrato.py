@@ -63,6 +63,26 @@ class TestValidar(unittest.TestCase):
         self.assertTrue(validar({**VALIDO, "senha": "x"}))
 
 
+class TestValorBruto(unittest.TestCase):
+    """Valor antes do filtro de mediana da placa: opcional, mesma faixa física."""
+
+    def test_ausente_continua_valido(self):
+        self.assertEqual(validar(VALIDO), [])
+
+    def test_valido(self):
+        dados = {**VALIDO, "temperaturaBruta": 19.8, "umidadeBruta": 64.5}
+        self.assertEqual(validar(dados), [])
+
+    def test_invalido(self):
+        for campo, valor in (("temperaturaBruta", 200), ("temperaturaBruta", "12"),
+                             ("temperaturaBruta", None), ("temperaturaBruta", True),
+                             ("umidadeBruta", -1), ("umidadeBruta", float("nan"))):
+            with self.subTest(campo=campo, valor=valor):
+                erros = validar({**VALIDO, campo: valor})
+                self.assertTrue(any(e.startswith(campo + ":") for e in erros), erros)
+                self.assertFalse(any("não previstos" in e for e in erros))
+
+
 class TestOrigem(unittest.TestCase):
     def test_ausente_continua_valido(self):
         self.assertEqual(validar(VALIDO), [])
