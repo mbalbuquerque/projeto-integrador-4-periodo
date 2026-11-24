@@ -1503,12 +1503,7 @@ void publicarMqtt(float temperatura, float umidade, long rssi) {
 #endif
 
 
-// Falha que vale tentar de novo depois: rede ou servidor fora do ar.
-// 4xx (dado rejeitado pelo contrato) nao melhora reenviando.
-bool falhaTemporaria(int status) {
-
-  return status <= 0 || status >= 500;
-}
+// falhaTemporaria(status) esta em payload_core.h (testada no host).
 
 
 // ==========================================================
@@ -2008,7 +2003,7 @@ void reenviarFila() {
         break;
       }
 
-      // Enviada, ou recusada de vez (4xx): nao adianta reenviar.
+      // Enviada, ou recusada de vez (400, 409, 413, 422): nao adianta reenviar.
       enviada[i] = true;
       enviadas++;
     }

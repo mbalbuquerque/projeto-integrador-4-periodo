@@ -368,9 +368,30 @@ void test_comando_parametros() {
     PASS();
 }
 
+void test_falha_temporaria_so_descarta_dado_recusado() {
+    TEST("falhaTemporaria guarda na fila tudo menos dado recusado (400, 409, 413, 422)");
+    ASSERT(falhaTemporaria(-1));     // sem rede
+    ASSERT(falhaTemporaria(0));
+    ASSERT(falhaTemporaria(500));
+    ASSERT(falhaTemporaria(503));
+    ASSERT(falhaTemporaria(401));    // chave trocada no painel
+    ASSERT(falhaTemporaria(403));    // App Service parado (F4)
+    ASSERT(falhaTemporaria(404));
+    ASSERT(falhaTemporaria(408));
+    ASSERT(falhaTemporaria(429));
+    ASSERT(!falhaTemporaria(200));
+    ASSERT(!falhaTemporaria(201));
+    ASSERT(!falhaTemporaria(400));   // contrato recusou: reenviar nao muda nada
+    ASSERT(!falhaTemporaria(409));
+    ASSERT(!falhaTemporaria(413));
+    ASSERT(!falhaTemporaria(422));
+    PASS();
+}
+
 int main() {
     std::cout << "=== Executando Testes Unitarios do Firmware (C++) ===\n";
     test_agenda_fixa_de_20_s();
+    test_falha_temporaria_so_descarta_dado_recusado();
     test_linha_da_fila_sem_relogio();
     test_heartbeat();
     test_url_do_heartbeat();
