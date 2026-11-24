@@ -96,7 +96,7 @@ void registrarMedida(const char *tipo, unsigned long ms, size_t enviados, size_t
 // Sem nada salvo, vale o que estiver no secrets.h (e assim no Wokwi).
 // Sem nenhum dos dois, o sensor so mede e espera o cabo.
 
-#define FW_VERSAO "2026.11.17.4"
+#define FW_VERSAO "2026.11.23.1"
 
 #ifndef AZURE_FUNCTION_URL
 #define AZURE_FUNCTION_URL "https://func-coldtrack-7319.azurewebsites.net/api/telemetria"
@@ -569,9 +569,15 @@ bool reiniciouPorWatchdog() {
 
 // Agenda fixa: 20 s do inicio de um ciclo ao inicio do seguinte. O envio
 // (HTTPS, MQTT, fila) roda na tarefa de envio e nao empurra a medicao.
-const unsigned long INTERVALO_ENVIO = 20000;
-FiltroMediana filtroTemperatura = {{0}, 0, 0};
-FiltroMediana filtroUmidade = {{0}, 0, 0};
+//
+// Intervalo e janela do filtro de mediana vem da flash (namespace "config",
+// chaves "intervalo" e "janela"), gravados pelo comando "parametros" do cabo.
+// Sem nada gravado valem os padroes de fabrica do payload_core.h (20 s e
+// FILTRO_JANELA). A tarefa de envio le o intervalo: volatile.
+volatile unsigned long intervaloEnvio = INTERVALO_ENVIO_PADRAO_MS;
+int janelaFiltro = FILTRO_JANELA;
+FiltroMediana filtroTemperatura = {{0}, 0, 0, 0};
+FiltroMediana filtroUmidade = {{0}, 0, 0, 0};
 
 unsigned long proximoCiclo = 0;     // millis() marcado para o proximo ciclo
 bool cicloImediato = true;          // mede ja (boot, configuracao pelo cabo)
@@ -987,7 +993,20 @@ void carregarConfig() {
   cfgSenha = preferencias.getString("senha", "");
   cfgId = preferencias.getString("id", "");
   cfgChave = preferencias.getString("chave", "");
+  ParametrosColeta parametros = parametrosDaFlashCore(preferencias.getULong("intervalo", 0),
+                                                      preferencias.getInt("janela", 0));
   preferencias.end();
+
+  intervaloEnvio = parametros.intervaloMs;
+  janelaFiltro = parametros.filtroJanela;
+  filtroReiniciar(&filtroTemperatura, janelaFiltro);
+  filtroReiniciar(&filtroUmidade, janelaFiltro);
+
+  Serial.print("PARAMETROS: leitura a cada ");
+  Serial.print(intervaloEnvio);
+  Serial.print(" ms, filtro de mediana de ");
+  Serial.print(janelaFiltro);
+  Serial.println(janelaFiltro == 1 ? " leitura (desligado)" : " leituras");
 
   if (cfgSsid.length() == 0) {
 #ifdef WIFI_SSID
@@ -1839,7 +1858,7 @@ bool guardarLeitura(const char *payload, time_t medidoEm, unsigned long msMedica
 
 // Flash indisponivel: a leitura do ciclo vai direto, uma tentativa so.
 portMUX_TYPE envioDiretoTrava = portMUX_INITIALIZER_UNLOCKED;
-char envioDireto[160];
+char envioDireto[PAYLOAD_TAMANHO];
 bool envioDiretoPendente = false;
 
 
@@ -1865,7 +1884,7 @@ void registrarResultado(int status) {
 
 void enviarDireto() {
 
-  char copia[160];
+  char copia[PAYLOAD_TAMANHO];
   bool tem;
 
   portENTER_CRITICAL(&envioDiretoTrava);
@@ -2045,7 +2064,7 @@ void tarefaEnvio(void *parametro) {
 
     // Heartbeat velho nao diz nada sobre agora: so vale o do ultimo ciclo.
     bool heartbeat = heartbeatPendente;
-    if (heartbeat && millis() - heartbeatPedidoEm > INTERVALO_ENVIO) {
+    if (heartbeat && millis() - heartbeatPedidoEm > intervaloEnvio) {
       heartbeatPendente = false;
       heartbeat = false;
     }
@@ -2076,7 +2095,7 @@ void tarefaEnvio(void *parametro) {
     portEXIT_CRITICAL(&mqttLeituraTrava);
 
     // So a leitura deste ciclo (a fila offline e so do HTTPS).
-    if (leitura.pendente && millis() - leitura.em < INTERVALO_ENVIO && !pausaEnvio) {
+    if (leitura.pendente && millis() - leitura.em < intervaloEnvio && !pausaEnvio) {
       esp_task_wdt_reset();
       publicarMqtt(leitura.temperatura, leitura.umidade, leitura.rssi);
     }
@@ -2105,6 +2124,13 @@ void iniciarTarefaEnvio() {
 //   CT<{"cmd":"wifi","ssid":"..","senha":".."}                      troca so a rede
 //   CT<{"cmd":"config","ssid":"..","senha":"..","id":"..","chave":".."}
 //   CT<{"cmd":"redes"}                                              redes 2.4 GHz vistas
+//   CT<{"cmd":"parametros","intervalo":20000,"filtroJanela":5}       grava na flash
+//
+// "parametros": intervalo entre leituras em ms (15000 a 300000) e janela do
+// filtro de mediana (1 = desligado, ou 3 a 9). Os dois sao opcionais; sem
+// nenhum, so consulta. Valida tudo antes de gravar e responde
+//   CT>{"ok":true,"intervalo":20000,"filtroJanela":5}
+//   CT>{"ok":false,"erro":"intervalo_invalido"|"janela_invalida","intervalo":..,"filtroJanela":..}
 //
 // A placa testa a rede antes de gravar e responde
 //   CT>{"ok":true,"wifi":"conectado","rssi":-55,"canal":6,"seguranca":"wpa2","id":".."}
@@ -2605,6 +2631,72 @@ void mostrarResultadoCabo(const String &erro) {
 }
 
 
+// Resposta do comando "parametros": sempre com os valores em uso.
+String jsonParametros(bool ok, const char *erro) {
+
+  String json = String("{\"ok\":") + (ok ? "true" : "false");
+
+  if (erro) {
+    json += String(",\"erro\":\"") + erro + "\"";
+  }
+
+  return json + ",\"intervalo\":" + String(intervaloEnvio) +
+         ",\"filtroJanela\":" + String(janelaFiltro) + "}";
+}
+
+
+// CT<{"cmd":"parametros","intervalo":..,"filtroJanela":..}: valida, grava na
+// flash e aplica sem reiniciar. Campo ausente fica como esta.
+void tratarParametros(const String &cmd) {
+
+  ParametrosColeta parametros = { intervaloEnvio, janelaFiltro };
+  const char *erro = parametrosDoComandoCore(std::string(cmd.c_str()), &parametros);
+
+  if (erro) {
+    Serial.print("PARAMETROS: recusado (");
+    Serial.print(erro);
+    Serial.println("). Nada foi gravado.");
+    responder(jsonParametros(false, erro));
+    return;
+  }
+
+  bool mudouIntervalo = parametros.intervaloMs != intervaloEnvio;
+  bool mudouJanela = parametros.filtroJanela != janelaFiltro;
+
+  if (mudouIntervalo || mudouJanela) {
+
+    preferencias.begin("config", false);
+    preferencias.putULong("intervalo", parametros.intervaloMs);
+    preferencias.putInt("janela", parametros.filtroJanela);
+    preferencias.end();
+  }
+
+  if (mudouJanela) {
+
+    // Janela nova comeca vazia: leituras da janela antiga nao se misturam.
+    janelaFiltro = parametros.filtroJanela;
+    filtroReiniciar(&filtroTemperatura, janelaFiltro);
+    filtroReiniciar(&filtroUmidade, janelaFiltro);
+  }
+
+  if (mudouIntervalo) {
+
+    // Proximo ciclo conta do intervalo novo a partir de agora (nunca uma
+    // leitura imediata: respeita o minimo de 15 s do ThingSpeak).
+    intervaloEnvio = parametros.intervaloMs;
+    proximoCiclo = millis() + intervaloEnvio;
+  }
+
+  Serial.print("PARAMETROS: leitura a cada ");
+  Serial.print(intervaloEnvio);
+  Serial.print(" ms, filtro de mediana de ");
+  Serial.print(janelaFiltro);
+  Serial.println(mudouIntervalo || mudouJanela ? " (gravado na flash)" : " (sem mudanca)");
+
+  responder(jsonParametros(true, nullptr));
+}
+
+
 void tratarComando() {
 
   String cmd = comandoPendente;
@@ -2626,6 +2718,12 @@ void tratarComando() {
   if (tipo == "redes") {
 
     listarRedes();
+    return;
+  }
+
+  if (tipo == "parametros") {
+
+    tratarParametros(cmd);
     return;
   }
 
@@ -2934,7 +3032,7 @@ void loop() {
 
     // Agenda fixa: o proximo ciclo conta do horario marcado deste, nao do
     // fim do envio (que roda na tarefa de envio).
-    proximoCiclo = proximoCicloCore(agora, proximoCiclo, INTERVALO_ENVIO, cicloImediato);
+    proximoCiclo = proximoCicloCore(agora, proximoCiclo, intervaloEnvio, cicloImediato);
     cicloImediato = false;
 
     Serial.print("CICLO: ");
@@ -2992,7 +3090,11 @@ void loop() {
     }
 
 
-    // Filtro de mediana (FILTRO_JANELA no secrets.h): so leitura valida chega aqui e entra na janela.
+    // Filtro de mediana (janela do comando "parametros", padrao FILTRO_JANELA): so
+    // leitura valida chega aqui e entra na janela. O valor bruto segue no payload
+    // (temperaturaBruta/umidadeBruta) para auditoria.
+    float temperaturaBruta = temperatura;
+    float umidadeBruta = umidade;
     temperatura = filtroMediana(&filtroTemperatura, temperatura);
     umidade = filtroMediana(&filtroUmidade, umidade);
 
@@ -3003,11 +3105,15 @@ void loop() {
 
     Serial.print("Temperatura: ");
     Serial.print(temperatura, 1);
-    Serial.println(" C");
+    Serial.print(" C (bruta ");
+    Serial.print(temperaturaBruta, 1);
+    Serial.println(" C)");
 
     Serial.print("Umidade: ");
     Serial.print(umidade, 1);
-    Serial.println(" %");
+    Serial.print(" % (bruta ");
+    Serial.print(umidadeBruta, 1);
+    Serial.println(" %)");
 
 
     // ======================================================
@@ -3054,13 +3160,14 @@ void loop() {
     time_t medidoEm = relogioOk() ? time(nullptr) : 0;
     unsigned long msMedicao = millis();
 
-    char payload[192];
+    char payload[PAYLOAD_TAMANHO];
 
     // RSSI >= 0 (simulador) vai como null; sem relogio, medidoEm e omitido.
     uint32_t seq = proximaSeq();
 
     montarPayloadCore(payload, sizeof(payload), cfgId.c_str(),
-                      temperatura, umidade, rssi, medidoEm, seq, ORIGEM_LEITURA);
+                      temperatura, umidade, rssi, medidoEm, seq, ORIGEM_LEITURA,
+                      temperaturaBruta, umidadeBruta);
 
     Serial.print("Payload JSON: ");
     Serial.println(payload);
