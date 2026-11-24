@@ -1,0 +1,2 @@
+AVISO: test_idor.py não encontrado em C:/tmp/antes (commit anterior ao IDOR)
+Isso é esperado - o commit antigo não tem os testes de IDOR implementados.
