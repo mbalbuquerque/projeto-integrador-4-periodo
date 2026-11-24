@@ -1,6 +1,6 @@
 # Resiliência do ColdTrack
 
-Estado em 23/11/2026. Os requisitos R1 a R8 seguem a tabela da prévia técnica; os testes F1 a F6
+Estado em 24/11/2026. Os requisitos R1 a R8 seguem a tabela da prévia técnica; os testes F1 a F6
 são os provocados pela banca. "Implementado" descreve o código; "Testado" só é marcado quando o
 resultado foi observado e registrado aqui.
 
@@ -11,7 +11,7 @@ resultado foi observado e registrado aqui.
 | R1 | Reconexão automática | Implementado | A cada ciclo o laço principal testa o Wi-Fi e chama `conectarWiFi()` (até 20 tentativas por chamada, sem travar o laço); o motivo da queda é registrado (`aoCairWiFi`). O MQTT reconecta com espera de 20 s dobrando até 60 s |
 | R2 | Armazenar e reenviar | Implementado | Fila em flash (`/fila.jsonl`, LittleFS), até 500 leituras (~2 h 45 min a cada 20 s). Reenvia até 10 por ciclo, mantendo o horário da medição |
 | R3 | Identidade da mensagem | Implementado | Cada leitura leva `deviceId`, `medidoEm` (UTC por NTP) e `seq` (número de sequência guardado em Preferences, sobrevive ao reinício e vai na fila). A API aceita `seq`, responde `duplicada: true` no reenvio idêntico e 409 em conflito; `GET /leituras` aponta lacunas na sequência, calculadas pelo número de `seq`. Testado no Wokwi e na placa física no F1 de 17/11 (`seq` 89 a 128 contínua, `lacunas: []`) |
-| R4 | Watchdog e reinício | Implementado (simulador) | Watchdog de tarefa de 60 s, alimentado nas esperas de rede e antes de cada envio. No Wokwi, um travamento provocado foi detectado pelo watchdog, a placa reiniciou e a numeração seguiu de onde parou (5 → 6). Falta a placa física |
+| R4 | Watchdog e reinício | Aprovado na placa física (24/11) | Watchdog de tarefa de 60 s, alimentado nas esperas de rede e antes de cada envio. No Wokwi, um travamento provocado foi detectado pelo watchdog, a placa reiniciou e a numeração seguiu de onde parou (5 → 6). Na placa física (24/11): reinício 60,3 s depois do travamento e `seq` 12519 → 12520, sem lacuna ("R4 watchdog na placa") |
 | R5 | Falha de sensor | Implementado | Checksum do DHT validado, duas tentativas; leitura inválida não é enviada como válida. O RSSI inválido segue como `null` |
 | R6 | Degradação controlada | Implementado | O dashboard mostra "Sem dados desde HH:MM" quando a última leitura tem mais de 2 min ou a API não responde, e avisa que os valores são os últimos recebidos. A validar em F4 e F6 na entrega final |
 | R7 | Observabilidade | Implementado | `GET /api/health` (200/503); `online` e `ultimoContato` por sensor na API e selo Online/Offline com último contato na tela de sensores. A leitura a cada 20 s funciona como sinal de vida (sensor calado aparece offline). Com o sensor em falha, a placa (a partir do firmware 2026.11.17.2) envia `POST /api/heartbeat` a cada 20 s: a API atualiza o último contato e marca `sensor: falha` com `sensorFalhaDesde`, sem gravar leitura, e o painel mostra o aviso. Testado no Wokwi e na placa física (F3, 17/11) |
@@ -26,7 +26,7 @@ resultado foi observado e registrado aqui.
 | F2 Queda de energia | Volta a enviar em até 60 s, sem perder a sequência | Aprovado na placa física (17/11) |
 | F4 Serviço em nuvem fora (30 s) | Serviço volta sozinho; dispositivo retém e reenvia; zero perda | Aprovado na placa física (24/11) |
 | F5 Mensagem duplicada | Apenas 1 registro no banco | Aprovado: reenvio idêntico responde `duplicada: true` e não grava de novo (placa física em 17/11; testes `test_telemetria_duplicada_reenvio_identico` e `test_reenvio_igual` passando em 23/11) |
-| F6 ThingSpeak indisponível | O fluxo pela API continua e o painel segue atualizado | **Parcial.** Execução real (chave inválida no canal com a placa ligada) pendente (#123). Verificado sem a placa: a Function App não referencia o ThingSpeak em nenhum módulo (teste `cloud/function/test_independencia_thingspeak.py`); a placa envia à API por HTTPS e publica no ThingSpeak por MQTT depois, com falha do MQTT só adiando a próxima tentativa (`garantirMqtt`, `coldtrack.ino`); o painel lê a API em tudo (`src/lib/api.js`, `src/lib/leituras.js`, `Dashboard.jsx` a cada 20 s) e só a tela Monitoramento consulta o ThingSpeak, onde a falha do canal mostra "indisponível" sem valor antigo (`Monitoramento.test.jsx`, caso "falha do canal") e não afeta as outras telas |
+| F6 ThingSpeak indisponível | O fluxo pela API continua e o painel segue atualizado | Aprovado na placa física (24/11): com o MQTT falhando, `seq` 12509 a 12519 gravadas a cada ~20 s (todas 201), sem lacuna, e nenhuma entrada no ThingSpeak de 02:11:08 a 02:17:15 UTC ("F6 na placa"). Antes, sem a placa: a Function App não referencia o ThingSpeak (`test_independencia_thingspeak.py`) e só a tela Monitoramento lê o canal (`Monitoramento.test.jsx`) |
 
 Resultados de cada teste (data, procedimento, tempo medido) são anotados abaixo.
 
@@ -194,6 +194,103 @@ para trás (firmware 2026.11.24.1; antes eram 4 s de TCP, 5 s de resposta e espe
 o que permitia uma tentativa lenta a cada ciclo). O inverso, a API fora do ar segurando o
 ThingSpeak (visto em 24/11), continua como descrito em F4.
 
+### F6 na placa (24/11/2026)
+
+Executado por Enzo com a placa `coldtrack-0e0b2c`, firmware 2026.11.24.1 (`dispositivos.fw` =
+2026.11.24.1 no banco). Horários em UTC (relógio NTP da placa; horário local = UTC−3). Os horários
+dos comandos são os relatados por ele, aproximados.
+
+| Momento (UTC) | Evento | Fonte |
+|---|---|---|
+| 02:11:08 | Última entrada do ThingSpeak antes do teste (entry 13026) | canal 3515173 |
+| ~02:11:54 | `CT<{"cmd":"teste","acao":"thingspeak_invalido"}` | relato |
+| 02:12:11 a 02:15:42 | API recebe `seq` 12509 a 12519, uma a cada ~20 s, todas `telemetria` 201 | Cosmos e App Insights |
+| 02:11:08 a 02:17:15 | Nenhuma entrada nova no ThingSpeak | canal 3515173 |
+| ~02:15:44 | `travar` (teste R4, seção seguinte); a placa reinicia pelo watchdog | relato |
+| ~02:15:46 | `CT<{"cmd":"teste","acao":"normal"}` | relato |
+| 02:17:15 | ThingSpeak volta a receber (entry 13027), depois 02:18:17, 02:18:34, 02:18:53 | canal 3515173 |
+
+Serial (relato):
+
+```
+CT>{"ok":true,"teste":"thingspeak_invalido","ms":9401}
+MQTT: falhou (-4: sem resposta do broker (keep-alive); TLS: UNKNOWN ERROR CODE (0030)). Nova tentativa em 20 s.
+```
+
+Conferência nos dados (somente leitura no Cosmos, no canal público e no App Insights):
+
+- **API continuou**: `seq` 12509 a 12519 gravadas, sem lacuna (a faixa inteira de 12489 a 12526,
+  de 02:05 a 02:19, é contínua). Intervalo entre leituras medidas de 14 s a 21 s; atraso placa →
+  banco de 4,7 s a 8,3 s, exceto a 12519 (16,2 s). Maior intervalo entre gravações: 31,2 s (12518 →
+  12519). Todas as `telemetria` da janela 02:05 a 02:25 responderam 201.
+- **Painel**: as consultas `leituras` à API (o que o painel chama) seguiram respondendo 200 às
+  02:12:31, 02:13:31, 02:14:32 e 02:15:33.
+- **ThingSpeak sem dado**: nenhuma entrada de 02:11:08 a 02:17:15 (6 min 7 s). A última antes do
+  comando é 46 s anterior a ele: a leitura 12508 (medida 02:11:21) só chegou à API às 02:11:50 e a
+  do ciclo seguinte não existe; no lugar dela veio um heartbeat às 02:11:54 (ver observação).
+- **Erro do MQTT**: o broker não recusou com 4 ou 5 (usuário/senha) como o roteiro previa; a
+  tentativa falhou com -4 (sem resposta, erro de TLS). O efeito sobre a API é o mesmo: nenhum.
+
+**Resultado: aprovado.** Com o MQTT do ThingSpeak falhando, a placa seguiu enviando à API a cada
+~20 s, sem perder `seq`, e a API seguiu servindo o painel. Limite do registro: o `normal` foi
+digitado depois do `travar`, com o laço já parado (é o laço que lê o cabo), e o reinício pelo
+watchdog desfaz o teste (só RAM). A volta do ThingSpeak às 02:17:15 é a do reinício; o tempo até
+voltar depois do `normal` não foi medido em separado. O `<ms>` da tentativa recusada
+(`MEDIDA;mqtt-conexao`) não consta no relato.
+
+Observação: o `ms` das respostas (9401 no `thingspeak_invalido`, 11683 no `travar`) mostra que a
+placa tinha ligado cerca de 9 s e 12 s antes de cada comando, o que bate com o reinício ao abrir a
+porta serial avisado no roteiro. Depois de cada boot chegou um heartbeat `sensor_falha` (02:11:54,
+02:15:44, 02:16:54; houve outro às 02:17:56), e a 12509 chegou sem `medidoEm` (a API usa o horário
+do recebimento, por isso medida = recebida = 02:12:11). Esses heartbeats não abriram lacuna na
+`seq` (depois do de 02:17:56, `dispositivos.ultimaSeq` = 12521, a última leitura gravada antes
+dele). Nenhum valor inválido foi gravado.
+
+### R4 watchdog na placa (24/11/2026)
+
+Mesma sessão, mesma placa e firmware.
+
+| Momento (UTC) | Evento | Fonte |
+|---|---|---|
+| 02:15:26 | Última leitura antes do travamento: `seq` 12519 (gravada 02:15:42) | Cosmos |
+| ~02:15:44 | `CT<{"cmd":"teste","acao":"travar"}`, placa com `ms` = 11683 | relato |
+| ~02:16:44 | `task_wdt` em 71956 ms de placa ligada, 60,3 s depois do `travar`; reinício | relato (serial) |
+| 02:16:54 | Primeiro sinal depois do reinício: heartbeat 200 | App Insights |
+| 02:17:08 | Primeira leitura depois do boot: `seq` 12520, gravada 02:17:13,6 | Cosmos |
+| 02:17:43 | Primeira consulta `leituras` à API depois da 12520 (200) | App Insights |
+
+Serial (relato):
+
+```
+CT>{"ok":true,"teste":"travar","seq":12519,"ms":11683,"watchdogS":60}
+E (71956) task_wdt: Task watchdog got triggered. The following tasks/users did not reset the watchdog in time:
+ - loopTask (CPU 0)
+...
+Aborting.
+...
+Rebooting...
+SEQ: ultima leitura numerada 12519
+WATCHDOG: placa reiniciada por travamento; retomando fila e sequencia.
+```
+
+Conferência nos dados:
+
+- **Detecção**: 71956 − 11683 = 60.273 ms, dentro do prazo de 60 s do watchdog.
+- **Sem envio durante o travamento**: nenhuma `telemetria` entre 02:15:42 e 02:17:13 no App
+  Insights; nenhuma leitura medida entre 02:15:26 e 02:17:08 (102 s, os ciclos em que o laço
+  estava parado ou a placa reiniciava).
+- **Continuidade**: a última `seq` antes do travamento é 12519 (resposta do comando, linha de boot
+  e banco concordam) e a primeira depois do boot é **12520**; a faixa 12489 a 12526 não tem lacuna.
+- **Recuperação**: primeira leitura gravada 89 s depois do `travar` e cerca de 29 s depois do
+  disparo do watchdog. Com o painel consultando a cada 20 s (`UPDATE_INTERVAL`), o dado novo
+  aparece até 02:17:34 (~110 s depois do `travar`). Nas consultas registradas, a primeira depois da
+  12520 foi às 02:17:43 (~119 s): de 02:12:30 em diante as consultas `leituras` vieram a cada
+  ~60 s, e não a cada 20 s; a causa não consta nos dados.
+
+**Resultado: aprovado.** O watchdog detectou o laço travado em 60 s, a placa reiniciou sozinha e
+retomou a numeração de onde parou (12519 → 12520). Nenhuma leitura numerada se perdeu; os ~100 s
+sem medição são o tempo do travamento e do reinício, em que nenhuma `seq` foi gerada.
+
 ## Números medidos (coleta real de 17/11 06:46 a 20/11 08:10 UTC)
 
 Fonte: leituras gravadas no Cosmos DB pela placa física (`analise/sensor/relatorio_cosmos.md`, gerado por `descrever_cosmos.py`). Não é um teste controlado de 24 h seguidas: é a coleta contínua da placa, com as paradas dela.
@@ -229,4 +326,4 @@ Leitura honesta: a perda de 24 h **não é sempre ≤ 1%**. Metade das janelas p
 
 Latência ao vivo com estímulo (ventilador, 24/11, #126): ver `docs/qa/relatorio-de-testes.md`. Três estímulos, só um com efeito visível (t_banco 41 s, painel ≤ 61 s, com t0 aproximado); placa → banco na sessão com mediana 4,65 s e p95 26,3 s, sem buraco de `seq`. Repetir com objeto frio para fechar as 5 medições.
 
-**Não medido** (depende da placa ligada): watchdog travando na placa física (#124), F6 real (#123); F4 com retenção e reenvio pela placa foi medido em 24/11 (#121). Os roteiros de R4 e F6 com o cabo USB estão em "Roteiros na placa física".
+Watchdog na placa física (#124) e F6 real (#123) medidos em 24/11 ("R4 watchdog na placa" e "F6 na placa"); F4 com retenção e reenvio pela placa medido em 24/11 (#121).
