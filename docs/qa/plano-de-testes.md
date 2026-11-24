@@ -60,7 +60,7 @@ Fora do escopo desta versão:
 | E2E contra produção | Site publicado e API real, com limpeza dos dados `QA-` | Playwright (`npm run test:e2e:real`) | Máquina local, sob demanda | 57 passaram (08/11/2026) |
 | Segurança de dependências | Vulnerabilidades conhecidas | pip-audit 2.7.3, `npm audit --omit=dev --audit-level=high` | `seguranca.yml` nos dois repositórios | Sem achado (relatório de 16/11/2026) |
 | Segurança dinâmica | Varredura passiva da API publicada | OWASP ZAP baseline | `seguranca.yml` | 0 alertas altos, 12 avisos triados |
-| Resiliência | Falhas provocadas (F1 a F6) | Manual na placa e testes automatizados | Placa, nuvem | F5 coberto por teste; os demais pendentes (seção 8) |
+| Resiliência | Falhas provocadas (F1 a F6) | Manual na placa e testes automatizados | Placa, nuvem | F5 coberto por teste; F6 e R4 aprovados na placa física em 24/11 ([`RESILIENCIA.md`](../../RESILIENCIA.md)); os demais pendentes (seção 8) |
 | Aceitação/usabilidade | Percepção de usuários | Formulário | A coletar | Pendente (CC-01) |
 
 Não há medição de cobertura do firmware nem do e2e. A cobertura de linhas do painel é baixa fora
@@ -134,7 +134,7 @@ entrega de 30/11/2026). Nenhum caso manual consta como executado; o registro de 
 - Passos: desconectar a alimentação, religar e observar o painel sem intervir.
 - Resultado esperado: a placa reinicia, reconecta e volta a enviar.
 - Critério: novo dado no painel em até 60 s, sem intervenção.
-- Situação: **final**. O firmware não tem watchdog (R4 pendente); a fila em flash sobrevive ao reinício.
+- Situação: **final**. R4 (watchdog): **Aprovado na placa física (24/11)**, ver a seção "R4 watchdog na placa (24/11/2026)" de [`RESILIENCIA.md`](../../RESILIENCIA.md). A fila em flash sobrevive ao reinício.
 
 ### TC-F3 Falha de sensor
 
@@ -174,7 +174,7 @@ entrega de 30/11/2026). Nenhum caso manual consta como executado; o registro de 
 - Passos: usar chave inválida do ThingSpeak ou bloquear o domínio; observar o painel.
 - Resultado esperado: o envio pela API continua e o painel segue atualizado.
 - Critério: fluxo pela API e painel atualizados.
-- Situação: **final**. O painel lê da API, não do ThingSpeak (que fica só na tela Monitoramento); falta executar com o canal bloqueado.
+- Situação: **Aprovado na placa física (24/11)**, ver a seção "F6 na placa (24/11/2026)" de [`RESILIENCIA.md`](../../RESILIENCIA.md). O painel lê da API, não do ThingSpeak (que fica só na tela Monitoramento).
 
 Medidas exigidas no relatório final (entrega de 30/11/2026): taxa de perda em pelo menos 24 h
 (meta: até 1%), disponibilidade do dispositivo (heartbeats recebidos ÷ esperados) e tempo de
@@ -224,11 +224,11 @@ Resumo da resiliência:
 | Caso | Situação em 16/11/2026 |
 |---|---|
 | TC-F1 | A executar na placa; sem registro |
-| TC-F2 | Final; R4 (watchdog) pendente |
+| TC-F2 | Final; R4 (watchdog) aprovado na placa física (24/11) |
 | TC-F3 | A executar na placa; sem registro |
 | TC-F4 | Final; reinício do contêiner não testado |
 | TC-F5 | Automatizado, passa |
-| TC-F6 | Final |
+| TC-F6 | Aprovado na placa física (24/11) |
 
 ## 9. Rastreabilidade: requisito para teste
 
@@ -263,9 +263,9 @@ IDs de `REQUISITOS_UC.md` e de `RESILIENCIA.md`. "Sem teste" indica lacuna a tra
 | R1 | Reconexão automática | TC-F1 | Execução pendente |
 | R2 | Armazenar e reenviar | TC-F1, TC-F4 | Execução pendente |
 | R3 | Identidade da mensagem | TC-F5, `test_contrato.py::TestLeituraDuplicada` | Sem número de sequência |
-| R4 | Watchdog | TC-F2 | Requisito pendente no firmware |
+| R4 | Watchdog | TC-F2 | Aprovado na placa física (24/11), `RESILIENCIA.md` "R4 watchdog na placa (24/11/2026)" |
 | R5 | Falha de sensor | TC-F3, testes C++ | Execução pendente |
-| R6 | Degradação controlada | TC-F3, TC-F4, TC-F6; e2e (estados vazio e erro) | Validar em F4 e F6 |
+| R6 | Degradação controlada | TC-F3, TC-F4, TC-F6; e2e (estados vazio e erro) | F6 aprovado na placa (24/11); validar F4 |
 | R7 | Observabilidade | `test_health.py`, `test_online.py` | Selo online/offline na tela de sensores ainda não verificado |
 | R8 | Recuperação na nuvem | TC-F4 | Restauração do backup não testada |
 
@@ -288,7 +288,7 @@ IDs de `REQUISITOS_UC.md` e de `RESILIENCIA.md`. "Sem teste" indica lacuna a tra
 |---|---|
 | Responsável pela qualidade | Manter este plano, os testes da API e do painel e o registro de defeitos |
 | Responsável pelo firmware | Executar e registrar F1, F2 e F3 na placa; manter os testes C++ |
-| Responsável pela nuvem e infraestrutura | Executar F4 e F6; testar restauração do backup; manter o CI |
+| Responsável pela nuvem e infraestrutura | Executar F4; testar restauração do backup; manter o CI |
 | Responsável pelo painel | Manter Vitest e Playwright; executar o e2e real |
 | Orientador | Define os critérios de aceitação e acompanha os testes de falha na banca |
 
@@ -300,7 +300,7 @@ IDs de `REQUISITOS_UC.md` e de `RESILIENCIA.md`. "Sem teste" indica lacuna a tra
 | Eficiência de desempenho | Intervalo de leitura de 20 s justificado; limites de requisição | Nenhuma medição de latência, vazão ou consumo; sem teste de carga |
 | Compatibilidade | E2E em Chromium (1280 px e 390 px); PWA; spec OpenAPI validada | Outros navegadores; interoperabilidade com outros sensores |
 | Interação (usabilidade) | E2E de fluxos e de responsividade; textos revisados; navegação por etiqueta QR | Pesquisa com usuários (CC-01); auditoria de acessibilidade além de verificações pontuais |
-| Confiabilidade | Fila em flash e reenvio; idempotência (TC-F5); rota de saúde; reinício automático previsto | F1 a F4 e F6 sem execução registrada; sem medida de perda em 24 h ou de disponibilidade; restauração do backup; watchdog |
+| Confiabilidade | Fila em flash e reenvio; idempotência (TC-F5); rota de saúde; reinício automático previsto | F1 a F4 sem execução registrada (F6 e watchdog aprovados na placa em 24/11); sem medida de perda em 24 h ou de disponibilidade; restauração do backup |
 | Segurança | JWT com sessão revogável; 401, 403, 400, 404; isolamento por empresa; espera de login; pip-audit, npm audit e ZAP passivo; STRIDE | Teste de invasão; limites em todas as rotas; exclusão de empresa e política de privacidade (LGPD) |
 | Manutenibilidade | Lint no CI; 99,61% de cobertura na API; documentação em `docs/`; CI em todo push | Cobertura do painel e do firmware; testes do firmware ligados ao `.ino` |
 | Flexibilidade | Perfis de carga configuráveis (`GET /perfis`); empresa e veículo cadastráveis; infraestrutura em Bicep | Teste de implantação em outra assinatura; adaptação a outro microcontrolador não verificada |
