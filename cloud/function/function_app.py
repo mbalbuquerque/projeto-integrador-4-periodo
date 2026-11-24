@@ -51,9 +51,9 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import azure.functions as func
+from azure.core import MatchConditions
 from azure.cosmos import CosmosClient, exceptions
 
 import assistente
@@ -255,65 +255,27 @@ def autorizar(req, perfis):
     return usuario, None
 
 
-def exigir_dono(recurso_tipo: str, recurso_id: str, usuario: dict) -> tuple[bool, Optional[dict]]:
-    """Verifica se o usuário autenticado é dono do recurso.
+# Containers cujo id gravado é "<empresa>~<código>" (o código se repete entre empresas).
+POR_EMPRESA = ("veiculos", "viagens")
 
-    Args:
-        recurso_tipo: tipo do recurso ('dispositivo', 'veiculo', 'viagem', 'leitura', 'sensor')
-        recurso_id: ID do recurso (deviceId, veiculoId, viagemId, etc.)
-        usuario: usuário autenticado (do token)
 
-    Returns:
-        (autorizado, recurso): True se autorizado e o recurso; False e None se não autorizado (404)
+def exigir_dono(nome, item_id, usuario, rota=None, msg="não encontrado"):
+    """Devolve (item, None) se o item é da empresa do usuário; senão (None, resposta 404).
+
+    O id vem da URL; o dono vem sempre do token (`usuario` relido do banco por
+    `autorizar`), nunca do corpo. "Não existe" e "é de outra empresa" recebem a
+    mesma resposta, e as duas viram `idor bloqueado [<MISSAO_CODIGO>]` no log.
     """
     empresa = usuario["empresaId"]
-
-    if recurso_tipo == "dispositivo":
-        disp = ler("dispositivos", recurso_id.lower())
-        if not disp or disp.get("empresaId") != empresa:
-            email_masked = mascarar_email(usuario['id'])
-            log_idor_bloqueado("dispositivo", f"id={recurso_id} user={email_masked}")
-            return False, None
-        return True, disp
-
-    if recurso_tipo == "veiculo":
-        veic_id = id_interno(empresa, recurso_id)
-        veic = ler("veiculos", veic_id)
-        if not veic or veic.get("empresaId") != empresa:
-            email_masked = mascarar_email(usuario['id'])
-            log_idor_bloqueado("veiculo", f"id={recurso_id} user={email_masked}")
-            return False, None
-        return True, veic
-
-    if recurso_tipo == "viagem":
-        viagem_id = id_interno(empresa, recurso_id)
-        viagem = ler("viagens", viagem_id)
-        if not viagem or viagem.get("empresaId") != empresa:
-            email_masked = mascarar_email(usuario['id'])
-            log_idor_bloqueado("viagem", f"id={recurso_id} user={email_masked}")
-            return False, None
-        return True, viagem
-
-    if recurso_tipo in ("leitura", "sensor"):
-        # Para leituras/sensores, valida se o deviceId pertence à empresa
-        disp = _dispositivo_da_empresa(recurso_id, empresa)
-        if not disp:
-            email_masked = mascarar_email(usuario['id'])
-            log_idor_bloqueado(recurso_tipo, f"deviceId={recurso_id} user={email_masked}")
-            return False, None
-        return True, disp
-
-    if recurso_tipo == "usuario":
-        alvo = ler("usuarios", recurso_id.lower())
-        if not alvo or alvo.get("empresaId") != empresa:
-            email_masked = mascarar_email(usuario['id'])
-            log_idor_bloqueado("usuario", f"id={recurso_id} user={email_masked}")
-            return False, None
-        return True, alvo
-
-    # Tipo desconhecido: nega por segurança
-    log_idor_bloqueado("tipo_desconhecido", f"tipo={recurso_tipo} id={recurso_id}")
-    return False, None
+    item = None
+    if isinstance(item_id, str) and item_id.strip():
+        codigo = item_id.strip()
+        chave = id_interno(empresa, codigo) if nome in POR_EMPRESA else codigo.lower()
+        item = ler(nome, chave)
+    if item is not None and item.get("empresaId") == empresa:
+        return item, None
+    log_idor_bloqueado(rota or nome, usuario["id"], item_id)
+    return None, resposta({"erros": [msg]}, 404)
 
 
 def publico(usuario):
@@ -1302,10 +1264,11 @@ def leituras(req: func.HttpRequest) -> func.HttpResponse:
     if not device:
         return resposta({"erros": ["informe ?deviceId="]}, 400)
 
-    # IDOR protection: verifica se o dispositivo pertence à empresa do usuário
-    autorizado, disp = exigir_dono("sensor", device, usuario)
-    if not autorizado:
-        return resposta({"erros": ["dispositivo não encontrado"]}, 404)
+    # Sensor de outra empresa responde igual a sensor inexistente.
+    _, erro = exigir_dono("dispositivos", device, usuario, "leituras",
+                          "dispositivo não encontrado")
+    if erro:
+        return erro
     device = device.lower()
     try:
         limite = max(1, min(int(req.params.get("limite", "50")), 500))
@@ -1470,10 +1433,10 @@ def predict_sensor(req: func.HttpRequest) -> func.HttpResponse:
         device = req.params.get("deviceId")
         if not device:
             return resposta({"erros": ["informe ?deviceId="]}, 400)
-    # IDOR protection: verify the device belongs to the user's empresa
-    autorizado, _ = exigir_dono("sensor", device, usuario)
-    if not autorizado:
-        return resposta({"erros": ["dispositivo não encontrado"]}, 404)
+    _, erro = exigir_dono("dispositivos", device, usuario, "predict/sensor",
+                          "dispositivo não encontrado")
+    if erro:
+        return erro
     device = device.lower()
     try:
         modelo = previsao_sensor.carregar()
@@ -1532,9 +1495,10 @@ def dispositivos(req: func.HttpRequest) -> func.HttpResponse:
         return resposta({"id": doc["id"], "descricao": doc["descricao"],
                          "criadoEm": doc["criadoEm"], "chave": chave}, 201)
 
-    disp = _dispositivo_da_empresa(item_id, empresa)
-    if not item_id or disp is None:
-        return resposta({"erros": ["dispositivo não encontrado"]}, 404)
+    disp, erro = exigir_dono("dispositivos", item_id, gestor, f"dispositivos {metodo}",
+                             "dispositivo não encontrado")
+    if erro:
+        return erro
 
     if metodo == "PUT":
         # Nova chave: a anterior para de valer na hora (sensor perdido ou chave vazada).
@@ -1570,43 +1534,24 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
         if erro:
             return erro
 
-        # IDOR protection for GET with item_id: verify specific resource belongs to user's empresa
-        if item_id:
-            tipo_recurso = {
-                "veiculos": "veiculo",
-                "viagens": "viagem",
-                "dispositivos": "dispositivo",
-                "usuarios": "usuario",
-            }.get(nome)
-            if tipo_recurso:
-                autorizado, _ = exigir_dono(tipo_recurso, item_id, usuario)
-                if not autorizado:
-                    return resposta({"erros": ["não encontrado"]}, 404)
-
-        return resposta({nome: [id_externo(d) for d in lista(nome, usuario["empresaId"])] })
+        if item_id:  # GET /veiculos/{id}: só o item, e só se for da empresa
+            item, erro = exigir_dono(nome, item_id, usuario, f"{nome} GET")
+            return erro or resposta({nome: [id_externo(item)]})
+        return resposta({nome: [id_externo(d) for d in lista(nome, usuario["empresaId"])]})
 
     usuario, erro = autorizar(req, GESTOR)
     if erro:
         return erro
     empresa = usuario["empresaId"]
 
-    # IDOR protection for PUT/DELETE: verify the resource belongs to the user's empresa
-    if metodo in ("PUT", "DELETE") and item_id:
-        # Map route name to resource type for exigir_dono
-        tipo_recurso = {
-            "veiculos": "veiculo",
-            "viagens": "viagem",
-            "dispositivos": "dispositivo",
-            "usuarios": "usuario",
-        }.get(nome)
-        if tipo_recurso:
-            autorizado, _ = exigir_dono(tipo_recurso, item_id, usuario)
-            if not autorizado:
-                return resposta({"erros": ["não encontrado"]}, 404)
-
-    if metodo == "DELETE":
+    if metodo in ("PUT", "DELETE"):
         if not item_id:
             return resposta({"erros": ["informe o id na rota"]}, 400)
+        _, erro = exigir_dono(nome, item_id, usuario, f"{nome} {metodo}")
+        if erro:
+            return erro
+
+    if metodo == "DELETE":
         try:
             container(nome).delete_item(id_interno(empresa, item_id),
                                         partition_key=id_interno(empresa, item_id))
@@ -1618,8 +1563,6 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
     dados, erro = corpo_json(req)
     if erro:
         return erro
-    if metodo == "PUT" and not item_id:
-        return resposta({"erros": ["informe o id na rota"]}, 400)
     if metodo == "POST" and gerar_id:
         dados = {**dados, "id": gerar_id()} if isinstance(dados, dict) else dados
     erros, doc = validar_fn(dados, empresa, item_id if metodo == "PUT" else None)
@@ -1628,10 +1571,8 @@ def _cadastro(req, nome, validar_fn, gerar_id=None):
 
     if metodo == "PUT":
         doc["id"] = item_id
-        interno = id_interno(empresa, item_id)
-        if ler(nome, interno) is None:
-            return resposta({"erros": ["não encontrado"]}, 404)
-        container(nome).upsert_item({**doc, "id": interno, "empresaId": empresa})
+        container(nome).upsert_item({**doc, "id": id_interno(empresa, item_id),
+                                     "empresaId": empresa})
         return resposta(doc)
 
     try:
@@ -1702,9 +1643,9 @@ def usuarios(req: func.HttpRequest) -> func.HttpResponse:
                                            "c.id, c.nome, c.perfil, c.veiculo")})
 
     if metodo in ("PUT", "DELETE"):
-        alvo = ler("usuarios", item_id) if item_id else None
-        if alvo is None or alvo.get("empresaId") != empresa:
-            return resposta({"erros": ["não encontrado"]}, 404)
+        alvo, erro = exigir_dono("usuarios", item_id, gestor, f"usuarios {metodo}")
+        if erro:
+            return erro
 
     if metodo == "DELETE":
         if item_id == gestor["id"]:
