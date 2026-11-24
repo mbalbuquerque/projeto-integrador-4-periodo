@@ -284,10 +284,12 @@ Um `4xx` (dado recusado pelo contrato) não melhora reenviando.
 Bloco `#ifdef COM_MQTT`:
 
 - Conexão persistente em `mqtt3.thingspeak.com:8883` com TLS (mesma raiz DigiCert), keep-alive de
-  120 s, 4 s de conexão TCP, 8 s de handshake TLS e 5 s de resposta do broker. Tudo do MQTT roda
-  na tarefa de envio: reconexão lenta não atrasa a medição.
+  120 s, 3 s de conexão TCP, 8 s de handshake TLS e 3 s de resposta do broker. Tudo do MQTT roda
+  na tarefa de envio, depois do envio à API: reconexão lenta não atrasa a medição, e uma tentativa
+  que falha (no máximo ~14 s) seguida de espera de 20 s ou mais não empurra o envio à API do
+  ciclo seguinte (F6).
 - `garantirMqtt`: só tenta com rede e com relógio válido (o certificado não se valida sem hora). Se
-  falhar, espera **5 s, dobrando até 60 s** (`mqttEspera`) antes da próxima tentativa, e imprime o
+  falhar, espera **20 s, dobrando até 60 s** (`mqttEspera`) antes da próxima tentativa, e imprime o
   motivo traduzido (`estadoMqtt`).
 - `publicarMqtt`: publica `field1=<temp>&field2=<umid>&field3=<rssi>` no tópico
   `channels/<canal>/publish`, com **QoS 0** (o ThingSpeak não aceita 1 ou 2): o broker não

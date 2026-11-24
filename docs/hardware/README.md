@@ -67,6 +67,29 @@ leitura do sensor antes do filtro em `temperaturaBruta`/`umidadeBruta`. A API va
 na mesma faixa física e grava os brutos junto da leitura no Cosmos, só para auditoria: status,
 alertas e painel usam o valor filtrado. Firmware antigo (sem os campos) continua aceito.
 
+## Comandos pelo cabo USB
+
+Monitor serial a 115200, uma linha por comando terminada em Enter ("Nova linha"). A placa responde
+numa linha que começa com `CT>`; o resto da serial é log. Abrir a porta pode reiniciar a placa:
+espere `CT>{"pronto":true,"fw":".."}` antes de digitar.
+
+| comando | o que faz | resposta |
+|---|---|---|
+| `CT<{"cmd":"info"}` | identidade, rede e versão do firmware | `CT>{"id":..,"chip":..,"configurado":..,"ssid":..,"wifi":..,"fw":..}` |
+| `CT<{"cmd":"redes"}` | redes 2,4 GHz que a placa vê | `CT>{"ok":true,"redes":[..]}` |
+| `CT<{"cmd":"wifi","ssid":"..","senha":".."}` | troca a rede (testa antes de gravar) | `CT>{"ok":true,"wifi":"conectado",..}` |
+| `CT<{"cmd":"config","ssid":"..","senha":"..","id":"..","chave":".."}` | rede e identidade do sensor | idem |
+| `CT<{"cmd":"parametros","intervalo":20000,"filtroJanela":5}` | parâmetros de coleta (abaixo) | `CT>{"ok":true,"intervalo":..,"filtroJanela":..}` |
+| `CT<{"cmd":"teste","acao":"travar"}` | **teste R4**: trava o laço; o watchdog reinicia a placa em 60 s | `CT>{"ok":true,"teste":"travar","seq":..,"ms":..,"watchdogS":60}` |
+| `CT<{"cmd":"teste","acao":"thingspeak_invalido"}` | **teste F6**: MQTT com senha inválida, só na memória; a API segue | `CT>{"ok":true,"teste":"thingspeak_invalido","ms":..}` |
+| `CT<{"cmd":"teste","acao":"normal"}` | desfaz o `thingspeak_invalido` sem reiniciar | `CT>{"ok":true,"teste":"normal","ms":..}` |
+
+Os comandos `teste` são só para os testes de resiliência: não gravam nada na flash (um reinício
+desfaz) e não mostram credenciais. Ação desconhecida responde
+`CT>{"ok":false,"erro":"acao_desconhecida"}`; firmware compilado sem MQTT responde
+`CT>{"ok":false,"erro":"sem_mqtt"}` às ações do ThingSpeak. O passo a passo, com o que anotar,
+está em [`RESILIENCIA.md`](../../RESILIENCIA.md), seção "Roteiros na placa física".
+
 ## Parâmetros de coleta (fora do código)
 
 Intervalo entre leituras e janela do filtro ficam na flash da placa (Preferences, namespace

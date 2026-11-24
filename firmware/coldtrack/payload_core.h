@@ -336,4 +336,33 @@ inline bool falhaTemporaria(int status) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Comando de teste pelo cabo: CT<{"cmd":"teste","acao":"..."}. So para os testes
+// fisicos de resiliencia; nada vai para a flash e um reinicio desfaz tudo.
+//   travar              para de alimentar o watchdog (R4, #124): a placa reinicia
+//   thingspeak_invalido MQTT com senha invalida so na RAM (F6, #123)
+//   normal              volta o MQTT para a senha do firmware, sem reiniciar
+// ---------------------------------------------------------------------------
+enum class AcaoTeste { DESCONHECIDA, TRAVAR, THINGSPEAK_INVALIDO, NORMAL };
+
+// Le "acao":"<texto>" (texto simples, sem escapes) e devolve a acao.
+inline AcaoTeste acaoTesteCore(const std::string &json) {
+    const std::string alvo = "\"acao\"";
+    size_t pos = json.find(alvo);
+    if (pos == std::string::npos) return AcaoTeste::DESCONHECIDA;
+    pos += alvo.size();
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '	')) pos++;
+    if (pos >= json.size() || json[pos] != ':') return AcaoTeste::DESCONHECIDA;
+    pos++;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '	')) pos++;
+    if (pos >= json.size() || json[pos] != '"') return AcaoTeste::DESCONHECIDA;
+    size_t fim = json.find('"', pos + 1);
+    if (fim == std::string::npos) return AcaoTeste::DESCONHECIDA;
+    std::string acao = json.substr(pos + 1, fim - pos - 1);
+    if (acao == "travar") return AcaoTeste::TRAVAR;
+    if (acao == "thingspeak_invalido") return AcaoTeste::THINGSPEAK_INVALIDO;
+    if (acao == "normal") return AcaoTeste::NORMAL;
+    return AcaoTeste::DESCONHECIDA;
+}
+
 #endif
