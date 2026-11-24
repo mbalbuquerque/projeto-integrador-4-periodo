@@ -8,7 +8,7 @@ resultado foi observado e registrado aqui.
 
 | ID | Requisito | Situação | Como é feito |
 |---|---|---|---|
-| R1 | Reconexão automática | Implementado | A cada ciclo o laço principal testa o Wi-Fi e chama `conectarWiFi()` (até 20 tentativas por chamada, sem travar o laço); o motivo da queda é registrado (`aoCairWiFi`). O MQTT reconecta com espera de 5 s dobrando até 60 s |
+| R1 | Reconexão automática | Implementado | A cada ciclo o laço principal testa o Wi-Fi e chama `conectarWiFi()` (até 20 tentativas por chamada, sem travar o laço); o motivo da queda é registrado (`aoCairWiFi`). O MQTT reconecta com espera de 20 s dobrando até 60 s |
 | R2 | Armazenar e reenviar | Implementado | Fila em flash (`/fila.jsonl`, LittleFS), até 500 leituras (~2 h 45 min a cada 20 s). Reenvia até 10 por ciclo, mantendo o horário da medição |
 | R3 | Identidade da mensagem | Implementado | Cada leitura leva `deviceId`, `medidoEm` (UTC por NTP) e `seq` (número de sequência guardado em Preferences, sobrevive ao reinício e vai na fila). A API aceita `seq`, responde `duplicada: true` no reenvio idêntico e 409 em conflito; `GET /leituras` aponta lacunas na sequência, calculadas pelo número de `seq`. Testado no Wokwi e na placa física no F1 de 17/11 (`seq` 89 a 128 contínua, `lacunas: []`) |
 | R4 | Watchdog e reinício | Implementado (simulador) | Watchdog de tarefa de 60 s, alimentado nas esperas de rede e antes de cada envio. No Wokwi, um travamento provocado foi detectado pelo watchdog, a placa reiniciou e a numeração seguiu de onde parou (5 → 6). Falta a placa física |
@@ -71,6 +71,101 @@ Procedimento igual ao de 23/11 (`az functionapp stop`, 30 s, `az functionapp sta
 
 Observação: durante a parada o ThingSpeak também ficou sem dado (00:32:32 a 00:34:27), porque a mesma tarefa de envio espera o timeout da API antes de publicar no canal. Isso é registrado em F6/R6.
 
+## Roteiros na placa física (R4 e F6, firmware 2026.11.24.1)
+
+Os dois testes se fazem só com o cabo USB e um monitor serial, sem recompilar: grave o firmware
+2026.11.24.1 (ou mais novo) e abra o Monitor Serial do Arduino IDE (ou outro terminal) em
+**115200**, com fim de linha **"Nova linha"** (ou "Ambos NL e CR"). Abrir a porta pode reiniciar a
+placa: espere a linha `CT>{"pronto":true,"fw":"2026.11.24.1"}` antes de digitar. Cada comando é
+uma linha inteira, colada exatamente como está abaixo, seguida de Enter. Os comandos de teste não
+gravam nada na flash, não mostram senha nem chave, e um reinício desfaz qualquer um deles.
+
+Para conferir a sequência no banco: `GET /api/leituras` do sensor (ou a tela de leituras do
+painel), olhando o campo `seq` e a lista `lacunas`.
+
+### R4: watchdog na placa física (#124)
+
+O watchdog vigia o laço principal (a tarefa que mede e lê o cabo) com prazo de 60 s. O comando
+trava esse laço de propósito, sem alimentar o watchdog; a tarefa de envio continua mandando o que
+já estava na fila.
+
+1. Com a placa enviando normalmente (linhas `MEDIDA;https;...;1` a cada 20 s), anote o horário.
+2. Digite:
+
+   ```
+   CT<{"cmd":"teste","acao":"travar"}
+   ```
+
+3. Resposta esperada, na hora (os números são de exemplo):
+
+   ```
+   CT>{"ok":true,"teste":"travar","seq":12345,"ms":456789,"watchdogS":60}
+   TESTE: loop travado de proposito em millis=456789, ultima seq=12345. O watchdog deve reiniciar a placa em 60 s.
+   ```
+
+   Anote o **horário** e a **`seq`** dessa linha (última leitura numerada antes do travamento).
+   A tela e o LED ficam parados; é o esperado.
+4. Cerca de 60 s depois aparece `task_wdt: Task watchdog got triggered` citando `loopTask`, e a
+   placa reinicia sozinha (o monitor serial pode desconectar e reconectar a porta). Anote o
+   horário do reinício.
+5. No boot, confira as linhas `SEQ: ultima leitura numerada <N>` e `WATCHDOG: placa reiniciada por
+   travamento; retomando fila e sequencia.` A tela mostra `REINICIO WDT` por cerca de 1 min.
+6. Anote a `seq` da primeira leitura depois do reinício e o horário em que ela foi gravada
+   (`MEDIDA;https;...;1`).
+
+**Aprovado se:** a placa reiniciou sozinha (sem tirar o cabo), a primeira `seq` depois do boot é a
+anotada no passo 3 mais 1 e `lacunas` fica vazia no intervalo. Registrar: horário do comando,
+horário do reinício (esperado ~60 s depois), `seq` antes e depois, horário da primeira leitura
+gravada depois do boot (tempo total de recuperação). O comando não se repete sozinho depois do
+reinício.
+
+### F6: ThingSpeak indisponível para a placa (#123)
+
+O comando faz o MQTT da placa conectar ao ThingSpeak com uma senha inválida, só na memória. O
+broker recusa a conexão (como se o canal estivesse indisponível) e o envio à API segue igual.
+O que este teste prova: o fluxo placa → API → painel não depende do ThingSpeak. Ele não derruba a
+leitura do canal pela tela Monitoramento (essa falha já é coberta pelo teste do painel).
+
+1. Com a placa enviando normalmente, confira no log `MQTT: publicado field1=...` a cada ciclo e
+   anote a última `seq` e o horário.
+2. Digite:
+
+   ```
+   CT<{"cmd":"teste","acao":"thingspeak_invalido"}
+   ```
+
+   Resposta: `CT>{"ok":true,"teste":"thingspeak_invalido","ms":...}` e
+   `TESTE: MQTT com senha invalida (so na RAM); a API segue normal.` Anote o horário.
+3. No ciclo seguinte aparecem `MQTT: conectando ao ThingSpeak (TESTE: senha invalida)...`,
+   `MQTT: falhou (...)` com o motivo (esperado 4, usuário/senha errados, ou 5, sem autorização) e
+   `MEDIDA;mqtt-conexao;<ms>;...;0`. Anote esse `<ms>` (quanto a tentativa recusada levou).
+   Depois disso a placa tenta de novo com espera de 20 s, 40 s e 60 s, sem parar o envio à API.
+4. Deixe assim por **pelo menos 3 minutos** (9 ciclos). Durante esse tempo devem continuar as
+   linhas `MEDIDA;https;...;1` a cada ~20 s, o Dashboard do painel segue atualizando e o canal do
+   ThingSpeak não recebe nada novo.
+5. Digite:
+
+   ```
+   CT<{"cmd":"teste","acao":"normal"}
+   ```
+
+   Resposta: `CT>{"ok":true,"teste":"normal","ms":...}`. No ciclo seguinte: `MQTT: conectado.` e
+   `MQTT: publicado ...`. Anote o horário da primeira publicação.
+
+**Aprovado se:** nenhuma leitura deixou de chegar à API no período (`seq` contínua, `lacunas`
+vazia) e o intervalo entre leituras gravadas ficou em ~20 s, como antes do teste. Registrar: horário
+de início e fim, `seq` no início e no fim, o `<ms>` das tentativas recusadas, o maior intervalo
+entre duas leituras gravadas no período, e o tempo até o ThingSpeak voltar a receber depois do
+`normal`. Se a placa reiniciar no meio, o MQTT volta sozinho à senha certa.
+
+Por que o MQTT recusado não atrasa a API: a publicação roda na tarefa de envio **depois** do envio
+à API. Uma tentativa de conexão que falha custa no máximo ~14 s (3 s de TCP, 8 s de TLS, 3 s de
+resposta do broker; com senha errada o broker recusa bem antes) e a próxima só sai 20 s depois,
+dobrando até 60 s, então no máximo um ciclo em dois tenta e o envio do ciclo seguinte não fica
+para trás (firmware 2026.11.24.1; antes eram 4 s de TCP, 5 s de resposta e espera a partir de 5 s,
+o que permitia uma tentativa lenta a cada ciclo). O inverso, a API fora do ar segurando o
+ThingSpeak (visto em 24/11), continua como descrito em F4.
+
 ## Números medidos (coleta real de 17/11 06:46 a 20/11 08:10 UTC)
 
 Fonte: leituras gravadas no Cosmos DB pela placa física (`analise/sensor/relatorio_cosmos.md`, gerado por `descrever_cosmos.py`). Não é um teste controlado de 24 h seguidas: é a coleta contínua da placa, com as paradas dela.
@@ -106,4 +201,4 @@ Leitura honesta: a perda de 24 h **não é sempre ≤ 1%**. Metade das janelas p
 
 Latência ao vivo com estímulo (ventilador, 24/11, #126): ver `docs/qa/relatorio-de-testes.md`. Três estímulos, só um com efeito visível (t_banco 41 s, painel ≤ 61 s, com t0 aproximado); placa → banco na sessão com mediana 4,65 s e p95 26,3 s, sem buraco de `seq`. Repetir com objeto frio para fechar as 5 medições.
 
-**Não medido** (depende da placa ligada): watchdog travando na placa física (#124), F4 com retenção e reenvio pela placa (#121) e F6 real (#123).
+**Não medido** (depende da placa ligada): watchdog travando na placa física (#124), F4 com retenção e reenvio pela placa (#121) e F6 real (#123). Os roteiros de R4 e F6 com o cabo USB estão em "Roteiros na placa física".
