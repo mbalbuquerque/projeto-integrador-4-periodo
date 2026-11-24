@@ -101,3 +101,28 @@ def test_main_treina_exporta_e_faz_verificacao_cruzada(tmp_path, monkeypatch):
     assert modelo["versao"] == mp.VERSAO and modelo["fonte"] == mp.FONTES["cosmos"]
     texto = (tmp_path / "relatorio.md").read_text(encoding="utf-8")
     assert "## Verificação cruzada" in texto and "cosmos.csv" in texto and "ts.csv" in texto
+
+
+def test_excursao_recorta_teste_e_vai_para_modelo_e_relatorio(monkeypatch):
+    dados = mp.amostras(serie_sintetica(minutos=300))
+    treino, teste, _ = mp.dividir(dados)
+    coef = mp.ajustar(treino)
+    de = teste["momento"].iloc[10].isoformat()
+    ate = teste["momento"].iloc[29].isoformat()
+    monkeypatch.setattr(mp, "EXCURSOES", [(de, ate)])
+    assert len(mp.na_excursao(teste, [(de, ate)])) == 20
+    modelo = mp.montar_modelo(treino, teste, coef, mp.avaliar(teste, coef), "cosmos")
+    assert modelo["metricasExcursao"]["amostras"] == 20
+    linhas = mp.secao_excursao(teste, modelo)
+    assert "## Janela com excursão provocada (recorte do teste)" in linhas
+    assert mp.mae_tendencia(teste.iloc[:0]) is None
+
+
+def test_sem_excursao_no_teste_nao_gera_secao(monkeypatch):
+    dados = mp.amostras(serie_sintetica(minutos=300))
+    treino, teste, _ = mp.dividir(dados)
+    coef = mp.ajustar(treino)
+    monkeypatch.setattr(mp, "EXCURSOES", [])
+    modelo = mp.montar_modelo(treino, teste, coef, mp.avaliar(teste, coef), "cosmos")
+    assert modelo["metricasExcursao"] is None
+    assert mp.secao_excursao(teste, modelo) == []
