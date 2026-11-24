@@ -8,7 +8,6 @@ Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`
 
 | Lacuna | UC / critério | Ação concreta | Responsável | Prazo | Evidência de conclusão |
 |---|---|---|---|---|---|
-| F4 só testado na nuvem | IoT / Resiliência | Nuvem aprovada em 23/11 (API volta em 20,6 s). Falta a placa reter e reenviar durante a parada de 30 s | Everson (placa) | 27/11 | Registro em `RESILIENCIA.md` (#121) |
 | F6 não executado | IoT / Resiliência | Chave inválida do ThingSpeak com a placa ligada; painel e API seguem atualizados | Everson (placa) | 27/11 | Registro em `RESILIENCIA.md` (#123) |
 | Watchdog validado só no simulador | IoT / R4 | Provocar um travamento na placa física e registrar o reinício | Everson (placa) | 27/11 | `RESILIENCIA.md` (#124) |
 | Latência P1 a P6 sem medição | IoT / Integração | Medido com ventilador em 24/11: 3 estímulos, 1 com efeito visível, causa do > 40 s explicada. Repetir com objeto frio para chegar a 5 degraus claros | Everson (placa) | 27/11 | Tabela em `docs/qa/relatorio-de-testes.md` (#126) |
@@ -35,6 +34,7 @@ Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`
 |---|---|
 | F1, F2 e F3 na placa física (17/11) | `RESILIENCIA.md` (#34) |
 | F4 na nuvem (23/11) | `RESILIENCIA.md`: API volta a responder em 20,6 s |
+| F4 na placa física (24/11) | `RESILIENCIA.md` (#121): serviço voltou em 20 s, a placa reteve e reenviou em ordem, zero leitura perdida, sem duplicado |
 | F5 mensagem duplicada | `duplicada: true` na placa em 17/11; testes automatizados (#122) |
 | Perda, disponibilidade e recuperação medidas | Perda 0,86% e disponibilidade 88,6% em 73,4 h; `RESILIENCIA.md` e `analise/sensor/relatorio_cosmos.md` (#125) |
 | Base de ≥ 48 h de coleta | `analise/sensor/relatorio.md` e `relatorio_cosmos.md` (#39) |
