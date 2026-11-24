@@ -122,12 +122,27 @@ class BaseIdor(unittest.TestCase):
 
     def bloqueado(self, nome, metodo, email, **kwargs):
         """A chamada recebe 404 e deixa `idor bloqueado [<código>]` no log."""
-        with self.assertLogs(level="WARNING") as logs:
+        captura = _Captura()
+        logging.getLogger().addHandler(captura)
+        try:
             status, corpo = self.chamar(nome, metodo, email, **kwargs)
-        self.assertEqual(status, 404, corpo)
-        self.assertTrue(any(f"idor bloqueado [{CODIGO_TESTE}]" in m for m in logs.output),
-                        logs.output)
+        finally:
+            logging.getLogger().removeHandler(captura)
+        self.assertEqual(status, 404, f"o ataque passou: HTTP {status}, resposta {corpo}")
+        self.assertTrue(any(f"idor bloqueado [{CODIGO_TESTE}]" in m for m in captura.mensagens),
+                        captura.mensagens)
         return corpo
+
+
+class _Captura(logging.Handler):
+    """Guarda as mensagens de log da chamada (WARNING ou acima)."""
+
+    def __init__(self):
+        super().__init__(logging.WARNING)
+        self.mensagens = []
+
+    def emit(self, record):
+        self.mensagens.append(record.getMessage())
 
 
 class TestAtaqueEntreEmpresas(BaseIdor):
