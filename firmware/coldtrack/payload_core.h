@@ -318,4 +318,22 @@ inline const char *parametrosDoComandoCore(const std::string &json, ParametrosCo
     *p = novo;
     return nullptr;
 }
+
+// Falha que vale tentar de novo depois (a leitura fica na fila).
+// So o dado recusado pelo contrato (400, 409, 413, 422) e descartado: reenviar
+// o mesmo corpo da a mesma resposta. Todo o resto pode passar sozinho:
+// - rede fora ou timeout (status <= 0) e servidor com erro (5xx);
+// - 401 e 403: chave trocada no painel ou app parado no Azure (o App Service
+//   parado responde 403 com pagina HTML). F4 em 24/11/2026 perdeu a seq 12230
+//   assim, e 32 leituras foram descartadas com 401 antes de a chave ser
+//   cadastrada de novo;
+// - 404 (rota fora durante o deploy), 408 (timeout do servidor), 429 (limite).
+inline bool falhaTemporaria(int status) {
+    if (status <= 0 || status >= 500) return true;
+    switch (status) {
+        case 401: case 403: case 404: case 408: case 429: return true;
+        default: return false;
+    }
+}
+
 #endif

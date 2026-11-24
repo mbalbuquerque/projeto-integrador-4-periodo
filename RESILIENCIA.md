@@ -52,6 +52,25 @@ Procedimento: `az functionapp stop` na `func-coldtrack-7319` (grupo `rg-coldtrac
 
 Tempo de recuperação medido: **20,6 s** entre o pedido de `start` e o primeiro 200. O critério completo de F4 (a placa reter e reenviar sem perda) continua pendente de execução na placa física. Neste teste a parada foi comandada por nós; queda por falha do processo e reinício automático estão em `infra/README.md` (4,4 s no CI).
 
+### F4 com a placa ligada (24/11/2026)
+
+Procedimento igual ao de 23/11 (`az functionapp stop`, 30 s, `az functionapp start`, `GET /api/health` a cada ~5 s), agora com a placa `coldtrack-0e0b2c` enviando a cada 20 s (firmware em uso na placa, anterior a 2026.11.23.1). Sequência conferida no Cosmos (`leituras`, campo `seq`).
+
+| Momento (UTC) | Evento |
+|---|---|
+| 00:33:26 | `GET /api/health` 200; última leitura em tempo real: seq 12229 (medida 00:32:22) |
+| 00:33:38 | `stop` concluído; health 403/sem resposta até o `start` |
+| 00:34:10 | `start` pedido |
+| 00:34:31 | **health 200** (recuperação: 21 s depois do `start`) |
+| 00:34:54 a 00:36:01 | placa reenvia o buffer: seq 12231 a 12236, atrasos de 64 s a 13 s, em ordem |
+| 00:36:14 | volta ao tempo real (atraso ~5 s) |
+
+**Resultado: reprovado por 1 leitura.** O serviço voltou sozinho e a placa reteve e reenviou o que mediu, mas a seq **12230** se perdeu. Causa: o App Service parado responde **HTTP 403**, e o firmware tratava todo 4xx como dado recusado pelo contrato e descartava a leitura (`falhaTemporaria` só guardava erro de rede e 5xx). Pelo mesmo motivo, 32 leituras foram descartadas com **401** entre 00:20 e 00:31 de 24/11, quando a chave do sensor foi cadastrada de novo no painel e a placa ainda usava a antiga.
+
+**Correção (firmware 2026.11.23.1, PR #165):** só o dado recusado pelo contrato (400, 409, 413, 422) é descartado; 401, 403, 404, 408, 429, 5xx e falha de rede ficam na fila e são reenviados. Teste `falhaTemporaria guarda na fila tudo menos dado recusado` em `firmware/tests/test_firmware.cpp`. Falta gravar o firmware novo na placa e repetir o F4.
+
+Observação: durante a parada o ThingSpeak também ficou sem dado (00:32:32 a 00:34:27), porque a mesma tarefa de envio espera o timeout da API antes de publicar no canal. Isso é registrado em F6/R6.
+
 ## Números medidos (coleta real de 17/11 06:46 a 20/11 08:10 UTC)
 
 Fonte: leituras gravadas no Cosmos DB pela placa física (`analise/sensor/relatorio_cosmos.md`, gerado por `descrever_cosmos.py`). Não é um teste controlado de 24 h seguidas: é a coleta contínua da placa, com as paradas dela.
