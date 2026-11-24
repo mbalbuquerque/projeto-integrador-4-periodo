@@ -8,8 +8,6 @@ Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`
 
 | Lacuna | UC / critério | Ação concreta | Responsável | Prazo | Evidência de conclusão |
 |---|---|---|---|---|---|
-| F6 não executado | IoT / Resiliência | Chave inválida do ThingSpeak com a placa ligada; painel e API seguem atualizados | Everson (placa) | 27/11 | Registro em `RESILIENCIA.md` (#123) |
-| Watchdog validado só no simulador | IoT / R4 | Provocar um travamento na placa física e registrar o reinício | Everson (placa) | 27/11 | `RESILIENCIA.md` (#124) |
 | Latência P1 a P6 sem medição | IoT / Integração | Medido com ventilador em 24/11: 3 estímulos, 1 com efeito visível, causa do > 40 s explicada. Repetir com objeto frio para chegar a 5 degraus claros | Everson (placa) | 27/11 | Tabela em `docs/qa/relatorio-de-testes.md` (#126) |
 | Sem calibração e sem caixa | IoT / Placa | Calibrar contra referência e acomodar o artefato em caixa adequada | Everson (placa) | 28/11 | `docs/` com a calibração (#128) e foto da caixa (#129) |
 | Modelo do sensor não supera o baseline | IA | Re-treinado em 24/11 com a base de 17/11 a 24/11 (Cosmos, 71 h de amostras, incluindo a excursão provocada em bancada de 23-24/11): ridge MAE 0,383 °C contra 0,364 °C da persistência no teste temporal; na janela da excursão, 1,608 contra 1,496 °C. LAD e gradient boosting também não passaram. A excursão caiu inteira no teste, então o treino segue sem subida ou descida forte para aprender. A rota recomenda o baseline e o painel exibe a previsão. Superar o baseline pede mais excursões (algumas no período de treino) ou uma coleta numa caixa refrigerada | Everson | 30/11 | Model card e `relatorio_previsao.md` (#37) |
@@ -35,6 +33,8 @@ Criado em 16/11/2026 a partir da matriz `REQUISITOS_UC.md` e do `RESILIENCIA.md`
 | F1, F2 e F3 na placa física (17/11) | `RESILIENCIA.md` (#34) |
 | F4 na nuvem (23/11) | `RESILIENCIA.md`: API volta a responder em 20,6 s |
 | F4 na placa física (24/11) | `RESILIENCIA.md` (#121): serviço voltou em 20 s, a placa reteve e reenviou em ordem, zero leitura perdida, sem duplicado |
+| F6 na placa física (24/11) | `RESILIENCIA.md` (#123): MQTT do ThingSpeak falhando, `seq` 12509 a 12519 gravadas na API a cada ~20 s sem lacuna; canal sem entrada de 02:11:08 a 02:17:15 UTC |
+| Watchdog na placa física (R4, 24/11) | `RESILIENCIA.md` (#124): reinício 60,3 s depois do travamento, `seq` 12519 → 12520 sem lacuna, primeira leitura gravada 89 s depois do comando |
 | F5 mensagem duplicada | `duplicada: true` na placa em 17/11; testes automatizados (#122) |
 | Perda, disponibilidade e recuperação medidas | Perda 0,86% e disponibilidade 88,6% em 73,4 h; `RESILIENCIA.md` e `analise/sensor/relatorio_cosmos.md` (#125) |
 | Base de ≥ 48 h de coleta | `analise/sensor/relatorio.md` e `relatorio_cosmos.md` (#39) |
