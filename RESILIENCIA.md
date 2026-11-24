@@ -24,7 +24,7 @@ resultado foi observado e registrado aqui.
 | F1 Queda de rede (60 s) | Reconecta em até 30 s; sem lacuna na sequência | Aprovado na placa física (17/11) |
 | F3 Falha de sensor | Leitura marcada inválida, alerta visível, nada gravado como válido | Aprovado na placa física (17/11) |
 | F2 Queda de energia | Volta a enviar em até 60 s, sem perder a sequência | Aprovado na placa física (17/11) |
-| F4 Serviço em nuvem fora (30 s) | Serviço volta sozinho; dispositivo retém e reenvia; zero perda | Parcial: lado da nuvem aprovado em 23/11 (a API voltou a responder 200 em 20,6 s depois do `start`); retenção e reenvio pela placa seguem pendentes, pois a placa está desligada (issue de F4 na placa) |
+| F4 Serviço em nuvem fora (30 s) | Serviço volta sozinho; dispositivo retém e reenvia; zero perda | Aprovado na placa física (24/11) |
 | F5 Mensagem duplicada | Apenas 1 registro no banco | Aprovado: reenvio idêntico responde `duplicada: true` e não grava de novo (placa física em 17/11; testes `test_telemetria_duplicada_reenvio_identico` e `test_reenvio_igual` passando em 23/11) |
 | F6 ThingSpeak indisponível | O fluxo pela API continua e o painel segue atualizado | **Parcial.** Execução real (chave inválida no canal com a placa ligada) pendente (#123). Verificado sem a placa: a Function App não referencia o ThingSpeak em nenhum módulo (teste `cloud/function/test_independencia_thingspeak.py`); a placa envia à API por HTTPS e publica no ThingSpeak por MQTT depois, com falha do MQTT só adiando a próxima tentativa (`garantirMqtt`, `coldtrack.ino`); o painel lê a API em tudo (`src/lib/api.js`, `src/lib/leituras.js`, `Dashboard.jsx` a cada 20 s) e só a tela Monitoramento consulta o ThingSpeak, onde a falha do canal mostra "indisponível" sem valor antigo (`Monitoramento.test.jsx`, caso "falha do canal") e não afeta as outras telas |
 
@@ -50,7 +50,7 @@ Procedimento: `az functionapp stop` na `func-coldtrack-7319` (grupo `rg-coldtrac
 | 13:54:15 | iniciando | sem resposta (conexão recusada) |
 | 13:54:22 | | **200** |
 
-Tempo de recuperação medido: **20,6 s** entre o pedido de `start` e o primeiro 200. O critério completo de F4 (a placa reter e reenviar sem perda) continua pendente de execução na placa física. Neste teste a parada foi comandada por nós; queda por falha do processo e reinício automático estão em `infra/README.md` (4,4 s no CI).
+Tempo de recuperação medido: **20,6 s** entre o pedido de `start` e o primeiro 200. O critério completo de F4 (a placa reter e reenviar sem perda) foi fechado na placa física em 24/11 (seções abaixo). Neste teste a parada foi comandada por nós; queda por falha do processo e reinício automático estão em `infra/README.md` (4,4 s no CI).
 
 ### F4 com a placa ligada (24/11/2026)
 
@@ -67,9 +67,37 @@ Procedimento igual ao de 23/11 (`az functionapp stop`, 30 s, `az functionapp sta
 
 **Resultado: reprovado por 1 leitura.** O serviço voltou sozinho e a placa reteve e reenviou o que mediu, mas a seq **12230** se perdeu. Causa: o App Service parado responde **HTTP 403**, e o firmware tratava todo 4xx como dado recusado pelo contrato e descartava a leitura (`falhaTemporaria` só guardava erro de rede e 5xx). Pelo mesmo motivo, 32 leituras foram descartadas com **401** entre 00:20 e 00:31 de 24/11, quando a chave do sensor foi cadastrada de novo no painel e a placa ainda usava a antiga.
 
-**Correção (firmware 2026.11.23.1, PR #165):** só o dado recusado pelo contrato (400, 409, 413, 422) é descartado; 401, 403, 404, 408, 429, 5xx e falha de rede ficam na fila e são reenviados. Teste `falhaTemporaria guarda na fila tudo menos dado recusado` em `firmware/tests/test_firmware.cpp`. Falta gravar o firmware novo na placa e repetir o F4.
+**Correção (firmware 2026.11.23.1, PR #165):** só o dado recusado pelo contrato (400, 409, 413, 422) é descartado; 401, 403, 404, 408, 429, 5xx e falha de rede ficam na fila e são reenviados. Teste `falhaTemporaria guarda na fila tudo menos dado recusado` em `firmware/tests/test_firmware.cpp`. O F4 foi repetido com esse firmware na placa e passou (seção seguinte).
 
 Observação: durante a parada o ThingSpeak também ficou sem dado (00:32:32 a 00:34:27), porque a mesma tarefa de envio espera o timeout da API antes de publicar no canal. Isso é registrado em F6/R6.
+
+### F4 repetido com o firmware 2026.11.23.1 (24/11/2026): aprovado
+
+Placa `coldtrack-0e0b2c` com o firmware 2026.11.23.1, conferido no banco: `dispositivos.fw` = 2026.11.23.1 e leituras com `temperaturaBruta` e `origem` "placa". A `seq` continuou de onde estava (12475 foi a primeira leitura depois da gravação, sem reinício da numeração: as Preferences foram preservadas).
+
+Procedimento: `az functionapp stop` na `func-coldtrack-7319` (grupo `rg-coldtrack`), cerca de 30 s parada, `az functionapp start`; `GET /api/health` consultado a cada ~5 s.
+
+| Momento (UTC) | Evento |
+|---|---|
+| 02:00:26 | `GET /api/health` 200 |
+| 02:00:38 | `stop` concluído; health 403 ou sem resposta (um 200 isolado às 02:00:55, com o app ainda parando) |
+| 02:01:11 | `start` pedido |
+| 02:01:31 | **health 200** (recuperação: 20 s depois do `start`) |
+
+Leituras no período (conferidas no Cosmos):
+
+| `seq` | Medida (UTC) | Recebida (UTC) | Atraso | Observação |
+|---|---|---|---|---|
+| 12477 | 02:00:38 | 02:00:41 | 3,9 s | tempo real |
+| 12478 | 02:00:58 | 02:01:26 | 28,6 s | aceita com 201 enquanto o app subia |
+| 12478 (reenvio) | 02:00:58 | 02:01:54 | n/a | a placa reenviou; a API respondeu 200 `duplicada`, registro único (comportamento de F5) |
+| 12479 | 02:01:13 | 02:01:59 | 46,5 s | retida e reenviada |
+| 12480 | n/a | 02:02:03 | n/a | heartbeat com `motivo: sensor_falha` (falha de leitura do DHT); o heartbeat consome a `seq` e `dispositivos.ultimaSeq` = 12480; não é leitura perdida |
+| 12481 | 02:02:23 | 02:02:27 | 4,7 s | volta ao tempo real |
+
+**Resultado: aprovado.** O serviço voltou sozinho, a placa reteve e reenviou na ordem, nenhum duplicado foi gravado e nenhuma leitura se perdeu. A falha anterior (seq 12230 perdida com o 403) está corrigida pela `falhaTemporaria` do PR #165. Neste teste não se registrou o comportamento do ThingSpeak.
+
+Observação: houve falhas intermitentes de leitura do DHT (heartbeats `sensor_falha` às 00:55:38 e às 02:02:03 UTC), o que sugere um fio de dados do DHT frouxo. O comportamento de F3 se manteve: nenhum valor inválido foi gravado.
 
 ## Roteiros na placa física (R4 e F6, firmware 2026.11.24.1)
 
@@ -201,4 +229,4 @@ Leitura honesta: a perda de 24 h **não é sempre ≤ 1%**. Metade das janelas p
 
 Latência ao vivo com estímulo (ventilador, 24/11, #126): ver `docs/qa/relatorio-de-testes.md`. Três estímulos, só um com efeito visível (t_banco 41 s, painel ≤ 61 s, com t0 aproximado); placa → banco na sessão com mediana 4,65 s e p95 26,3 s, sem buraco de `seq`. Repetir com objeto frio para fechar as 5 medições.
 
-**Não medido** (depende da placa ligada): watchdog travando na placa física (#124), F4 com retenção e reenvio pela placa (#121) e F6 real (#123). Os roteiros de R4 e F6 com o cabo USB estão em "Roteiros na placa física".
+**Não medido** (depende da placa ligada): watchdog travando na placa física (#124), F6 real (#123); F4 com retenção e reenvio pela placa foi medido em 24/11 (#121). Os roteiros de R4 e F6 com o cabo USB estão em "Roteiros na placa física".
