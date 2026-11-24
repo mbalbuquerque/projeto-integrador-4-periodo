@@ -1,7 +1,7 @@
 # Caixa do artefato
 
-**Situação: placa e sensor montados no pote preto, com foto (23/11, 22h); falta fixar a placa,
-ventilar o sensor e testar com a caixa fechada.** A entrega final exige o artefato acomodado em
+**Situação: montagem pronta (23/11).** A placa e o DHT ficam no pote preto, e a protoboard está
+presa dentro da maquete do caminhão (informado pela equipe em 23/11). A entrega final exige o artefato acomodado em
 caixa adequada, elaborada pela equipe ou adaptada de material reaproveitado.
 
 ## Fotos (23/11/2026)
@@ -20,8 +20,8 @@ sobre uma mesa preta, fechado; um cabo aparece ao lado, na lateral direita da fo
 
 ![Pote preto aberto com a placa e o DHT dentro](fotos/montagem-pote-tampa-aberta.jpg)
 
-**Pote preto aberto, tampa à esquerda.** A protoboard com a ESP32-C3 e o DHT (azul) fica apoiada
-sobre um papelão no fundo do pote; o cabo USB entra por um furo na tampa e vai direto à placa.
+**Pote preto aberto, tampa à esquerda.** A protoboard com a ESP32-C3 e o DHT (azul) fica no fundo
+do pote, sobre um papelão; o cabo USB entra por um furo na tampa e vai direto à placa.
 Jumpers ligam o DHT à placa.
 
 ![Detalhe da montagem dentro do pote](fotos/montagem-pote-detalhe.jpg)
@@ -53,12 +53,19 @@ Só está marcado o que as fotos comprovam.
 - [x] Caixa escolhida: pote plástico preto com tampa (foto `caixa-dispositivo.png`)
 - [x] Foto da montagem com a placa e o sensor na caixa (`montagem-pote-tampa-aberta.jpg`, `montagem-pote-detalhe.jpg`)
 - [x] Cabo USB passando por um furo na tampa
-- [ ] Placa fixa e sem folga (hoje a protoboard fica solta sobre um papelão)
+- [x] Placa fixa: protoboard presa dentro da maquete do caminhão (informado pela equipe em 23/11/2026)
+- [x] Maquete do caminhão pronta (`maquete-caminhao.png`)
 - [ ] DHT afastado da placa e ventilado (hoje fica na mesma protoboard, a poucos centímetros, dentro do pote fechado)
 - [ ] Fios soldados ou com conector firme (hoje são jumpers na protoboard)
 - [ ] Tela visível pela janela
 - [ ] Tampa fecha sem pressionar o sensor
 - [ ] Teste com a caixa fechada: leitura chega ao painel e a tela mostra o status
+
+## Observação de medição
+
+Com o pote fechado, as leituras de 23/11 à noite ficaram entre 33 e 35 °C: o calor da placa fica
+preso perto do sensor. Para medir o ar do ambiente com mais fidelidade, o próximo passo é um furo
+de ventilação na lateral do pote, com o DHT afastado da placa.
 
 ## Registro
 
