@@ -8,8 +8,8 @@ action, and both answer with a baseline next to the model so the user can compar
 | Question | Chance that the outdoor air passes 30 °C at a given month and hour | Temperature of the cargo sensor 10 minutes ahead |
 | Data | INMET station A307 Petrolina, hourly, 2019–2025 | Readings of the team's own board, stored in the production database (cross-checked with ThingSpeak channel 3515173) |
 | Route | `GET /api/predict?mes=&hora=` | `GET /api/predict/sensor?deviceId=` |
-| Version | `clima-a307-30c-v1` | `sensor-ridge-10min-v2` |
-| Beats its baseline on the test split | Yes (Brier 0.091 vs 0.202) | **No, with the current data** (MAE 0.334 °C vs 0.319 °C) |
+| Version | `clima-a307-30c-v1` | `sensor-ridge-10min-v3` |
+| Beats its baseline on the test split | Yes (Brier 0.091 vs 0.202) | **No, with the current data** (MAE 0.383 °C vs 0.364 °C) |
 
 ---
 
@@ -106,15 +106,17 @@ with a temporal split and an honest baseline.
   export). The feature function is `cloud/function/previsao_sensor.atributos`, the same one the
   route uses, so training and serving compute the features identically. Report:
   `analise/sensor/relatorio_previsao.md`.
-- Version: `sensor-ridge-10min-v2` (retrained on 2026-11-23 with the 2026-11-17 to 11-20 collection). Artifact: `cloud/function/modelo_sensor.json` (three
+- Version: `sensor-ridge-10min-v3` (retrained on 2026-11-24 with the 2026-11-17 to 11-24 collection,
+  which includes a thermal excursion provoked on the bench). Artifact: `cloud/function/modelo_sensor.json` (three
   coefficients, the window, the gap limit, the training and test periods and the metrics). No
   numpy or scikit-learn at runtime.
 
 ### Data
 
 - Source: the readings the team's ESP32-C3 board with a DHT11 sent to the API, read from the
-  production database (the same data the route receives when serving): 12,015 readings
-  carrying the firmware sequence number, from 2026-11-17 02:33 to 2026-11-20 08:10 UTC, exported with
+  production database (the same data the route receives when serving): 12,238 readings
+  carrying the firmware sequence number, from 2026-11-17 02:33 to 2026-11-24 01:35 UTC (no
+  readings between 2026-11-20 08:10 and 2026-11-23 22:07, when the board was off), exported with
   `infra/backup/exportar.py` and converted by `analise/sensor/descrever_cosmos.py --converter`.
   Readings without a sequence number are left out: the database does not store the reading origin
   and it received demonstration data before the board went live. The
@@ -122,25 +124,40 @@ with a temporal split and an honest baseline.
 - Cleaning: readings without temperature or timestamp, outside the DHT11 physical range (0 to
   50 °C) or with a repeated timestamp are dropped (none were dropped in the current base).
 - Samples: one per minute inside continuous stretches, with 10 minutes of history and the target
-  10 minutes later in the same stretch: 4,211 samples (about 70 h) from 5 stretches.
+  10 minutes later in the same stretch: 4,265 samples (about 71 h) from 6 stretches.
+- Provoked excursion: on 2026-11-23/24 (UTC) the board was put in a closed pot, heating to about
+  35.6 °C, then the pot was opened with a fan on it, cooling to about 28.5 °C (up to 2.5 °C in
+  10 minutes). Only the stretch from 2026-11-24 00:31 UTC is long enough to give
+  samples: 44 samples, all in the test set. It is a bench experiment, not a transport event.
 - Temporal split: the most recent 30% of the sample instants are the test set
-  (2026-11-19 05:07 to 2026-11-20 08:00 UTC, 1,267 samples); the training set (2026-11-17 to
-  2026-11-19 04:56 UTC, 2,944 samples) only keeps samples whose target is before the first test instant, so no
+  (2026-11-19 05:38 to 2026-11-24 01:25 UTC, 1,280 samples); the training set (2026-11-17 to
+  2026-11-19 05:27 UTC, 2,975 samples) only keeps samples whose target is before the first test instant, so no
   future value leaks into training. The served coefficients are the ones trained on this
   training set, the same ones that were evaluated.
 
 ### Evaluation (test split)
 
-| Metric (°C) | Model (ridge) | Baseline (persistence) |
-|---|---|---|
-| MAE (primary metric, chosen before training) | 0.334 | 0.319 |
-| RMSE | 0.662 | 0.652 |
+| Metric (°C) | Model (ridge) | Baseline (persistence) | Trend reference (last reading + `d10`, no training) |
+|---|---|---|---|
+| MAE, whole test set (primary metric, chosen before training) | 0.383 | 0.364 | 0.556 |
+| RMSE, whole test set | 0.742 | 0.723 | |
+| MAE, excursion window only (44 test samples) | 1.608 | 1.496 | 1.066 |
+| RMSE, excursion window only | 1.855 | 1.734 | |
 
-**The model does not beat the baseline on either metric.** With the 48-hour collection the test
-set grew from 218 to 1,267 samples and the result is now consistent: persistence also wins with
-other test fractions (20% and 40%, reported in `relatorio_previsao.md` for information only) and
-on the ThingSpeak cross-check (MAE 0.346 vs 0.311 °C). Other attempts on 2026-11-23 outside the
-pipeline (median/LAD regression, gradient boosting with absolute-error loss, a 30-minute window
+**The model does not beat the baseline on either metric, neither on the whole test set nor on
+the excursion window.** The ridge learned from a flat training period and its main coefficient
+pulls the forecast back to the 10-minute mean (`m10`, +0.27), so during a real rise or fall it
+lags even more than persistence. Cheap alternatives evaluated on the same split on 2026-11-24
+(outside the exported pipeline) did not win either: ridge with a stronger penalty (lambda 100
+and 1000: MAE 0.381 and 0.372 °C), ridge with only the trend features `d5` and `d10` (0.383 °C),
+median/LAD regression (collapses into persistence, 0.364 °C) and gradient boosting with
+absolute-error loss (0.386 °C overall, 1.522 °C in the excursion). The untrained trend
+extrapolation is the only one that beats persistence inside the excursion window, but it is
+much worse on the whole test set (DHT11 resolution steps look like trends), so it is reported as
+a reference and not recommended; it was not picked by looking at the test set. Persistence also
+wins with other test fractions (20% and 40%, reported in `relatorio_previsao.md` for
+information only) and on the ThingSpeak cross-check (MAE 0.346 vs 0.311 °C). Earlier attempts on
+2026-11-23 outside the pipeline (median/LAD regression, gradient boosting with absolute-error loss, a 30-minute window
 with more features, hour of day) did not beat persistence either: the median regression collapses
 into it (MAE 0.3191 vs 0.3190 °C) and boosting stayed above it (0.334 to 0.341 °C vs 0.318 °C).
 The series only moves in DHT11 resolution steps, and with no real excursion in the base there is
@@ -162,11 +179,14 @@ version with both test errors. Details: `docs/api.md` and the OpenAPI specificat
 
 ### Limitations
 
-- **Limited data**: about 70 hours of samples, in 5 stretches separated by gaps (the longest
-  continuous stretch is about 14 h); the test set spans about 27 h.
-- **Bench, not a refrigerated box**: the board sits indoors (readings between 21 and 37 °C). There is no real thermal
+- **Limited data**: about 71 hours of samples, in 6 stretches separated by gaps (the longest
+  continuous stretch is about 31 h); the test set has 1,280 samples (about 21 h of samples
+  between 2026-11-19 and 2026-11-24).
+- **Bench, not a refrigerated box**: the board sits indoors (readings between 21 and 37 °C). There is no real transport
   excursion in the base (door opening, refrigeration failure), which is exactly the event the
-  model should anticipate. The series is almost flat and moves in DHT11 resolution steps, a
+  model should anticipate. The only excursion is the one provoked on the bench on 2026-11-24:
+  44 samples, all in the test set, so the training set has no strong rise or fall to learn from,
+  and a single 1-hour event is too little to judge a model anyway. The series is almost flat and moves in DHT11 resolution steps, a
   setting where persistence is very hard to beat.
 - The model only extrapolates the sensor's own series: it knows nothing about the outdoor
   weather, the route or the door.
@@ -191,6 +211,8 @@ starts recommending the model with no code change; the API is published with the
 
 ## Next steps
 
-- Retrain the sensor forecast above all with readings from a real refrigerated box, where excursions exist.
+- Retrain the sensor forecast with more excursions, some of them inside the training period
+  (repeat the bench experiment on other days), and above all with readings from a real
+  refrigerated box.
 - Cross the sensor readings with the outdoor temperature (model 1) to explain the excursions.
 - Use the weather forecast of the day instead of the historical average in model 1.

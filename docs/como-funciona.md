@@ -1256,31 +1256,33 @@ sensor.
   (sensor travado, porta aberta, frio desligado). Um detector só poderia ser medido em falhas
   inseridas à mão; a previsão é medida nas próprias leituras reais.
 - **Dados**: leituras da placa ESP32-C3 + DHT11 da equipe gravadas no banco de produção (o
-  que a rota recebe ao servir): 12.015 leituras com número de sequência, de 17/11 a 20/11/2026, exportadas com
+  que a rota recebe ao servir): 12.238 leituras com número de sequência, de 17/11 a 24/11/2026, exportadas com
   `infra/backup/exportar.py` e convertidas por `descrever_cosmos.py --converter`; o canal público ThingSpeak
   3515173 (12.730 leituras) serve de verificação cruzada. Limpeza: descarta leitura sem temperatura ou sem data, fora
   da faixa do DHT11 (0 a 50 °C) ou com instante repetido (nenhuma saiu nesta base). Intervalo
   de mais de 5 min entre leituras abre trecho novo; nenhuma amostra atravessa lacuna. Uma
-  amostra por minuto: 4.211 amostras (cerca de 70 h) em 5 trechos.
+  amostra por minuto: 4.265 amostras (cerca de 71 h) em 6 trechos.
 - **Modelo**: regressão ridge sem intercepto sobre a variação (alvo menos a última leitura),
   com três atributos dos últimos 10 min: variação em 5 min (`d5`), em 10 min (`d10`) e média
   dos 10 min menos a última leitura (`m10`); lambda fixo 1. Exportado como três coeficientes
-  em `modelo_sensor.json` (versão `sensor-ridge-10min-v2`), sem biblioteca de ML em produção. O
+  em `modelo_sensor.json` (versão `sensor-ridge-10min-v3`), sem biblioteca de ML em produção. O
   cálculo dos atributos é a mesma função (`previsao_sensor.atributos`) no treino e na rota.
 - **Baseline**: persistência (a temperatura daqui a 10 min é a última leitura).
-- **Divisão temporal**: teste = 30% mais recentes dos instantes (19/11 05:07 a 20/11 08:00 UTC,
-  1.267 amostras); treino = o que vem antes (2.944 amostras), descartando amostra cujo alvo cai depois
+- **Divisão temporal**: teste = 30% mais recentes dos instantes (19/11 05:38 a 24/11 01:25 UTC,
+  1.280 amostras); treino = o que vem antes (2.975 amostras), descartando amostra cujo alvo cai depois
   do corte, para não vazar futuro.
-- **Resultado (teste)**: MAE do modelo **0,334 °C** contra **0,319 °C** da persistência; RMSE
-  0,662 contra 0,652. Com a base de 48 h o resultado ficou consistente (outros cortes e a
+- **Resultado (teste)**: MAE do modelo **0,383 °C** contra **0,364 °C** da persistência; RMSE
+  0,742 contra 0,723. Na janela da excursão provocada em bancada (24/11, 44 amostras do
+  teste) o modelo também perde: 1,608 contra 1,496 °C. Com a base de 48 h o resultado ficou consistente (outros cortes e a
   verificação cruzada no ThingSpeak dão o mesmo: 0,346 contra 0,311 °C) e outras tentativas
   (regressão pela mediana, gradient boosting, janela de 30 min) também não passaram da
   persistência: **o modelo não supera o baseline**. Por isso o arquivo sai com `superaBaseline: false` e a rota responde
   `recomendada: "baseline"`: a tela deve mostrar a persistência. A previsão do modelo segue na
   resposta para a comparação ficar visível.
 - **Quando erra e por quê**: a placa está em bancada, em ambiente interno, e não num baú; a
-  série é quase estável e muda em degraus de resolução do DHT11. Não há nenhuma excursão real
-  na base, que é justamente o que o modelo deveria antecipar. Com a série variando só em
+  série é quase estável e muda em degraus de resolução do DHT11. A única excursão da base é a provocada
+  em bancada em 23-24/11 (panela fechada aquecendo, depois ventilador), curta e inteira no
+  teste: o treino não tem subida ou descida forte para aprender. Com a série variando só em
   degraus do sensor, a persistência é muito difícil de bater.
 - **Re-treinar**: exportar o banco, `python descrever_cosmos.py --converter <export>/leituras.jsonl` e `python
   modelo_previsao.py` em `analise/sensor`. Se o MAE do modelo ficar abaixo do da persistência, a rota passa
@@ -1405,8 +1407,9 @@ usa o sensor do baú, só a estação do INMET em Petrolina."
 **IA — E o modelo sobre as leituras do sensor?**
 "Prevê a temperatura do sensor 10 minutos à frente, para avisar antes de sair da faixa. O
 baseline é repetir a última leitura. Com as horas que temos, com a placa em bancada, o modelo
-teve erro médio de 0,34 grau contra 0,31 da persistência, então não ganhou, e a rota recomenda
-a persistência. O pipeline re-treina com um comando quando entrarem as 48 horas ou uma viagem
+teve erro médio de 0,38 grau contra 0,36 da persistência, então não ganhou, e a rota recomenda
+a persistência. Numa excursão provocada em bancada ele também perdeu, porque o treino ainda não
+tinha nenhuma. O pipeline re-treina com um comando quando entrarem as 48 horas ou uma viagem
 de verdade."
 
 **UE Mobile — O que o app mostra quando está sem internet?**

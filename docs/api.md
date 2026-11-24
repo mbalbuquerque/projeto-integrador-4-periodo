@@ -506,9 +506,9 @@ Resposta `200`:
  "previsao": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
  "baseline": {"para": "2026-11-17T06:27:05+00:00", "temperatura": 32.8, "status": "CRITICO"},
  "recomendada": "baseline", "antecipaExcursao": false, "motivo": null,
- "modelo": {"versao": "sensor-ridge-10min-v2", "fonte": "Cosmos DB de produção, leituras da placa (...)",
+ "modelo": {"versao": "sensor-ridge-10min-v3", "fonte": "Cosmos DB de produção, leituras da placa (...)",
             "treino": {"de", "ate", "amostras"}, "teste": {"de", "ate", "amostras"},
-            "maeModelo": 0.3338, "maeBaseline": 0.319, "rmseModelo": 0.6618, "rmseBaseline": 0.652,
+            "maeModelo": 0.3828, "maeBaseline": 0.3643, "rmseModelo": 0.7421, "rmseBaseline": 0.723,
             "superaBaseline": false, "usaLeiturasDoSensor": true}}
 ```
 

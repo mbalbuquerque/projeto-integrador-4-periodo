@@ -1518,22 +1518,22 @@
                   "antecipaExcursao": false,
                   "motivo": null,
                   "modelo": {
-                    "versao": "sensor-ridge-10min-v2",
+                    "versao": "sensor-ridge-10min-v3",
                     "fonte": "Cosmos DB de produção, leituras da placa ESP32-C3 + DHT11 da equipe, em bancada",
                     "treino": {
                       "de": "2026-11-17T02:44:00+00:00",
-                      "ate": "2026-11-19T04:56:00+00:00",
-                      "amostras": 2944
+                      "ate": "2026-11-19T05:27:00+00:00",
+                      "amostras": 2975
                     },
                     "teste": {
-                      "de": "2026-11-19T05:07:00+00:00",
-                      "ate": "2026-11-20T08:00:00+00:00",
-                      "amostras": 1267
+                      "de": "2026-11-19T05:38:00+00:00",
+                      "ate": "2026-11-24T01:25:00+00:00",
+                      "amostras": 1280
                     },
-                    "maeModelo": 0.3338,
-                    "maeBaseline": 0.319,
-                    "rmseModelo": 0.6618,
-                    "rmseBaseline": 0.652,
+                    "maeModelo": 0.3828,
+                    "maeBaseline": 0.3643,
+                    "rmseModelo": 0.7421,
+                    "rmseBaseline": 0.723,
                     "superaBaseline": false,
                     "usaLeiturasDoSensor": true
                   }
