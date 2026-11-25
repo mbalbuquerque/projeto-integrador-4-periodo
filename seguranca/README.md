@@ -8,11 +8,12 @@
 
 | Nome | Usuário no GitHub |
 |---|---|
+| Enzo Antônio | Benzo171 |
 | Everson | Everson9 |
-| Emmanuel | MrLlouis |
-| Enzo | Benzo171 |
-| Marcelo | mbalbuquerque |
-| Gabriel | gabrielfranca42 |
+| Emmanuel Luís | MrLlouis |
+| Gabriel Eduardo | gabrielfranca42 |
+| José Allamberg | berg2132 |
+| Marcelo Barbosa | mbalbuquerque |
 
 ## 2. O projeto
 
@@ -71,8 +72,31 @@ Documentos de base: [`modelo-ameacas.md`](modelo-ameacas.md), [`uso-de-ia.md`](u
   critério de aceite da #113 (senha sem código não dá token; código errado ou vencido dá 401 com o
   log; código válido dá token; o mesmo código de novo dá 401; código de recuperação entra uma vez
   só; 429; desafio não serve como token; usuário sem 2FA entra como antes).
-- **Resultado antes/depois:** prints e vídeo em [`evidencias/`](evidencias/), com o código de
-  missão no nome (roteiro em [`evidencias/LEIAME.md`](evidencias/LEIAME.md)).
+
+  Contra a API em produção, com a mesma conta antes e depois de ligar o 2FA:
+  ```bash
+  pip install pyotp==2.9.0   # ou o requirements.txt da API
+  MISSAO_CODIGO=<codigo> bash seguranca/testes/2fa_antes_depois.sh
+  ```
+  [`testes/2fa_antes_depois.sh`](testes/2fa_antes_depois.sh) cria uma empresa temporária
+  (e-mail fictício `@exemplo.com` e senha aleatória gerada no script), liga o 2FA pelas rotas
+  `/2fa/iniciar` e `/2fa/ativar` e apaga a empresa no fim com `DELETE /empresa`, mesmo se parar
+  no meio. Cada passo sai com o status HTTP esperado e o obtido; senha, token, desafio e segredo
+  TOTP não aparecem. `API_URL` troca o alvo. Cuidado: `POST /empresas` aceita 5 cadastros por
+  hora por IP.
+- **Resultado antes/depois:** no log
+  [`evidencias/SEM-CODIGO-2fa-antes-depois.log`](evidencias/SEM-CODIGO-2fa-antes-depois.log),
+  gerado pelo script em produção (21 passos, APROVADO):
+  - **antes** (2FA desligado): `POST /login` só com a senha devolve `200` com token e `GET /eu`
+    abre com ele;
+  - **depois** (mesma conta, 2FA ligado): `POST /login` só com a senha devolve `200` sem token,
+    com `exige2fa` e o desafio; o desafio usado como token em `GET /eu` dá `401`;
+    `POST /login/2fa` com código errado dá `401` e com o código certo devolve o token.
+
+  Prints e vídeo da tela em [`evidencias/`](evidencias/), com o código de missão no nome
+  (roteiro em [`evidencias/LEIAME.md`](evidencias/LEIAME.md)). O log sai com `SEM-CODIGO` no
+  nome enquanto o código de missão não chega; depois, roda-se o script de novo com
+  `MISSAO_CODIGO=<codigo>`.
 - **Limitações:**
   - O 2FA é opcional: cada usuário liga o seu em Configurações; a API não obriga nenhum perfil.
   - Quem perde o celular e os códigos de recuperação não tem como entrar sozinho; precisa de ajuda
