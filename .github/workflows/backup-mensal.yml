@@ -1,0 +1,95 @@
+name: Backup Mensal Cosmos DB
+
+# Backup logico mensal agendado para o ultimo dia do mes as 03:00 BRT (06:00 UTC).
+# Utiliza infra/backup/exportar.py com chave somente leitura do Cosmos DB.
+# Permite execucao manual via workflow_dispatch.
+
+on:
+  schedule:
+    - cron: "0 6 28-31 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup-mensal:
+    name: Exportar backup logico mensal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Verificar se e o ultimo dia do mes (BRT)
+        id: verificar_dia
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "[INFO] Execucao manual solicitada via workflow_dispatch."
+            echo "executar=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(date -u -d '+21 hours' +%d)" != "01" ]; then
+            echo "[INFO] Nao e o ultimo dia do mes em BRT. Encerrando sem custo."
+            echo "executar=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "[INFO] Ultimo dia do mes confirmado. Prosseguindo com o backup."
+          echo "executar=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout do repositorio
+        if: steps.verificar_dia.outputs.executar == 'true'
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        if: steps.verificar_dia.outputs.executar == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias do backup
+        if: steps.verificar_dia.outputs.executar == 'true'
+        run: pip install --no-cache-dir azure-cosmos==4.17.1
+
+      - name: Executar exportacao e validar integridade
+        id: exportar
+        if: steps.verificar_dia.outputs.executar == 'true'
+        env:
+          COSMOS_ENDPOINT: ${{ secrets.COSMOS_ENDPOINT }}
+          COSMOS_KEY: ${{ secrets.COSMOS_READONLY_KEY }}
+          COSMOS_DATABASE: ${{ vars.COSMOS_DATABASE || 'coldtrack' }}
+        run: |
+          if [ -z "$COSMOS_ENDPOINT" ] || [ -z "$COSMOS_KEY" ]; then
+            echo "[ERRO] Secrets COSMOS_ENDPOINT ou COSMOS_READONLY_KEY nao configurados."
+            exit 1
+          fi
+          TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
+          PASTA_SAIDA="$RUNNER_TEMP/backup_${TIMESTAMP}"
+          ARQUIVO_TAR="$RUNNER_TEMP/coldtrack_cosmos_${TIMESTAMP}.tar.gz"
+
+          python infra/backup/exportar.py "$PASTA_SAIDA" --banco "$COSMOS_DATABASE"
+          tar -czf "$ARQUIVO_TAR" -C "$RUNNER_TEMP" "backup_${TIMESTAMP}"
+          gzip -t "$ARQUIVO_TAR"
+
+          TAMANHO=$(du -h "$ARQUIVO_TAR" | cut -f1)
+          HASH=$(sha256sum "$ARQUIVO_TAR" | cut -d' ' -f1)
+          echo "[OK] Backup gerado: $ARQUIVO_TAR ($TAMANHO, SHA256: $HASH)"
+          echo "arquivo=$ARQUIVO_TAR" >> "$GITHUB_OUTPUT"
+          echo "tamanho=$TAMANHO" >> "$GITHUB_OUTPUT"
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Guardar artefato do backup (30 dias)
+        if: steps.verificar_dia.outputs.executar == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-cosmos-${{ github.run_number }}
+          path: ${{ steps.exportar.outputs.arquivo }}
+          retention-days: 30
+
+      - name: Notificar resultado via webhook (opcional)
+        if: always() && steps.verificar_dia.outputs.executar == 'true' && env.WEBHOOK_URL != ''
+        env:
+          WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+        run: |
+          MSG="[INFO] Backup mensal Cosmos DB (${{ job.status }}): tamanho=${{ steps.exportar.outputs.tamanho }}, sha256=${{ steps.exportar.outputs.hash }}"
+          curl -fsS -X POST -H "Content-Type: application/json" \
+            -d "{\"content\": \"$MSG\"}" \
+            "$WEBHOOK_URL" || echo "[AVISO] Falha ao enviar notificacao webhook."
+

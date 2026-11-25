@@ -1,0 +1,383 @@
+name: CI/CD ColdTrack
+
+# Pipeline unificado em 7 etapas para as branches dev, homologacao e main:
+# 1. Seguranca e CVE (Gitleaks, pip-audit, bandit, verificacao de versoes fixas)
+# 2. Build e Checagem (ruff, compileall, docker compose config, validacao JSON)
+# 3. QA e Testes (API com cobertura >= 98%, analise climatica, backup, firmware C++)
+# 4. Seguranca Docker (build Buildx com cache + Trivy CRITICAL)
+# 5. Smoke Test Docker (compose up + emulador Cosmos + /api/health e /api/docs)
+# 6. Docker Compose Build (--no-cache)
+# 7. Deploy Automatico (Azure Functions via OIDC em homologacao e main) + resumo
+
+on:
+  push:
+    branches:
+      - dev
+      - homologacao
+      - main
+  pull_request:
+    branches:
+      - dev
+      - homologacao
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/homologacao' }}
+
+jobs:
+  seguranca:
+    name: "1. Seguranca e CVE"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Varredura de segredos (Gitleaks)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo:ro" \
+            ghcr.io/gitleaks/gitleaks:v8.21.2 \
+            detect --source=/repo --config=/repo/.gitleaks.toml --verbose --redact
+          echo "[OK] Gitleaks finalizado sem vazamento de segredos."
+
+      - name: Verificacao estrita de tags fixas
+        run: |
+          echo "[INFO] Verificando ausencia de tags mutaveis nos arquivos de CI/CD e infra..."
+          FALHAS=0
+          PADRAO="(:la""test\b|ubuntu-la""test\b)"
+          ALVOS=$(find infra .github/workflows/ci-cd.yml .github/workflows/backup-mensal.yml .env.example \
+            -maxdepth 2 -type f \( -name 'Dockerfile*' -o -name 'docker-compose*.yml' -o -name '*.yml' -o -name '.env*' \) 2>/dev/null || true)
+          for arq in $ALVOS; do
+            if grep -nE "$PADRAO" "$arq"; then
+              echo "[ERRO] Tag mutavel encontrada em: $arq"
+              FALHAS=1
+            fi
+          done
+          if [ "$FALHAS" -ne 0 ]; then
+            echo "[ERRO] Regra de versoes fixas violada. Use versoes fixas explicitas."
+            exit 1
+          fi
+          echo "[OK] Nenhuma ocorrencia de tag mutavel encontrada."
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Auditoria de dependencias (pip-audit)
+        run: |
+          pip install --no-cache-dir pip-audit==2.7.3
+          pip-audit -r cloud/function/requirements.txt
+          pip-audit -r analise/requirements.txt
+          echo "[OK] pip-audit concluido sem vulnerabilidades criticas conhecidas."
+
+      - name: Analise estatica de seguranca (bandit)
+        run: |
+          pip install --no-cache-dir bandit==1.9.4
+          bandit -q -r cloud/function -x cloud/function/test_*.py,cloud/function/scripts --severity-level medium --confidence-level medium
+          bandit -q -r infra/backup -x infra/backup/test_*.py --severity-level medium --confidence-level medium
+          echo "[OK] Bandit concluido sem achados de severidade media/alta."
+
+  build-checagem:
+    name: "2. Build e Checagem"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Lint rapido (ruff)
+        run: |
+          pip install --no-cache-dir ruff==0.17.4
+          (cd cloud/function && ruff check .)
+          ruff check --line-length 100 --select E,F,W,I infra/backup
+          echo "[OK] Ruff finalizado sem erros."
+
+      - name: Checagem de sintaxe Python (compileall)
+        run: |
+          python -m compileall -q cloud/function analise infra/backup
+          echo "[OK] Sintaxe Python validada."
+
+      - name: Validar sintaxe do Docker Compose e JSONs
+        run: |
+          cp .env.example .env
+          docker compose -f infra/docker-compose.yml config --quiet
+          python -c "import json; [json.load(open(p)) for p in ['cloud/function/openapi.json', 'cloud/function/host.json']]"
+          rm -f .env
+          echo "[OK] docker-compose.yml e arquivos JSON validos."
+
+  qa-testes:
+    name: "3. QA e Testes"
+    runs-on: ubuntu-24.04
+    needs: [seguranca, build-checagem]
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            cloud/function/requirements.txt
+            cloud/function/requirements-dev.txt
+            analise/requirements.txt
+
+      - name: Instalar dependencias de teste
+        run: |
+          pip install --no-cache-dir -r cloud/function/requirements.txt -r cloud/function/requirements-dev.txt
+
+      - name: Rodar testes da API com cobertura
+        working-directory: cloud/function
+        run: |
+          pytest --cov=. --cov-branch --cov-report=term-missing --cov-report=xml:coverage.xml --cov-fail-under=98
+          echo "[OK] Testes da API aprovados com cobertura >= 98%."
+
+      - name: Rodar testes da analise climatica
+        run: |
+          pytest analise -v
+          echo "[OK] Testes da analise climatica aprovados."
+
+      - name: Rodar testes unitarios do backup logico
+        run: |
+          pytest infra/backup -v -rs
+          echo "[OK] Testes de backup logico finalizados."
+
+      - name: Rodar testes unitarios do firmware (C++)
+        run: |
+          g++ -O2 -Wall firmware/tests/test_firmware.cpp -o run_tests_firmware
+          ./run_tests_firmware
+          echo "[OK] Testes do firmware aprovados."
+
+      - name: Upload do relatorio de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-coldtrack
+          path: cloud/function/coverage.xml
+          retention-days: 5
+          if-no-files-found: warn
+
+  seguranca-docker:
+    name: "4. Seguranca Docker"
+    runs-on: ubuntu-24.04
+    needs: [build-checagem]
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build da imagem com cache GHA
+        uses: docker/build-push-action@v6
+        with:
+          context: cloud/function
+          file: infra/Dockerfile
+          load: true
+          tags: coldtrack-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan de vulnerabilidades com Trivy (CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: coldtrack-api:${{ github.sha }}
+          format: table
+          output: trivy-report.txt
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL
+
+      - name: Upload do relatorio Trivy
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+          retention-days: 5
+          if-no-files-found: ignore
+
+  smoke-test-docker:
+    name: "5. Smoke Test Docker"
+    runs-on: ubuntu-24.04
+    needs: [qa-testes, seguranca-docker]
+    timeout-minutes: 25
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Gerar .env de teste (sem segredos reais)
+        run: |
+          {
+            echo "COSMOS_CONNECTION=AccountEndpoint=http://cosmos:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==;"
+            echo "COSMOS_DATABASE=coldtrack"
+            echo "COSMOS_CONTAINER=leituras"
+            echo "JWT_SECRET=segredo-de-teste-do-ci-com-mais-de-32-bytes-0000"
+            echo "AOAI_ENDPOINT=https://exemplo.invalido/"
+            echo "AOAI_DEPLOY_CHAT=gpt-4.1-mini"
+            echo "AOAI_DEPLOY_EMBED=text-embedding-3-small"
+            echo "AOAI_API_VERSION=2024-10-21"
+          } > .env
+
+      - name: Subir containers via Docker Compose
+        run: |
+          docker compose -f infra/docker-compose.yml up -d --build
+          docker compose -f infra/docker-compose.yml ps
+
+      - name: Preparar banco no emulador Cosmos DB
+        run: |
+          pip install --no-cache-dir azure-cosmos==4.17.1 PyJWT==2.15.1 pyotp==2.9.0
+          python infra/ci/preparar_banco.py http://localhost:8081
+
+      - name: Validar endpoints /api/health e /api/docs
+        run: |
+          code=000
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' http://localhost:7071/api/health || true)
+            if [ "$code" = "200" ]; then
+              echo "[OK] /api/health retornou HTTP 200."
+              break
+            fi
+            sleep 2
+          done
+          if [ "$code" != "200" ]; then
+            echo "[ERRO] /api/health retornou HTTP $code."
+            docker compose -f infra/docker-compose.yml logs --no-color --tail 80
+            exit 1
+          fi
+          docs_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' http://localhost:7071/api/docs || true)
+          if [ "$docs_code" != "200" ]; then
+            echo "[ERRO] /api/docs retornou HTTP $docs_code."
+            exit 1
+          fi
+          echo "[OK] /api/docs retornou HTTP 200."
+          USUARIO=$(docker compose -f infra/docker-compose.yml exec -T api whoami 2>/dev/null || echo "desconhecido")
+          echo "[INFO] Usuario em execucao no container api: $USUARIO"
+
+      - name: Encerrar containers do smoke test
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v || true
+
+  compose-build:
+    name: "6. Docker Compose Build"
+    runs-on: ubuntu-24.04
+    needs: [smoke-test-docker]
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Validar config e build sem cache
+        run: |
+          cp .env.example .env
+          docker compose -f infra/docker-compose.yml config --quiet
+          docker compose -f infra/docker-compose.yml build --no-cache
+          rm -f .env
+          echo "[OK] Build completo do Docker Compose validado."
+
+  deploy:
+    name: "7. Deploy Automatico"
+    runs-on: ubuntu-24.04
+    needs: [compose-build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/homologacao' || github.ref == 'refs/heads/main')
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Definir ambiente de destino
+        id: alvo
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "ambiente=producao" >> "$GITHUB_OUTPUT"
+            echo "rg=${{ vars.PROD_RESOURCE_GROUP || 'rg-coldtrack' }}" >> "$GITHUB_OUTPUT"
+            echo "app=${{ vars.PROD_FUNCTION_APP || 'func-coldtrack-7319' }}" >> "$GITHUB_OUTPUT"
+            echo "url=${{ vars.PROD_HEALTH_URL || 'https://func-coldtrack-7319.azurewebsites.net/api/health' }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ambiente=homologacao" >> "$GITHUB_OUTPUT"
+            echo "rg=${{ vars.HOMOLOG_RESOURCE_GROUP || 'rg-coldtrack' }}" >> "$GITHUB_OUTPUT"
+            echo "app=${{ vars.HOMOLOG_FUNCTION_APP || 'func-coldtrack-homolog' }}" >> "$GITHUB_OUTPUT"
+            echo "url=${{ vars.HOMOLOG_HEALTH_URL || 'https://func-coldtrack-homolog.azurewebsites.net/api/health' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Empacotar API (pacote.txt)
+        working-directory: cloud/function
+        run: |
+          grep -v -e '^#' -e '^[[:space:]]*$' pacote.txt | zip publicar.zip -@
+          unzip -l publicar.zip
+
+      - name: Login no Azure via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publicar na Azure Function (${{ steps.alvo.outputs.ambiente }})
+        run: |
+          echo "[INFO] Publicando em ${{ steps.alvo.outputs.app }} (${{ steps.alvo.outputs.ambiente }})..."
+          az functionapp deployment source config-zip \
+            -g "${{ steps.alvo.outputs.rg }}" \
+            -n "${{ steps.alvo.outputs.app }}" \
+            --src cloud/function/publicar.zip \
+            --build-remote true
+
+      - name: Verificar healthcheck pos-deploy
+        run: |
+          for i in $(seq 1 18); do
+            codigo=$(curl -s -o saude.json -w "%{http_code}" "${{ steps.alvo.outputs.url }}" || true)
+            if [ "$codigo" = "200" ]; then
+              echo "[OK] Healthcheck respondeu 200 em ${{ steps.alvo.outputs.url }}."
+              cat saude.json
+              exit 0
+            fi
+            echo "[INFO] Tentativa $i: HTTP $codigo"
+            sleep 10
+          done
+          echo "[ERRO] Healthcheck nao respondeu 200 apos o deploy."
+          exit 1
+
+  pipeline-summary:
+    name: "Resumo do Pipeline"
+    runs-on: ubuntu-24.04
+    if: always()
+    needs: [seguranca, build-checagem, qa-testes, seguranca-docker, smoke-test-docker, compose-build, deploy]
+    steps:
+      - name: Gerar resumo no GitHub Step Summary
+        run: |
+          {
+            echo "## Resumo CI/CD ColdTrack (${{ github.ref_name }})"
+            echo "- 1. Seguranca e CVE: ${{ needs.seguranca.result }}"
+            echo "- 2. Build e Checagem: ${{ needs.build-checagem.result }}"
+            echo "- 3. QA e Testes: ${{ needs.qa-testes.result }}"
+            echo "- 4. Seguranca Docker: ${{ needs.seguranca-docker.result }}"
+            echo "- 5. Smoke Test Docker: ${{ needs.smoke-test-docker.result }}"
+            echo "- 6. Docker Compose Build: ${{ needs.compose-build.result }}"
+            echo "- 7. Deploy Automatico: ${{ needs.deploy.result }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notificar via webhook (opcional)
+        if: env.WEBHOOK_URL != ''
+        env:
+          WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+        run: |
+          MSG="[INFO] CI/CD ColdTrack (${{ github.ref_name }}): seguranca=${{ needs.seguranca.result }}, qa=${{ needs.qa-testes.result }}, docker=${{ needs.smoke-test-docker.result }}, deploy=${{ needs.deploy.result }}"
+          curl -fsS -X POST -H "Content-Type: application/json" \
+            -d "{\"content\": \"$MSG\"}" \
+            "$WEBHOOK_URL" || echo "[AVISO] Falha ao enviar notificacao webhook."

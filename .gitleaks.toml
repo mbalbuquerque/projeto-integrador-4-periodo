@@ -1,0 +1,21 @@
+title = "Configuracao Gitleaks - ColdTrack"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Arquivos de exemplo, testes com chaves ficticias e chave publica do emulador Cosmos DB"
+paths = [
+  '''^\.env\.example$''',
+  '''^cloud/function/local\.settings\.example\.json$''',
+  '''^firmware/coldtrack/secrets\.example\.h$''',
+  '''^seguranca/evidencias/''',
+  '''^cloud/function/test_.*\.py$''',
+  '''^infra/backup/test_.*\.py$''',
+]
+regexes = [
+  '''C2y6yDjf5/R\+ob0N8A7Cgv30VRDJIWEHLM\+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==''',
+  '''segredo-de-teste-do-ci-com-mais-de-32-bytes-0000''',
+  '''SenhaDeTeste-123''',
+]
+
