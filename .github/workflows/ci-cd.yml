@@ -1,13 +1,21 @@
-name: CI/CD ColdTrack
 
-# Pipeline unificado em 7 etapas para as branches dev, homologacao e main:
-# 1. Seguranca e CVE (Gitleaks, pip-audit, bandit, verificacao de versoes fixas)
-# 2. Build e Checagem (ruff, compileall, docker compose config, validacao JSON)
-# 3. QA e Testes (API com cobertura >= 98%, analise climatica, backup, firmware C++)
-# 4. Seguranca Docker (build Buildx com cache + Trivy CRITICAL)
-# 5. Smoke Test Docker (compose up + emulador Cosmos + /api/health e /api/docs)
+# Pipeline unificado em 8 etapas para as branches dev, homologacao e main:
+# 1. Seguranca e CVE (Gitleaks, dependency-review, pip-audit, bandit, verificacao de versoes fixas)
+# 2. Build e Checagem (ruff, mypy, compileall, hadolint, actionlint, docker compose config, validacao JSON/OpenAPI)
+# 3. QA e Testes (API com cobertura >= 98%, analise climatica, backup, firmware C++ com sanitizers e cppcheck)
+# 4. Seguranca Docker (build Buildx com cache + Trivy CRITICAL + relatorio HIGH em SARIF + SBOM)
+# 5. Smoke Test Docker (compose up + emulador Cosmos + /api/health, /api/docs, usuario nao-root, schemathesis e ZAP)
 # 6. Docker Compose Build (--no-cache)
-# 7. Deploy Automatico (Azure Functions via OIDC em homologacao e main) + resumo
+# 7. Empacotar API (gera publicar.zip uma unica vez e reaproveita no deploy)
+# 8. Deploy Automatico (Azure Functions via OIDC em homologacao e main, com aprovacao por Environment,
+#    slot de staging opcional, swap e rollback automatico) + resumo
+# Extra: CodeQL (SAST complementar) e execucao semanal agendada para pegar CVEs novos sem commit.
+#
+# Pre-requisitos fora deste arquivo:
+# - Criar os Environments "homologacao" e "producao" em Settings > Environments (producao com Required reviewers).
+# - Atualizar a credencial federada (OIDC) no Azure: o subject passa a ser
+#   repo:<org>/<repo>:environment:homologacao e repo:<org>/<repo>:environment:producao.
+# - (Opcional) Criar a variavel USAR_SLOT=true e o slot "staging" nas Function Apps (exige plano Premium/Dedicated).
 
 on:
   push:
@@ -15,16 +23,27 @@ on:
       - dev
       - homologacao
       - main
+    # Nao roda o pipeline inteiro quando so documentacao muda
+    # (atencao: se houver status checks obrigatorios, o PR fica pendente em mudancas so de docs)
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
     branches:
       - dev
       - homologacao
       - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  # Execucao semanal (segunda-feira 06:00 UTC) para detectar CVEs novos sem depender de commit
+  schedule:
+    - cron: "0 6 * * 1"
   workflow_dispatch:
 
+# Menor privilegio: o padrao e somente leitura. Jobs que precisam de mais declaram o proprio bloco.
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: ci-cd-${{ github.ref }}
@@ -34,6 +53,7 @@ jobs:
   seguranca:
     name: "1. Seguranca e CVE"
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout do repositorio
         uses: actions/checkout@v4
@@ -47,11 +67,17 @@ jobs:
             detect --source=/repo --config=/repo/.gitleaks.toml --verbose --redact
           echo "[OK] Gitleaks finalizado sem vazamento de segredos."
 
+      - name: Revisao de dependencias do PR (dependency-review)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
       - name: Verificacao estrita de tags fixas
         run: |
           echo "[INFO] Verificando ausencia de tags mutaveis nos arquivos de CI/CD e infra..."
           FALHAS=0
-          PADRAO="(:la""test\b|ubuntu-la""test\b)"
+          PADRAO="(:la""test\b|ubuntu-la""test\b|:sta""ble\b)"
           ALVOS=$(find infra .github/workflows/ci-cd.yml .github/workflows/backup-mensal.yml .env.example \
             -maxdepth 2 -type f \( -name 'Dockerfile*' -o -name 'docker-compose*.yml' -o -name '*.yml' -o -name '.env*' \) 2>/dev/null || true)
           for arq in $ALVOS; do
@@ -85,9 +111,33 @@ jobs:
           bandit -q -r infra/backup -x infra/backup/test_*.py --severity-level medium --confidence-level medium
           echo "[OK] Bandit concluido sem achados de severidade media/alta."
 
+  codeql:
+    name: "1b. Analise CodeQL (Python)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # CodeQL precisa de permissao extra para publicar os achados na aba Security
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: Executar analise CodeQL
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
+
   build-checagem:
     name: "2. Build e Checagem"
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout do repositorio
         uses: actions/checkout@v4
@@ -104,23 +154,56 @@ jobs:
           ruff check --line-length 100 --select E,F,W,I infra/backup
           echo "[OK] Ruff finalizado sem erros."
 
+      # Nao bloqueante ate o codigo ser ajustado; remova o continue-on-error quando estiver limpo
+      - name: Formatacao (ruff format --check)
+        continue-on-error: true
+        run: |
+          pip install --no-cache-dir ruff==0.17.4
+          (cd cloud/function && ruff format --check .)
+          ruff format --check --line-length 100 infra/backup
+          echo "[OK] Formatacao consistente."
+
+      # Nao bloqueante ate o codigo ser ajustado; remova o continue-on-error quando estiver limpo
+      - name: Checagem de tipos (mypy)
+        continue-on-error: true
+        run: |
+          pip install --no-cache-dir mypy==1.13.0
+          (cd cloud/function && mypy . --ignore-missing-imports --exclude 'test_.*\.py')
+          echo "[OK] mypy finalizado sem erros."
+
       - name: Checagem de sintaxe Python (compileall)
         run: |
           python -m compileall -q cloud/function analise infra/backup
           echo "[OK] Sintaxe Python validada."
 
-      - name: Validar sintaxe do Docker Compose e JSONs
+      - name: Lint do Dockerfile (hadolint)
+        run: |
+          docker run --rm -i hadolint/hadolint:v2.12.0 hadolint --failure-threshold error - < infra/Dockerfile
+          echo "[OK] Hadolint finalizado sem erros."
+
+      # Nao bloqueante ate os achados de shellcheck serem corrigidos; remova o continue-on-error depois
+      - name: Lint dos workflows e scripts shell (actionlint)
+        continue-on-error: true
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo:ro" -w /repo \
+            rhysd/actionlint:1.7.4 -color
+          echo "[OK] actionlint finalizado sem erros."
+
+      - name: Validar sintaxe do Docker Compose, JSONs e OpenAPI
         run: |
           cp .env.example .env
           docker compose -f infra/docker-compose.yml config --quiet
           python -c "import json; [json.load(open(p)) for p in ['cloud/function/openapi.json', 'cloud/function/host.json']]"
+          pip install --no-cache-dir openapi-spec-validator==0.7.1
+          openapi-spec-validator cloud/function/openapi.json
           rm -f .env
-          echo "[OK] docker-compose.yml e arquivos JSON validos."
+          echo "[OK] docker-compose.yml, arquivos JSON e OpenAPI validos."
 
   qa-testes:
     name: "3. QA e Testes"
     runs-on: ubuntu-24.04
     needs: [seguranca, build-checagem]
+    timeout-minutes: 20
     steps:
       - name: Checkout do repositorio
         uses: actions/checkout@v4
@@ -142,31 +225,50 @@ jobs:
       - name: Rodar testes da API com cobertura
         working-directory: cloud/function
         run: |
-          pytest --cov=. --cov-branch --cov-report=term-missing --cov-report=xml:coverage.xml --cov-fail-under=98
+          pytest --cov=. --cov-branch --cov-report=term-missing --cov-report=xml:coverage.xml --cov-fail-under=98 --junitxml=junit-api.xml
           echo "[OK] Testes da API aprovados com cobertura >= 98%."
 
       - name: Rodar testes da analise climatica
         run: |
-          pytest analise -v
+          pytest analise -v --cov=analise --cov-report=term --junitxml=junit-analise.xml
           echo "[OK] Testes da analise climatica aprovados."
 
       - name: Rodar testes unitarios do backup logico
         run: |
-          pytest infra/backup -v -rs
+          pytest infra/backup -v -rs --cov=infra/backup --cov-report=term --junitxml=junit-backup.xml
           echo "[OK] Testes de backup logico finalizados."
 
       - name: Rodar testes unitarios do firmware (C++)
         run: |
-          g++ -O2 -Wall firmware/tests/test_firmware.cpp -o run_tests_firmware
+          g++ -O2 -Wall -Wextra firmware/tests/test_firmware.cpp -o run_tests_firmware
           ./run_tests_firmware
           echo "[OK] Testes do firmware aprovados."
 
-      - name: Upload do relatorio de cobertura
+      - name: Rodar testes do firmware com sanitizers (ASan e UBSan)
+        run: |
+          g++ -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer \
+            firmware/tests/test_firmware.cpp -o run_tests_firmware_san
+          ./run_tests_firmware_san
+          echo "[OK] Testes do firmware sem erros de memoria ou comportamento indefinido."
+
+      # Nao bloqueante ate os achados serem corrigidos; remova o continue-on-error depois
+      - name: Analise estatica do firmware (cppcheck)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends cppcheck
+          cppcheck --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --quiet firmware
+          echo "[OK] cppcheck finalizado sem achados."
+
+      - name: Upload dos relatorios de cobertura e testes
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cobertura-coldtrack
-          path: cloud/function/coverage.xml
+          path: |
+            cloud/function/coverage.xml
+            cloud/function/junit-api.xml
+            junit-analise.xml
+            junit-backup.xml
           retention-days: 5
           if-no-files-found: warn
 
@@ -174,6 +276,11 @@ jobs:
     name: "4. Seguranca Docker"
     runs-on: ubuntu-24.04
     needs: [build-checagem]
+    timeout-minutes: 20
+    # Permissao extra apenas para enviar o SARIF do Trivy para a aba Security
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout do repositorio
         uses: actions/checkout@v4
@@ -201,12 +308,43 @@ jobs:
           ignore-unfixed: true
           severity: CRITICAL
 
-      - name: Upload do relatorio Trivy
+      - name: Relatorio Trivy HIGH e CRITICAL (SARIF, nao bloqueante)
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: coldtrack-api:${{ github.sha }}
+          format: sarif
+          output: trivy-high.sarif
+          exit-code: "0"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      - name: Enviar SARIF para a aba Security
+        if: always() && github.event.pull_request.head.repo.fork != true
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-high.sarif
+          category: trivy-imagem
+
+      - name: Gerar SBOM da imagem (CycloneDX)
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: coldtrack-api:${{ github.sha }}
+          format: cyclonedx
+          output: sbom-coldtrack.cdx.json
+          exit-code: "0"
+
+      - name: Upload dos relatorios Trivy e SBOM
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trivy-report
-          path: trivy-report.txt
+          path: |
+            trivy-report.txt
+            trivy-high.sarif
+            sbom-coldtrack.cdx.json
           retention-days: 5
           if-no-files-found: ignore
 
@@ -269,8 +407,50 @@ jobs:
             exit 1
           fi
           echo "[OK] /api/docs retornou HTTP 200."
+
+      - name: Validar que o container api nao roda como root
+        run: |
           USUARIO=$(docker compose -f infra/docker-compose.yml exec -T api whoami 2>/dev/null || echo "desconhecido")
           echo "[INFO] Usuario em execucao no container api: $USUARIO"
+          if [ "$USUARIO" = "root" ]; then
+            echo "[ERRO] O container api esta rodando como root. Defina USER nao-root no Dockerfile."
+            exit 1
+          fi
+          if [ "$USUARIO" = "desconhecido" ]; then
+            echo "[AVISO] Nao foi possivel identificar o usuario do container api."
+          else
+            echo "[OK] Container api executando como usuario nao-root."
+          fi
+
+      # Nao bloqueante ate os achados serem triados; remova o continue-on-error depois
+      - name: Teste de contrato da API (schemathesis)
+        continue-on-error: true
+        run: |
+          pip install --no-cache-dir schemathesis==3.39.5
+          schemathesis run cloud/function/openapi.json \
+            --base-url http://localhost:7071 \
+            --checks not_a_server_error \
+            --max-examples 20
+          echo "[OK] Schemathesis nao encontrou erros 5xx."
+
+      # Nao bloqueante: -I ignora warnings, o relatorio fica disponivel como artifact
+      - name: Varredura dinamica baseline (OWASP ZAP)
+        continue-on-error: true
+        run: |
+          mkdir -p zap && chmod 777 zap
+          docker run --rm --network host -v "$(pwd)/zap:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:2.15.0 \
+            zap-baseline.py -t http://localhost:7071/api/docs -I -r zap-report.html
+          echo "[OK] ZAP baseline finalizado."
+
+      - name: Upload do relatorio ZAP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap/zap-report.html
+          retention-days: 5
+          if-no-files-found: ignore
 
       - name: Encerrar containers do smoke test
         if: always()
@@ -280,6 +460,7 @@ jobs:
     name: "6. Docker Compose Build"
     runs-on: ubuntu-24.04
     needs: [smoke-test-docker]
+    timeout-minutes: 20
     steps:
       - name: Checkout do repositorio
         uses: actions/checkout@v4
@@ -292,11 +473,43 @@ jobs:
           rm -f .env
           echo "[OK] Build completo do Docker Compose validado."
 
-  deploy:
-    name: "7. Deploy Automatico"
+  empacotar:
+    name: "7. Empacotar API"
     runs-on: ubuntu-24.04
-    needs: [compose-build]
+    needs: [compose-build, codeql]
+    timeout-minutes: 5
     if: github.event_name == 'push' && (github.ref == 'refs/heads/homologacao' || github.ref == 'refs/heads/main')
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Empacotar API (pacote.txt)
+        working-directory: cloud/function
+        run: |
+          grep -v -e '^#' -e '^[[:space:]]*$' pacote.txt | zip publicar.zip -@
+          unzip -l publicar.zip
+          echo "[OK] publicar.zip gerado uma unica vez para ser promovido entre ambientes."
+
+      - name: Upload do pacote de publicacao
+        uses: actions/upload-artifact@v4
+        with:
+          name: publicar-zip
+          path: cloud/function/publicar.zip
+          retention-days: 5
+          if-no-files-found: error
+
+  deploy:
+    name: "8. Deploy Automatico"
+    runs-on: ubuntu-24.04
+    needs: [empacotar]
+    timeout-minutes: 30
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/homologacao' || github.ref == 'refs/heads/main')
+    # Environment habilita aprovacao manual (Required reviewers) e segredos por ambiente
+    environment: ${{ github.ref == 'refs/heads/main' && 'producao' || 'homologacao' }}
+    # id-token: write apenas aqui, onde o login OIDC no Azure e necessario
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout do repositorio
         uses: actions/checkout@v4
@@ -305,22 +518,30 @@ jobs:
         id: alvo
         run: |
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "ambiente=producao" >> "$GITHUB_OUTPUT"
-            echo "rg=${{ vars.PROD_RESOURCE_GROUP || 'rg-coldtrack' }}" >> "$GITHUB_OUTPUT"
-            echo "app=${{ vars.PROD_FUNCTION_APP || 'func-coldtrack-7319' }}" >> "$GITHUB_OUTPUT"
-            echo "url=${{ vars.PROD_HEALTH_URL || 'https://func-coldtrack-7319.azurewebsites.net/api/health' }}" >> "$GITHUB_OUTPUT"
+            AMBIENTE="producao"
+            RG="${{ vars.PROD_RESOURCE_GROUP || 'rg-coldtrack' }}"
+            APP="${{ vars.PROD_FUNCTION_APP || 'func-coldtrack-7319' }}"
+            URL="${{ vars.PROD_HEALTH_URL || 'https://func-coldtrack-7319.azurewebsites.net/api/health' }}"
           else
-            echo "ambiente=homologacao" >> "$GITHUB_OUTPUT"
-            echo "rg=${{ vars.HOMOLOG_RESOURCE_GROUP || 'rg-coldtrack' }}" >> "$GITHUB_OUTPUT"
-            echo "app=${{ vars.HOMOLOG_FUNCTION_APP || 'func-coldtrack-homolog' }}" >> "$GITHUB_OUTPUT"
-            echo "url=${{ vars.HOMOLOG_HEALTH_URL || 'https://func-coldtrack-homolog.azurewebsites.net/api/health' }}" >> "$GITHUB_OUTPUT"
+            AMBIENTE="homologacao"
+            RG="${{ vars.HOMOLOG_RESOURCE_GROUP || 'rg-coldtrack' }}"
+            APP="${{ vars.HOMOLOG_FUNCTION_APP || 'func-coldtrack-homolog' }}"
+            URL="${{ vars.HOMOLOG_HEALTH_URL || 'https://func-coldtrack-homolog.azurewebsites.net/api/health' }}"
           fi
+          SLOT="${{ vars.SLOT_NOME || 'staging' }}"
+          echo "ambiente=$AMBIENTE" >> "$GITHUB_OUTPUT"
+          echo "rg=$RG" >> "$GITHUB_OUTPUT"
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "usar_slot=${{ vars.USAR_SLOT || 'false' }}" >> "$GITHUB_OUTPUT"
+          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
+          echo "slot_url=https://$APP-$SLOT.azurewebsites.net/api/health" >> "$GITHUB_OUTPUT"
 
-      - name: Empacotar API (pacote.txt)
-        working-directory: cloud/function
-        run: |
-          grep -v -e '^#' -e '^[[:space:]]*$' pacote.txt | zip publicar.zip -@
-          unzip -l publicar.zip
+      - name: Baixar pacote de publicacao
+        uses: actions/download-artifact@v4
+        with:
+          name: publicar-zip
+          path: cloud/function
 
       - name: Login no Azure via OIDC
         uses: azure/login@v2
@@ -330,6 +551,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Publicar na Azure Function (${{ steps.alvo.outputs.ambiente }})
+        if: steps.alvo.outputs.usar_slot != 'true'
         run: |
           echo "[INFO] Publicando em ${{ steps.alvo.outputs.app }} (${{ steps.alvo.outputs.ambiente }})..."
           az functionapp deployment source config-zip \
@@ -337,6 +559,44 @@ jobs:
             -n "${{ steps.alvo.outputs.app }}" \
             --src cloud/function/publicar.zip \
             --build-remote true
+
+      - name: Publicar no slot ${{ steps.alvo.outputs.slot }} (${{ steps.alvo.outputs.ambiente }})
+        if: steps.alvo.outputs.usar_slot == 'true'
+        run: |
+          echo "[INFO] Publicando em ${{ steps.alvo.outputs.app }}/${{ steps.alvo.outputs.slot }} (${{ steps.alvo.outputs.ambiente }})..."
+          az functionapp deployment source config-zip \
+            -g "${{ steps.alvo.outputs.rg }}" \
+            -n "${{ steps.alvo.outputs.app }}" \
+            --slot "${{ steps.alvo.outputs.slot }}" \
+            --src cloud/function/publicar.zip \
+            --build-remote true
+
+      - name: Verificar healthcheck do slot antes do swap
+        if: steps.alvo.outputs.usar_slot == 'true'
+        run: |
+          for i in $(seq 1 18); do
+            codigo=$(curl -s -o saude-slot.json -w "%{http_code}" "${{ steps.alvo.outputs.slot_url }}" || true)
+            if [ "$codigo" = "200" ]; then
+              echo "[OK] Slot respondeu 200 em ${{ steps.alvo.outputs.slot_url }}."
+              cat saude-slot.json
+              exit 0
+            fi
+            echo "[INFO] Tentativa $i: HTTP $codigo"
+            sleep 10
+          done
+          echo "[ERRO] Slot nao respondeu 200. Swap cancelado, producao nao foi afetada."
+          exit 1
+
+      - name: Promover slot para producao (swap)
+        id: swap
+        if: steps.alvo.outputs.usar_slot == 'true'
+        run: |
+          az functionapp deployment slot swap \
+            -g "${{ steps.alvo.outputs.rg }}" \
+            -n "${{ steps.alvo.outputs.app }}" \
+            --slot "${{ steps.alvo.outputs.slot }}" \
+            --target-slot production
+          echo "[OK] Swap concluido: ${{ steps.alvo.outputs.slot }} -> production."
 
       - name: Verificar healthcheck pos-deploy
         run: |
@@ -353,29 +613,44 @@ jobs:
           echo "[ERRO] Healthcheck nao respondeu 200 apos o deploy."
           exit 1
 
+      - name: Rollback automatico (swap reverso)
+        if: failure() && steps.swap.outcome == 'success'
+        run: |
+          echo "[AVISO] Healthcheck falhou apos o swap. Revertendo para a versao anterior..."
+          az functionapp deployment slot swap \
+            -g "${{ steps.alvo.outputs.rg }}" \
+            -n "${{ steps.alvo.outputs.app }}" \
+            --slot "${{ steps.alvo.outputs.slot }}" \
+            --target-slot production
+          echo "[OK] Rollback concluido. A versao anterior voltou para producao."
+
   pipeline-summary:
     name: "Resumo do Pipeline"
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     if: always()
-    needs: [seguranca, build-checagem, qa-testes, seguranca-docker, smoke-test-docker, compose-build, deploy]
+    needs: [seguranca, codeql, build-checagem, qa-testes, seguranca-docker, smoke-test-docker, compose-build, empacotar, deploy]
+    # O env no nivel do job permite usar env.WEBHOOK_URL no if do step (no nivel do step nao funciona)
+    env:
+      WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
     steps:
       - name: Gerar resumo no GitHub Step Summary
         run: |
           {
             echo "## Resumo CI/CD ColdTrack (${{ github.ref_name }})"
             echo "- 1. Seguranca e CVE: ${{ needs.seguranca.result }}"
+            echo "- 1b. Analise CodeQL: ${{ needs.codeql.result }}"
             echo "- 2. Build e Checagem: ${{ needs.build-checagem.result }}"
             echo "- 3. QA e Testes: ${{ needs.qa-testes.result }}"
             echo "- 4. Seguranca Docker: ${{ needs.seguranca-docker.result }}"
             echo "- 5. Smoke Test Docker: ${{ needs.smoke-test-docker.result }}"
             echo "- 6. Docker Compose Build: ${{ needs.compose-build.result }}"
-            echo "- 7. Deploy Automatico: ${{ needs.deploy.result }}"
+            echo "- 7. Empacotar API: ${{ needs.empacotar.result }}"
+            echo "- 8. Deploy Automatico: ${{ needs.deploy.result }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Notificar via webhook (opcional)
         if: env.WEBHOOK_URL != ''
-        env:
-          WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
         run: |
           MSG="[INFO] CI/CD ColdTrack (${{ github.ref_name }}): seguranca=${{ needs.seguranca.result }}, qa=${{ needs.qa-testes.result }}, docker=${{ needs.smoke-test-docker.result }}, deploy=${{ needs.deploy.result }}"
           curl -fsS -X POST -H "Content-Type: application/json" \

@@ -65,6 +65,223 @@ viagens), sem executar ações.
 Detalhes de cada camada: [`docs/stack-tecnica.md`](docs/stack-tecnica.md). Rotas da API: [Swagger](https://func-coldtrack-7319.azurewebsites.net/api/docs) (interativo,
 spec em [`cloud/function/openapi.json`](cloud/function/openapi.json)) e [`docs/api.md`](docs/api.md) (texto). Recursos do Azure: [`infra/README.md`](infra/README.md).
 
+### Bibliotecas e dependências do projeto
+
+| Camada | Arquivo de referência | Bibliotecas e ferramentas |
+|---|---|---|
+| Backend (produção) | [`cloud/function/requirements.txt`](cloud/function/requirements.txt) | `azure-functions==1.26.0`, `azure-cosmos==4.17.1`, `PyJWT==2.15.1`, `openai==3.46.0`, `azure-identity==1.27.0`, `pywebpush==2.5.0`, `pyotp==2.9.0` |
+| Backend (testes e qualidade) | [`cloud/function/requirements-dev.txt`](cloud/function/requirements-dev.txt) | `pytest==9.2.0`, `pytest-cov==7.1.0`, `coverage==7.16.2`, `hypothesis==6.168.5`, `time-machine==3.5.1`, `openapi-spec-validator==0.9.0` (e no CI: `ruff==0.17.4`, `bandit==1.9.4`, `pip-audit==2.7.3`) |
+| Análise climática | [`analise/requirements.txt`](analise/requirements.txt) | `pandas>=2.0` (`2.3.3`), `matplotlib>=3.7` (`3.10.9`) |
+| Firmware (ESP32-C3) | [`firmware/coldtrack/coldtrack.ino`](firmware/coldtrack/coldtrack.ino), [`firmware/wokwi/libraries.txt`](firmware/wokwi/libraries.txt) | `DHT sensor library`, `Adafruit Unified Sensor`, core ESP32 (`WiFi.h`, `WiFiClientSecure.h`, `HTTPClient.h`, `LittleFS.h`, `Preferences.h`, `esp_task_wdt.h`, `esp_sntp.h`, `driver/gpio.h`, `time.h`) e opcionais (`PubSubClient.h` para MQTT/ThingSpeak, `U8g2` para OLED) |
+| Frontend (painel web) | [`Front-End-pi`](https://github.com/mbalbuquerque/Front-End-pi) | React 18 + Vite, PWA (`public/manifest.json`, `public/sw.js`) e Web Serial API do navegador |
+
+### Arquitetura e estrutura de cada camada
+
+1. **ESP32-C3 (Firmware IoT)** — *Arquitetura embarcada orientada a ciclo não bloqueante (`millis()`)*:
+   - Opera em loop contínuo (`setup()` / `loop()`) com leitura periódica, validação *Fail-Fast*, fila *store-and-forward* em `LittleFS` (até 500 leituras sem rede) e configurações persistidas em `Preferences`.
+   - A lógica pura de montagem de JSON e classificação de faixa fica isolada em [`firmware/coldtrack/payload_core.h`](firmware/coldtrack/payload_core.h), permitindo testes unitários em C++ (`firmware/tests/test_firmware.cpp`) fora da placa.
+   - Exemplo: `coldtrack.ino` lê o DHT11/DHT22 e chama `montarPayloadCore(buf, sizeof(buf), deviceId, temp, umid, rssi, medidoEm)` para gerar o JSON enviado via `WiFiClientSecure` + `HTTPClient` para `POST /api/telemetria`.
+
+```mermaid
+flowchart LR
+    S["Sensor DHT11/DHT22"] --> L["Loop millis() + Fail-Fast"]
+    L --> P["payload_core.h (montarPayloadCore)"]
+    P -->|Com rede| H["WiFiClientSecure + HTTPClient (HTTPS)"]
+    P -->|Sem rede| F["LittleFS (fila store-and-forward)"]
+    F -->|Rede volta| H
+    L --> LED["LEDs / OLED"]
+```
+
+2. **Frontend (Painel Web)** — *Arquitetura SPA baseada em componentes (React 18 + Vite + PWA)*:
+   - A interface no repositório [`Front-End-pi`](https://github.com/mbalbuquerque/Front-End-pi) é organizada em componentes e páginas React que consomem a API REST via `fetch` com `Authorization: Bearer <token JWT>`, além de contar com manifesto e service worker para PWA.
+   - Exemplo: a tela de login autentica em `POST /api/login` (com suporte a 2FA TOTP via `pyotp` na API) e armazena o JWT para consultar leituras, alertas e cadastros, além de usar Web Serial para gravar Wi-Fi, ID e chave do sensor via USB.
+
+```mermaid
+flowchart LR
+    U["Navegador / PWA"] --> R["Componentes React (Vite)"]
+    R -->|"fetch + Bearer JWT"| API["API Azure Functions"]
+    R -->|"Web Serial (USB)"| ESP["ESP32-C3 (Preferences)"]
+```
+
+3. **Banco de Dados (Azure Cosmos DB for NoSQL)** — *Arquitetura orientada a documentos JSON*:
+   - Os dados são armazenados em *containers* JSON definidos em [`infra/main.bicep`](infra/main.bicep) e [`infra/ci/preparar_banco.py`](infra/ci/preparar_banco.py), com chave de partição `/id` (`empresas`, `usuarios`, `veiculos`, `dispositivos`, `viagens`, `limites`) e `/deviceId` (`leituras`).
+   - Exemplo de documento em `leituras` (particionado por `deviceId`):
+     ```json
+     {"id": "uuid", "deviceId": "coldtrack-01", "empresaId": "emp-teste", "temperatura": 12.4, "umidade": 81.0, "status": "NORMAL", "medidoEm": 1790464605}
+     ```
+
+```mermaid
+flowchart TD
+    DB["Cosmos DB: coldtrack"] --> C1["empresas (/id)"]
+    DB --> C2["usuarios (/id)"]
+    DB --> C3["veiculos (/id)"]
+    DB --> C4["dispositivos (/id)"]
+    DB --> C5["viagens (/id)"]
+    DB --> C6["limites (/id)"]
+    DB --> C7["leituras (/deviceId)"]
+```
+
+4. **Backend (API em Python / Azure Functions)** — *Arquitetura Serverless orientada a rotas (HTTP Triggers) e módulos de domínio*:
+   - [`cloud/function/function_app.py`](cloud/function/function_app.py) atua como camada de entrada e roteamento HTTP, delegando regras de negócio para módulos de domínio (`contrato.py`, `cadastros.py`, `seguranca.py`, `limites.py`, `predicao.py`, `previsao_sensor.py`) e serviços externos (`chat.py`, `assistente.py`, `push.py`), persistindo diretamente no Cosmos DB.
+   - Exemplo: a rota `telemetria(req)` em `function_app.py` valida a chave `x-device-key` usando `seguranca.py`, aplica a faixa de carga e classifica a leitura via `contrato.py`, grava no container `leituras` e dispara notificação Web Push (`push.py`) se houver piora de faixa.
+
+```mermaid
+flowchart LR
+    REQ["HTTP Request (HTTPS)"] --> FA["function_app.py (HTTP Triggers)"]
+    FA --> SEC["seguranca.py (JWT / x-device-key)"]
+    FA --> DOM["Dominio (contrato.py, cadastros.py, predicao.py)"]
+    FA --> SRV["Servicos (chat.py, assistente.py, push.py)"]
+    DOM --> COS["Cosmos DB"]
+    SRV --> AOAI["Azure OpenAI / Web Push"]
+```
+
+## Principais funcionalidades
+
+1. **Coleta de telemetria na borda (ESP32-C3)** — [`firmware/coldtrack/payload_core.h`](firmware/coldtrack/payload_core.h#L18-L27): monta o payload JSON na placa com temperatura, umidade, RSSI do Wi-Fi e timestamp NTP para envio HTTPS (ou gravação na fila offline em `LittleFS`).
+   ```cpp
+   inline void montarPayloadCore(char *destino, size_t tamanho, const char *deviceId,
+                                 float temperatura, float umidade, long rssi, time_t medidoEm,
+                                 uint32_t seq = 0, const char *origem = "placa",
+                                 float temperaturaBruta = NAN, float umidadeBruta = NAN) {
+       char rssiJson[16];
+       if (rssi < 0) {
+           snprintf(rssiJson, sizeof(rssiJson), "%ld", rssi);
+       } else {
+           snprintf(rssiJson, sizeof(rssiJson), "null");
+       }
+   ```
+
+2. **Classificação de faixa da carga e idempotência** — [`cloud/function/contrato.py`](cloud/function/contrato.py#L293-L300): classifica cada leitura em `NORMAL`, `ATENCAO` ou `CRITICO` conforme o perfil da carga (`manga`, `uva`, `demonstrativo`) e gera ID determinístico (`id_leitura`) para evitar duplicidade em reenvios.
+   ```python
+   def classificar(temperatura, perfil=PERFIL_PADRAO):
+       f = faixa(perfil)
+       minimo = f["min"] if f["min"] is not None else float("-inf")
+       if minimo <= temperatura <= f["max"]:
+           return "NORMAL"
+       if minimo - f["margem"] <= temperatura <= f["max"] + f["margem"]:
+           return "ATENCAO"
+       return "CRITICO"
+   ```
+
+3. **Autenticação JWT, hash de senha e 2FA** — [`cloud/function/seguranca.py`](cloud/function/seguranca.py#L55-L83): protege senhas com `scrypt` e sal aleatório, emite tokens JWT (`HS256`) com escopo de empresa/perfil e valida 2FA TOTP.
+   ```python
+   def gerar_hash(senha):
+       sal = os.urandom(16)
+       derivada = hashlib.scrypt(senha.encode(), salt=sal, n=N, r=R, p=P, dklen=32)
+       return f"scrypt${N}${R}${P}${_b64(sal)}${_b64(derivada)}"
+   ```
+
+4. **Alertas Web Push na piora de faixa** — [`cloud/function/push.py`](cloud/function/push.py#L178-L183): detecta transição para faixa mais grave (`NORMAL` -> `ATENCAO` -> `CRITICO`) e envia notificação push para os dispositivos inscritos da empresa.
+   ```python
+   def piorou(anterior, atual):
+       return GRAVIDADE.get(atual, 0) > GRAVIDADE.get(anterior or "NORMAL", 0)
+   ```
+
+5. **Previsão térmica do sensor (10 min à frente)** — [`cloud/function/previsao_sensor.py`](cloud/function/previsao_sensor.py#L97-L104): estima a temperatura futura a partir das leituras recentes e classifica o status previsto.
+   ```python
+   def estimar(modelo, atrib):
+       variacao = sum(c * atrib[nome] for nome, c in zip(modelo["atributos"], modelo["coeficientes"]))
+       return atrib["y0"] + variacao
+   ```
+
+6. **Chat e assistente com RAG (Azure OpenAI)** — [`cloud/function/chat.py`](cloud/function/chat.py#L225-L229): busca por similaridade de cosseno os trechos mais relevantes da documentação vetorizada (`base_chat.json`) para contextualizar as respostas da IA.
+   ```python
+   def mais_proximos(vetor, base, k=TOP_K, minimo=SIMILARIDADE_MIN):
+       notas = [(cosseno(vetor, item["vetor"]), n) for n, item in enumerate(base)]
+       notas = sorted((p for p in notas if p[0] >= minimo), key=lambda p: -p[0])
+       return [base[n] for _, n in notas[:k]]
+   ```
+
+7. **Backup lógico do Cosmos DB** — [`infra/backup/exportar.py`](infra/backup/exportar.py#L26-L37): exporta todos os containers para arquivos JSONL com manifesto de contagem e metadados.
+   ```python
+   def exportar(banco, saida, excluir=()):
+       os.makedirs(saida, exist_ok=True)
+       manifesto = {"versao": bc.VERSAO, "banco": banco.id, "data": bc.agora(), "containers": {}}
+       inicio = time.monotonic()
+       for props in banco.list_containers():
+           nome = props["id"]
+           if nome in excluir:
+               continue
+           container = banco.get_container_client(nome)
+           arquivo = f"{nome}.jsonl"
+           total = bc.escrever_jsonl(os.path.join(saida, arquivo), container.read_all_items())
+   ```
+
+8. **Heartbeat da placa e detecção de falha do sensor** — [`cloud/function/contrato.py`](cloud/function/contrato.py#L148-L165): recebe sinal de vida do ESP32-C3 (`POST /api/heartbeat`) mesmo quando o DHT11/DHT22 falha, registrando motivo e versão do firmware.
+   ```python
+   def validar_heartbeat(dados):
+       if not isinstance(dados, dict):
+           return ["corpo deve ser um objeto JSON"]
+
+       erros = []
+       device = dados.get("deviceId")
+       if not isinstance(device, str) or not DEVICE_ID.match(device):
+           erros.append("deviceId: texto de 3 a 40 caracteres (letras, números, _ ou -)")
+       if dados.get("motivo") not in MOTIVOS_HEARTBEAT:
+           erros.append("motivo: use " + ", ".join(MOTIVOS_HEARTBEAT))
+   ```
+
+9. **Gestão multiempresa, veículos, dispositivos e viagens** — [`cloud/function/cadastros.py`](cloud/function/cadastros.py#L192-L208): valida cadastros com isolamento por `empresaId` e perfis (`gestor`, `operador`, `motorista`).
+   ```python
+   def validar_viagem(dados):
+       if not isinstance(dados, dict):
+           return ["corpo deve ser um objeto JSON"], None
+       erros = []
+       veiculo = _texto(dados, "veiculo", 20, erros)
+       origem = _texto(dados, "origem", 80, erros)
+       destino = _texto(dados, "destino", 80, erros)
+       carga = _texto(dados, "carga", 120, erros)
+       inicio = _data(dados, "inicio", erros)
+       fim = _data(dados, "fim", erros, obrigatorio=False)
+       if inicio and fim and fim <= inicio:
+           erros.append("fim: deve ser depois do início")
+   ```
+
+10. **Rate limiting compartilhado com plano B em memória** — [`cloud/function/limites.py`](cloud/function/limites.py#L65-L80): limita tentativas de login, chat e assistente por IP/empresa usando o container `limites` no Cosmos DB, com fallback local em `JanelaEmMemoria`.
+    ```python
+    class JanelaEmMemoria:
+        def contar(self, doc_id, fim, somar, agora):
+            with self._trava:
+                if len(self._contas) > 5000:
+                    for chave in [c for c, (_, f) in self._contas.items() if f <= agora]:
+                        del self._contas[chave]
+                n, _ = self._contas.get(doc_id, (0, fim))
+                n += somar
+                self._contas[doc_id] = (n, fim)
+                return n
+    ```
+
+11. **Predição de risco térmico na rota (histórico INMET)** — [`cloud/function/predicao.py`](cloud/function/predicao.py#L53-L67): calcula probabilidade e nível de risco térmico por mês e hora da viagem, comparando com a baseline histórica.
+    ```python
+    def prever(modelo, mes, hora):
+        prob = modelo["probabilidade"][mes - 1][hora]
+        baseline = modelo["baseline"]
+        return {
+            "mes": mes,
+            "hora": hora,
+            "limiarC": modelo["limiarC"],
+            "probabilidade": prob,
+            "nivel": nivel(prob, modelo["niveis"]),
+        }
+    ```
+
+12. **Restauração de backup lógico com trava anti-produção** — [`infra/backup/restaurar.py`](infra/backup/restaurar.py#L31-L44): restaura containers a partir dos JSONL exportados e do `manifesto.json`, bloqueando qualquer tentativa de gravação em endpoint de produção (`recusar_producao=True`).
+    ```python
+    def restaurar(cliente, pasta, nome_banco=None):
+        with open(os.path.join(pasta, "manifesto.json"), encoding="utf-8") as f:
+            manifesto = json.load(f)
+        banco = cliente.create_database_if_not_exists(nome_banco or manifesto["banco"])
+        resultado = {}
+        for nome, meta in manifesto["containers"].items():
+            container = banco.create_container_if_not_exists(
+                nome, partition_key=PartitionKey(path=meta["chaveParticao"]),
+                default_ttl=meta.get("ttl"))
+            for doc in bc.ler_jsonl(os.path.join(pasta, meta["arquivo"])):
+                container.upsert_item(doc)
+            resultado[nome] = (meta["contagem"], contar(container))
+        return resultado
+    ```
+
 ## Estrutura do repositório
 
 ```
@@ -91,7 +308,8 @@ spec em [`cloud/function/openapi.json`](cloud/function/openapi.json)) e [`docs/a
 ├── infra/                   main.bicep do ambiente atual e notas de infraestrutura
 ├── analise/                 análise climática da rota (dados do INMET)
 ├── docs/                    documentação técnica, API, segurança, implantação, memorial descritivo
-└── .github/workflows/       testes (API e firmware) e publicação da API
+├── .gitleaks.toml           regras e allowlist de varredura de segredos (Gitleaks)
+└── .github/workflows/       pipelines de CI/CD, testes, segurança, backup e publicação da API
 ```
 
 ### Estrutura exigida na entrega
@@ -154,6 +372,23 @@ func start                                           # http://localhost:7071/api
 
 Requer Python 3.11 e Azure Functions Core Tools v4. Mais detalhes em
 [`cloud/function/README.md`](cloud/function/README.md).
+
+### Docker e Docker Compose
+
+Para buildar apenas a imagem da API (a partir da raiz do repositório, usando [`infra/Dockerfile`](infra/Dockerfile)):
+
+```bash
+docker build -f infra/Dockerfile -t coldtrack-api:1.0.0 cloud/function
+```
+
+Para subir a API junto com o emulador do Cosmos DB via [`infra/docker-compose.yml`](infra/docker-compose.yml):
+
+```bash
+cp .env.example .env
+docker compose -f infra/docker-compose.yml up -d --build
+python infra/ci/preparar_banco.py
+curl -s http://localhost:7071/api/health
+```
 
 ### Testes e lint
 
@@ -249,11 +484,15 @@ caminhões, o que reduz a latência dos sensores.
 | [`seguranca.yml`](.github/workflows/seguranca.yml) | toda segunda-feira, quando as dependências da API mudam, ou manual | procura vulnerabilidades conhecidas nas dependências (pip-audit) e roda o ZAP baseline na documentação da API |
 | [`backup-logico.yml`](.github/workflows/backup-logico.yml) | pull request ou push que mexa em `infra/backup/` | exporta e restaura o banco no emulador do Cosmos para provar o backup lógico |
 | [`compose-zap.yml`](.github/workflows/compose-zap.yml) | pull request que mexa na API ou na infraestrutura | sobe API + emulador com Docker Compose, testa o reinício do contêiner e roda o ZAP |
+| [`ci-cd.yml`](.github/workflows/ci-cd.yml) | push/PR em `dev`, `homologacao` e `main` (ou manual) | pipeline unificado em 7 etapas com versões fixas (sem `:latest`): 1. Segurança e CVE (Gitleaks com [`.gitleaks.toml`](.gitleaks.toml), `pip-audit`, `bandit` e checagem de tags fixas); 2. Build e checagem (`ruff`, `compileall`, `docker compose config`, JSONs); 3. QA e testes (API com cobertura >= 98%, análise climática, backup lógico e firmware C++); 4. Segurança Docker (Buildx + Trivy `CRITICAL`); 5. Smoke test Docker (Compose + emulador Cosmos + `/api/health` e `/api/docs`); 6. Docker Compose build (`--no-cache`); 7. Deploy automático via OIDC (`homologacao` e `main`) com healthcheck e resumo |
+| [`backup-mensal.yml`](.github/workflows/backup-mensal.yml) | último dia do mês às 03h00 BRT (`0 6 28-31 * *`) ou manual | exporta o backup lógico mensal do Cosmos DB via `infra/backup/exportar.py` (chave somente leitura), compacta em `.tar.gz`, valida integridade (`gzip -t`, `sha256sum`) e guarda como artefato por 30 dias |
 | [`publicar-site.yml`](https://github.com/mbalbuquerque/Front-End-pi/blob/main/.github/workflows/publicar-site.yml) (repositório do painel) | push na `main` do painel | roda lint, testes e build do React e envia o resultado para o `$web` do Storage |
 
 Execuções: aba **Actions** de cada repositório
 ([API](https://github.com/mbalbuquerque/projeto-integrador-4-periodo/actions),
 [painel](https://github.com/mbalbuquerque/Front-End-pi/actions)).
+
+> **Secrets e variáveis adicionais do pipeline (`ci-cd.yml` e `backup-mensal.yml`)**: além das credenciais OIDC do Azure (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`), o backup mensal utiliza `COSMOS_ENDPOINT` e `COSMOS_READONLY_KEY` (e `vars.COSMOS_DATABASE`, padrão `coldtrack`). Opcionalmente, `NOTIFY_WEBHOOK_URL` envia o resumo do pipeline/backup por webhook, e `vars.HOMOLOG_*` / `vars.PROD_*` permitem customizar resource group, Function App e URL de healthcheck por ambiente.
 
 O deploy é **automático a partir da `main`**. A credencial federada do Entra ID só aceita o
 token emitido para a `main` (e para a `everson`, reserva que não dispara publicação), então
