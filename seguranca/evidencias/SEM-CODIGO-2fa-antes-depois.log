@@ -1,0 +1,42 @@
+# 2FA ANTES e DEPOIS, mesma conta, contra a API
+# codigo de missao: SEM-CODIGO
+# api: https://func-coldtrack-7319.azurewebsites.net/api
+# commit do script: 50ac877
+# conta temporaria: t***@exemplo.com (empresa criada e apagada pelo script)
+# senha, token, desafio, segredo TOTP e codigos nao sao gravados
+# gerado em: 2026-11-25T21:07:14Z
+
+## Preparacao
+  [OK]     POST /empresas cria a conta temporaria (gestor): esperado 201, obtido 201
+
+## ANTES: 2FA desligado
+  [OK]     POST /login so com a senha: esperado 200, obtido 200
+  [OK]     a resposta traz token (sessao aberta sem segundo fator): esperado sim, obtido sim
+  [OK]     GET /eu com esse token: esperado 200, obtido 200
+  [OK]     totpAtivo da conta: esperado false, obtido false
+
+## Ativacao do 2FA pela API
+  [OK]     POST /2fa/iniciar devolve a URI otpauth://: esperado 200, obtido 200
+  [OK]     POST /2fa/ativar com o codigo do app autenticador: esperado 200, obtido 200
+  [OK]     a resposta traz 10 codigos de recuperacao: esperado 10, obtido 10
+
+## DEPOIS: 2FA ligado, mesma conta
+  [OK]     POST /login so com a senha: esperado 200, obtido 200
+  [OK]     a resposta traz token: esperado nao, obtido nao
+  [OK]     a resposta pede o segundo fator (exige2fa): esperado true, obtido true
+  [OK]     a resposta traz o desafio: esperado sim, obtido sim
+  [OK]     GET /eu usando o desafio como token: esperado 401, obtido 401
+  [OK]     POST /login/2fa com codigo errado: esperado 401, obtido 401
+  [OK]     a resposta do codigo errado traz token: esperado nao, obtido nao
+  (aguardando 28s pelo proximo codigo: o da ativacao nao pode ser reusado)
+  [OK]     POST /login/2fa com o codigo certo: esperado 200, obtido 200
+  [OK]     a resposta traz token: esperado sim, obtido sim
+  [OK]     GET /eu com o token do segundo passo: esperado 200, obtido 200
+  [OK]     totpAtivo da conta: esperado true, obtido true
+
+## Limpeza: DELETE /empresa da conta temporaria
+  [OK]     DELETE /empresa apaga a empresa temporaria: esperado 200, obtido 200
+  [OK]     POST /login da conta apagada e recusado: esperado 401, obtido 401
+
+# passos aprovados: 21; reprovados: 0
+# resultado: APROVADO
