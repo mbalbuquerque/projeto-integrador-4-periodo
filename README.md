@@ -392,14 +392,38 @@ curl -s http://localhost:7071/api/health
 
 ### Testes e lint
 
+O repositório possui **211 testes reais (sem mocks ou fakes)** distribuídos em **18 arquivos de teste** (17 em Python e 1 em C++):
+
+| Camada | Quantidade | Tipos de teste | Bibliotecas e ferramentas |
+|---|---|---|---|
+| API ([`cloud/function/`](cloud/function/)) | **151 testes** em 10 arquivos (`test_contrato.py`, `test_seguranca.py`, `test_heartbeat.py`, `test_cadastros_unit.py`, `test_openapi.py`, `test_pacote.py`, `test_online.py`, `test_propriedades.py`, `test_independencia_thingspeak.py`, `test_cabecalhos.py`) | Unitários puros de domínio, contrato, segurança e empacotamento, *property-based* (`test_propriedades.py`), validação OpenAPI (`test_openapi.py`) e checagem online (`test_online.py`) | `unittest` (stdlib), `pytest==9.2.0`, `pytest-cov==7.1.0`, `coverage==7.16.2`, `hypothesis==6.168.5`, `time-machine==3.5.1`, `openapi-spec-validator==0.9.0` |
+| Análise climática ([`analise/`](analise/)) | **28 testes** em 6 arquivos (`test_sensor_campo.py`, `test_sensor_descrever.py`, `test_exportar.py`, `test_sensor_cosmos.py`, `test_explorar.py`, `test_sensor_baixar.py`) | Unitários de dados reais (INMET, ThingSpeak, Cosmos), análise exploratória e exportação de modelo | `pytest`, `unittest`, `pandas`, `matplotlib` |
+| Backup lógico ([`infra/backup/`](infra/backup/)) | **6 testes** em 1 arquivo (`test_verificar_export.py`) | Unitários de validação de integridade e manifesto de exportação JSONL | `pytest` |
+| Firmware ESP32-C3 ([`firmware/tests/test_firmware.cpp`](firmware/tests/test_firmware.cpp)) | **26 testes** em 1 arquivo C++ | Unitários da lógica pura em [`payload_core.h`](firmware/coldtrack/payload_core.h) (montagem de JSON, filtro de mediana, classificação de faixa, heartbeat, fila e parâmetros) | C++ padrão (`<iostream>`, `<cassert>`, `<cmath>`, `<string>`) com macros `TEST`/`ASSERT`/`PASS`, compilado com `g++` |
+
 ```bash
+# 1. API (151 testes reais, sem mocks) + lint
 cd cloud/function
-python -m unittest -v
-pip install ruff==0.17.4 && ruff check .
+pytest -v \
+  test_contrato.py test_seguranca.py test_heartbeat.py test_cadastros_unit.py \
+  test_openapi.py test_pacote.py test_online.py test_propriedades.py \
+  test_independencia_thingspeak.py test_cabecalhos.py
+ruff check .
+
+# 2. Análise climática (28 testes reais, da raiz do repositório)
+pytest -v \
+  analise/sensor/test_sensor_campo.py analise/sensor/test_sensor_descrever.py \
+  analise/test_exportar.py analise/sensor/test_sensor_cosmos.py \
+  analise/test_explorar.py analise/sensor/test_sensor_baixar.py
+
+# 3. Backup lógico (6 testes reais, da raiz do repositório)
+pytest -v infra/backup/test_verificar_export.py
+
+# 4. Firmware ESP32-C3 (26 testes reais em C++)
+g++ -O2 -Wall firmware/tests/test_firmware.cpp -o run_tests_firmware && ./run_tests_firmware
 ```
 
-O GitHub Actions (`testes.yml`) roda o lint, os testes da API e compila o firmware nas duas
-variantes de sensor (DHT22 da simulação e DHT11 da placa) a cada push e pull request.
+Os workflows [`testes.yml`](.github/workflows/testes.yml) e [`ci-cd.yml`](.github/workflows/ci-cd.yml) rodam o lint, os testes da API com cobertura, a análise climática, os testes do backup e do firmware, além de compilar o firmware nas duas variantes de sensor (DHT22 da simulação e DHT11 da placa).
 
 ### Análise climática
 
