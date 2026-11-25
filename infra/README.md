@@ -234,7 +234,8 @@ Leitura do resultado:
 `infra/Dockerfile` empacota a API (imagem oficial de Azure Functions, Python 3.11) e
 `infra/docker-compose.yml` sobe a API junto com o emulador oficial do Cosmos DB para Linux
 (`mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:vnext-preview`, em HTTP). Para
-desenvolvimento: `cp .env.example .env` (os valores de exemplo já apontam para o emulador),
+desenvolvimento: `cp .env.example .env` e preencher (o `.env.example` só tem os nomes; os valores
+que apontam para o emulador estão no passo "Variáveis de teste (.env)" do `compose-zap.yml`),
 `docker compose -f infra/docker-compose.yml up --build` e, uma vez, `python infra/ci/preparar_banco.py`
 (cria o banco, os containers e um usuário de teste). A API fica em `http://localhost:7071/api`.
 
